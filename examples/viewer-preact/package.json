@@ -1,0 +1,23 @@
+{
+  "name": "glass-viewer-preact-example",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@glass/client": "*",
+    "@tailwindcss/vite": "^4.1.13",
+    "preact": "^10.27.2",
+    "react-toastify": "^11.0.5",
+    "tailwindcss": "^4.1.13"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.2",
+    "typescript": "~5.8.3",
+    "vite": "^7.1.7"
+  }
+}
