@@ -1,0 +1,13 @@
+{
+  "name": "glass-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Glass runtime workspace: the client SDK package and example viewers.",
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @glass/client && npm run build --workspace glass-viewer-preact-example"
+  }
+}

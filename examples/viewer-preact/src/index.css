@@ -1,0 +1,86 @@
+@import "tailwindcss";
+
+body {
+  font-family: "Quicksand", system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #e0f2fe; /* sky-100 fallback */
+  font-weight: 500;
+}
+
+#app {
+  margin: 0;
+  padding: 0;
+  text-align: initial;
+  max-width: none;
+}
+
+/* --- AURORA BACKGROUND for Welcome Screen --- */
+.aurora-background {
+  position: relative;
+  overflow: hidden;
+  background-color: #1c6392;
+  isolation: isolate;
+}
+
+.aurora-background::before,
+.aurora-background::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  filter: blur(80px);
+  animation: animate-aurora 1s infinite alternate;
+}
+
+.aurora-background::before {
+  background: radial-gradient(circle, #2cccb7, transparent 60%);
+  width: 400px;
+  height: 400px;
+  top: 10%;
+  left: 10%;
+}
+
+.aurora-background::after {
+  background: radial-gradient(circle, #652aa5, transparent 60%);
+  width: 500px;
+  height: 500px;
+  bottom: 10%;
+  right: 30%;
+  animation-delay: -10s;
+}
+
+@keyframes animate-aurora {
+  from {
+    transform: rotate(0deg) scale(1.1) translateX(-10%);
+  }
+  to {
+    transform: rotate(360deg) scale(1) translateX(10%);
+  }
+}
+
+/* Glass UI for Welcome Screen */
+.glass-ui {
+  background: rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.1);
+  position: relative;
+  overflow: hidden;
+}
+
+.glass-ui::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.7),
+    transparent
+  );
+}
