@@ -1,15 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
 import { lazy, Suspense } from "preact/compat";
-import {
-  createGlassClient,
-  createGlassSession,
-  deleteGlassSession,
-  type GlassClient,
-} from "@glass/client";
+import { mintConnectionGrant } from "@glass/client";
 import { mountGlassViewer, type GlassViewer } from "@glass/client/viewer";
 import { Toast } from "./components/Toast";
 import { BrowserHeader } from "./components/BrowserHeader";
-import { URLBar } from "./components/URLBar";
+import { CustomLoader } from "./components/CustomLoader";
+import { ErrorScreen } from "./components/ErrorScreen";
+import { WelcomeView } from "./components/WelcomeView";
+import { DownloadPrompts, HijackedUrlPrompt, MicPrompt, UploadPrompt } from "./components/Prompts";
+import { API_TOKEN, GLASS_ADDR } from "./config";
+import { useGlassSession } from "./hooks/useGlassSession";
+import { useNavigation } from "./hooks/useNavigation";
+import { useStatsStream } from "./hooks/useStatsStream";
 
 // This example is a thin consumer of the Glass client SDK: @glass/client owns
 // the transport + reconnection, and @glass/client/viewer owns video rendering
@@ -17,58 +19,8 @@ import { URLBar } from "./components/URLBar";
 // is just app-chrome (URL bar, header, context menu, toasts) wired to the
 // client's events - the reusable engine loop lives in the package, not here.
 
-// This example runs standalone (`npm run dev`), a genuinely different origin
-// from the `glass start` backend it talks to - Glass has no product frontend
-// and never serves this itself. VITE_GLASS_ADDR overrides the default for
-// anyone not running the backend on localhost:8080; the backend's CORS
-// middleware (runtime/routes.go) allows any loopback/private-LAN origin, not
-// just this one, so this doesn't need to match any specific dev-server port.
-const GLASS_ADDR = import.meta.env.VITE_GLASS_ADDR ?? "http://localhost:8080";
-
-// Optional TURN/STUN override for this browser peer's own RTCPeerConnection -
-// mirrors the backend's GLASS_STUN_URLS/GLASS_TURN_URLS/etc (runtime/
-// runtime.go). Unset by default, falling back to @glass/client's own public-
-// STUN default - only matters when testing/deploying against a real TURN
-// server, since the backend and this browser peer each gather their own ICE
-// candidates independently and need to agree on where the TURN server is.
-// VITE_GLASS_ICE_TRANSPORT_POLICY=relay forces this peer to relay-only ICE -
-// useful to prove a TURN server actually relays media, since on a LAN or
-// same-machine test a direct/STUN path would otherwise succeed first and
-// mask a broken TURN config entirely.
-function iceServersFromEnv(): RTCIceServer[] | undefined {
-  const stunURLs = import.meta.env.VITE_GLASS_STUN_URLS as string | undefined;
-  const turnURLs = import.meta.env.VITE_GLASS_TURN_URLS as string | undefined;
-  if (!stunURLs && !turnURLs) return undefined;
-
-  const servers: RTCIceServer[] = [];
-  if (stunURLs) {
-    servers.push({ urls: stunURLs.split(",").map((u) => u.trim()) });
-  }
-  if (turnURLs) {
-    servers.push({
-      urls: turnURLs.split(",").map((u) => u.trim()),
-      username: import.meta.env.VITE_GLASS_TURN_USERNAME,
-      credential: import.meta.env.VITE_GLASS_TURN_CREDENTIAL,
-    });
-  }
-  return servers;
-}
-
-const ICE_SERVERS = iceServersFromEnv();
-const ICE_TRANSPORT_POLICY = import.meta.env
-  .VITE_GLASS_ICE_TRANSPORT_POLICY as RTCIceTransportPolicy | undefined;
-
-// Optional dev-testing convenience, mirroring the backend's GLASS_API_TOKEN
-// (runtime/runtime.go's Config.APIToken) - unset by default (auth off,
-// unchanged behavior). NOT how a real deployment should work: a genuine
-// GLASS_API_TOKEN is a server-side secret that belongs in your own backend,
-// which creates the session and hands this app only the resulting
-// signalingUrl (already carrying whatever the runtime needs - see
-// createGlassSession's doc comment in @glass/client) - never in a value
-// baked into a browser bundle via VITE_*, which anyone can read from the
-// shipped JS. This exists purely so this standalone example can be
-// exercised end-to-end against a token-gated runtime during local testing.
-const API_TOKEN = import.meta.env.VITE_GLASS_API_TOKEN as string | undefined;
+// Configuration (VITE_GLASS_* env vars) is in config.ts; the session
+// lifecycle, navigation and stats stream are hooks in hooks/.
 
 const ContextMenu = lazy(() =>
   import("./components/ContextMenu").then((mod) => ({
@@ -76,48 +28,51 @@ const ContextMenu = lazy(() =>
   }))
 );
 
-// --- Loader component ---
-const CustomLoader = () => (
-  <div class="flex flex-col items-center justify-center gap-4">
-    <div class="text-lg font-semibold text-slate-700">Loading Session...</div>
-    <div class="flex items-center gap-2">
-      <div class="w-3 h-3 bg-blue-500 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-      <div class="w-3 h-3 bg-slate-600 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-      <div class="w-3 h-3 bg-blue-500 rounded-full animate-bounce"></div>
-    </div>
-  </div>
-);
-
 // --- Main App Component ---
 export function App() {
-  // --- State ---
-  const [isActive, setIsActive] = useState(false);
-  const [client, setClient] = useState<GlassClient | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // --- App-chrome state ---
   const [contextMenu, setContextMenu] = useState({ show: false, x: 0, y: 0 });
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const [toastMessage, setToastMessage] = useState<{
     message: string;
     type: "success" | "error" | "info";
   } | null>(null);
-  const [hijackedUrl, setHijackedUrl] = useState<string | null>(null);
-  const [currentURL, setCurrentURL] = useState("");
-  const [canGoBack, setCanGoBack] = useState(false);
-  const [canGoForward, setCanGoForward] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [hasError, setHasError] = useState(false);
-
-  // The viewer must exist before the first navigation so its on-connect
-  // initial-viewport/mobile declaration reaches the backend before the page is
-  // created (see mountGlassViewer's doc comment). handleNavigate flips isActive
-  // - which mounts the viewer - and stashes the URL here; a post-mount effect
-  // then issues the navigate.
-  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+  // Audio: mountGlassViewer's <video>
+  // element starts muted unconditionally (audio didn't exist when that
+  // default was chosen - see viewer/index.ts's own comment, still correct
+  // for guaranteeing autoplay works with zero user interaction). Real
+  // sessions can now carry a genuine Opus track, so this example needs
+  // its own explicit way to unmute - there was none at all until now.
+  // Mirrors GlassViewer's own public surface (`viewer.video` is exposed
+  // exactly for host needs like this one) rather than adding a new SDK
+  // API just for a mute toggle.
+  const [isMuted, setIsMuted] = useState(true);
   const [viewerReady, setViewerReady] = useState(false);
-
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<GlassViewer | null>(null);
+
+  const session = useGlassSession(setToastMessage);
+  const {
+    client, isActive, isConnected, isLoading, error, setError, sessionId,
+    hijackedUrl, setHijackedUrl, pendingDownloads, setPendingDownloads,
+    fileChooserMultiple, setFileChooserMultiple, uploading, setUploading, uploadError, setUploadError,
+    micAccessOrigin, setMicAccessOrigin, micError, setMicError, micGranting, setMicGranting,
+  } = session;
+  const { fps, perfStats } = useStatsStream(sessionId);
+  const closeContextMenu = useCallback(() => setContextMenu({ show: false, x: 0, y: 0 }), []);
+  const { handleNavigate, handleNavigateBack, handleNavigateForward, handleRefresh } = useNavigation({
+    client,
+    isActive,
+    setIsActive: session.setIsActive,
+    setError,
+    setIsLoading: session.setIsLoading,
+    notify: setToastMessage,
+    closeContextMenu,
+    viewerReady,
+    sessionEpoch: session.sessionEpoch,
+  });
 
   // --- Global error boundary (browser-level) ---
   useEffect(() => {
@@ -137,88 +92,20 @@ export function App() {
     };
   }, []);
 
-  // --- Client lifecycle: create a session, build the client, connect. The SDK
-  // owns reconnection/backoff internally - the app just reflects its events. ---
-  useEffect(() => {
-    let cancelled = false;
-    let c: GlassClient | null = null;
-
-    (async () => {
-      let session: { id: string; signalingUrl: string };
-      try {
-        session = await createGlassSession(GLASS_ADDR, API_TOKEN);
-      } catch (err: any) {
-        if (!cancelled) setError(`Failed to create session: ${err.message}`);
-        return;
-      }
-      if (cancelled) {
-        deleteGlassSession(session.id, GLASS_ADDR, API_TOKEN);
-        return;
-      }
-
-      c = createGlassClient({
-        signalingUrl: session.signalingUrl,
-        sessionId: session.id,
-        ...(ICE_SERVERS ? { iceServers: ICE_SERVERS } : {}),
-        ...(ICE_TRANSPORT_POLICY
-          ? { iceTransportPolicy: ICE_TRANSPORT_POLICY }
-          : {}),
-        ...(API_TOKEN ? { apiToken: API_TOKEN } : {}),
-      });
-
-      c.on("connected", () => {
-        if (cancelled) return;
-        setIsConnected(true);
-        setError(null);
-      });
-      c.on("disconnected", () => {
-        if (!cancelled) setIsConnected(false);
-      });
-      c.on("reconnecting", (attempt, max) => {
-        if (!cancelled) setError(`Reconnecting… (attempt ${attempt}/${max})`);
-      });
-      c.on("navigation", (nav) => {
-        if (cancelled) return;
-        setCurrentURL(nav.url || "");
-        setCanGoBack(nav.canGoBack || false);
-        setCanGoForward(nav.canGoForward || false);
-        setIsLoading(nav.loading || false);
-      });
-      c.on("error", (message) => {
-        if (!cancelled) setError(message);
-      });
-      c.on("closed", (reason) => {
-        if (cancelled) return;
-        setIsConnected(false);
-        // A user-initiated disconnect closes silently; a lost/exhausted
-        // connection surfaces an actionable message.
-        if (!reason.includes("client disconnected")) {
-          setError("Connection lost and could not be restored. Please reload.");
-        }
-      });
-
-      setClient(c);
-      try {
-        await c.connect();
-      } catch {
-        // The "closed" handler above already surfaced the failure.
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      c?.disconnect();
-      setClient(null);
-      setIsConnected(false);
-    };
-  }, []);
-
   // --- Mount the viewer into the content area once the client + container
   // exist. The viewer captures all input and renders the video itself. ---
   useEffect(() => {
     if (!client || !isActive || !containerRef.current) return;
     const viewer = mountGlassViewer(containerRef.current, client, {
-      onContextMenu: (x, y) => setContextMenu({ show: true, x, y }),
+      // Gated on Shift so a plain right-click reaches the remote page's own
+      // context menu (now properly forwarded - see viewer/index.ts's
+      // onContextMenu doc comment) instead of this app's local copy/paste
+      // popup covering it every time. Shift+right-click is a real, existing
+      // convention (e.g. Chrome itself uses it to bypass a page's own
+      // contextmenu handler and show its native one).
+      onContextMenu: (x, y, shiftKey) => {
+        if (shiftKey) setContextMenu({ show: true, x, y });
+      },
     });
     viewerRef.current = viewer;
     setViewerReady(true);
@@ -229,44 +116,12 @@ export function App() {
     };
   }, [client, isActive]);
 
-  // --- Navigation ---
-  const handleNavigate = useCallback(
-    (url: string) => {
-      if (!client || !client.isConnected()) {
-        setError("Cannot navigate: Not connected");
-        setToastMessage({ message: "Connection lost.", type: "error" });
-        return;
-      }
-      setContextMenu({ show: false, x: 0, y: 0 });
-      setError(null);
-      setIsLoading(true);
-      if (!isActive) {
-        // Defer the navigate until the viewer has mounted (see pendingUrl).
-        setIsActive(true);
-        setPendingUrl(url);
-      } else {
-        client.navigate(url);
-      }
-    },
-    [client, isActive]
-  );
-
-  useEffect(() => {
-    if (viewerReady && pendingUrl && client) {
-      client.navigate(pendingUrl);
-      setPendingUrl(null);
-    }
-  }, [viewerReady, pendingUrl, client]);
-
-  const handleNavigateBack = useCallback(() => {
-    if (client?.isConnected()) client.navigateBack();
-  }, [client]);
-  const handleNavigateForward = useCallback(() => {
-    if (client?.isConnected()) client.navigateForward();
-  }, [client]);
-  const handleRefresh = useCallback(() => {
-    if (client?.isConnected()) client.refresh();
-  }, [client]);
+  const handleToggleMute = useCallback(() => {
+    const video = viewerRef.current?.video;
+    if (!video) return;
+    video.muted = !video.muted;
+    setIsMuted(video.muted);
+  }, []);
 
   const handleCopy = useCallback(() => {
     client?.copyText();
@@ -280,6 +135,135 @@ export function App() {
       console.error("Clipboard paste failed", e);
     }
   }, [client]);
+
+  // Fires when the operator picks file(s) from the hidden input the
+  // fileChooserOpened prompt below raises. The prompt stays visible
+  // (showing an "Uploading…" state) until the POST resolves - only a real
+  // success or a "fileChooserClosed" (server-side timeout/supersede)
+  // dismisses it, matching how a real native file picker keeps whatever
+  // waiting state the page is in until the browser actually delivers the
+  // file. A failed upload leaves the prompt up with an error so the
+  // operator can retry without having to trigger the remote page's file
+  // input a second time.
+  const handleFilesPicked = useCallback(
+    async (e: Event) => {
+      const input = e.currentTarget as HTMLInputElement;
+      // input.files is a LIVE FileList tied to the input's own state -
+      // resetting input.value below (to allow re-picking the same file
+      // next time) clears it out from under us too, since it's the same
+      // underlying object, not a snapshot. Array.from() copies the actual
+      // File objects out first so clearing the input doesn't also empty
+      // what we're about to upload.
+      const files = Array.from(input.files ?? []);
+      input.value = "";
+      if (!client || files.length === 0) return;
+      setUploading(true);
+      setUploadError(null);
+      try {
+        await client.uploadFiles(files);
+        setFileChooserMultiple(null);
+      } catch (err: any) {
+        setUploadError(err?.message || "Upload failed");
+      } finally {
+        setUploading(false);
+      }
+    },
+    [client]
+  );
+
+  // Mic access prompt handlers -
+  // grantMicAccess() itself does the real work (captures this device's
+  // own microphone, swaps it onto the pre-negotiated placeholder track,
+  // tells the backend); this is just the prompt's own state bookkeeping
+  // around it, same pattern as handleFilesPicked above.
+  const handleMicAllow = useCallback(async () => {
+    if (!client) return;
+    setMicGranting(true);
+    setMicError(null);
+    try {
+      await client.grantMicAccess();
+      setMicAccessOrigin(null);
+    } catch (err: any) {
+      // Real bug found live testing this for the first time: this used to
+      // ALSO clear micAccessOrigin here, on the failure path - but that's
+      // the exact flag {micAccessOrigin !== null && (...)} gates the whole
+      // prompt's visibility on, so the prompt (and the error text just set
+      // below) vanished in the same render pass, before it could ever be
+      // seen. grantMicAccess() already denies the remote page
+      // automatically on its own internal failure regardless - leaving
+      // the prompt open here is purely so the operator actually SEES why,
+      // instead of the prompt just silently disappearing with no
+      // explanation (which is exactly what happened, confirmed live: a
+      // real getUserMedia failure was occurring the whole time, but
+      // looked like "nothing happened" from the operator's side).
+      setMicError(err?.message || "Microphone access failed");
+    } finally {
+      setMicGranting(false);
+    }
+  }, [client]);
+
+  const handleMicDeny = useCallback(() => {
+    client?.denyMicAccess();
+    setMicAccessOrigin(null);
+  }, [client]);
+
+  // Owner-controlled handoff (docs/protocol.md's "Owner-controlled
+  // handoff" section) - act on a SPECIFIC other connection by ID. This
+  // example deliberately never calls @glass/client's self-service
+  // requestInput()/releaseInput() at all - by this app's own policy
+  // choice (not something Glass enforces), only the owner ever changes
+  // who can interact, via the roster panel below; a viewer can't request
+  // control for itself, and the owner can't release its own. Also
+  // silently denied server-side if this client isn't actually the owner
+  // (see grantInput/revokeInput's own doc comments) - the "isOwner &&"
+  // guard in the render below is what actually keeps these buttons from
+  // showing to a non-owner in the first place.
+  const handleGrantInput = useCallback(
+    (connectionId: string) => {
+      client?.grantInput(connectionId);
+    },
+    [client]
+  );
+  const handleRevokeInput = useCallback(
+    (connectionId: string) => {
+      client?.revokeInput(connectionId);
+    },
+    [client]
+  );
+
+  // Mints a watch-only grant for the current session and turns it into an
+  // attach-mode URL for THIS SAME app (see the attachSessionId/
+  // attachSignalingUrl handling in useGlassSession) - the
+  // simplest way to actually exercise the handoff flow end to end: open
+  // the resulting link in a second tab (or hand it to someone else), which
+  // connects watch-only and can then click "Request control" there to see
+  // this tab receive "Another viewer is requesting control".
+  const handleShareWatchOnlyLink = useCallback(async () => {
+    if (!sessionId) return;
+    try {
+      const grant = await mintConnectionGrant(
+        sessionId,
+        { consumesMedia: true },
+        GLASS_ADDR,
+        API_TOKEN
+      );
+      const attachUrl = new URL(window.location.href);
+      attachUrl.search = "";
+      attachUrl.searchParams.set("attachSessionId", sessionId);
+      attachUrl.searchParams.set("attachSignalingUrl", grant.signalingUrl);
+      await navigator.clipboard.writeText(attachUrl.toString());
+      setToastMessage({
+        message: "Watch-only link copied to clipboard",
+        type: "success",
+      });
+    } catch (e: any) {
+      console.error("Failed to mint watch-only link", e);
+      setToastMessage({
+        message: `Failed to create watch-only link: ${e.message}`,
+        type: "error",
+      });
+    }
+  }, [sessionId]);
 
   // --- Misc app-chrome effects ---
   useEffect(() => {
@@ -312,31 +296,7 @@ export function App() {
   };
 
   // --- Render ---
-  if (hasError) {
-    return (
-      <div class="h-screen flex items-center justify-center bg-red-50">
-        <div class="text-center p-8">
-          <h1 class="text-2xl font-bold text-red-600 mb-4">
-            Something went wrong
-          </h1>
-          <p class="text-slate-700 mb-6">
-            An application error occurred. Please try reloading the page.
-          </p>
-          <button
-            onClick={() => window.location.reload()}
-            class="px-5 py-2 bg-red-600 text-white rounded-lg font-semibold shadow hover:bg-red-700 transition-colors"
-          >
-            Reload Page
-          </button>
-          {error && (
-            <p class="text-xs text-red-500 mt-4 p-2 bg-red-100 rounded">
-              {error}
-            </p>
-          )}
-        </div>
-      </div>
-    );
-  }
+  if (hasError) return <ErrorScreen error={error} />;
 
   return (
     <div
@@ -345,35 +305,8 @@ export function App() {
       }`}
     >
       {!isActive ? (
-        // --- Welcome / URL Entry View ---
-        <div class="w-full h-full flex flex-col items-center justify-center gap-6 p-4">
-          <h1 class="text-7xl font-thin tracking-[0.2em] text-white/90">
-            Glass
-          </h1>
-          <div class="w-full max-w-xl">
-            <URLBar
-              onNavigate={handleNavigate}
-              onNavigateBack={() => {}}
-              onNavigateForward={() => {}}
-              onRefresh={() => {}}
-              disabled={!isConnected && !error}
-              isLoading={isLoading || (!isConnected && !error)}
-              isActive={false}
-            />
-          </div>
-          {!isConnected && !error && (
-            <div class="absolute bottom-4 right-4 text-sm text-white/80 bg-black/30 px-3 py-1 rounded-full animate-pulse">
-              Connecting...
-            </div>
-          )}
-          {error && (
-            <div class="absolute bottom-4 right-4 text-sm text-red-100 bg-red-600/80 px-3 py-1 rounded-full">
-              {error}
-            </div>
-          )}
-        </div>
+        <WelcomeView onNavigate={handleNavigate} isConnected={isConnected} isLoading={isLoading} error={error} />
       ) : (
-        // --- Browser View ---
         <Suspense
           fallback={
             <div class="w-screen h-screen flex items-center justify-center">
@@ -390,18 +323,41 @@ export function App() {
               disabled={!isConnected}
               isLoading={isLoading}
               isConnected={isConnected}
-              fps={0}
+              fps={fps}
               viewportSize={{ width: 0, height: 0 }}
               canvasScale={{ x: 1, y: 1, offsetX: 0, offsetY: 0 }}
-              performanceStats={null}
-              currentURL={currentURL}
-              canGoBack={canGoBack}
-              canGoForward={canGoForward}
+              performanceStats={perfStats}
+              currentURL={session.currentURL}
+              canGoBack={session.canGoBack}
+              canGoForward={session.canGoForward}
+              producesInput={session.producesInput}
+              onShareWatchOnlyLink={handleShareWatchOnlyLink}
+              isOwner={session.isOwner}
+              connections={session.connections}
+              onGrantInput={handleGrantInput}
+              onRevokeInput={handleRevokeInput}
             />
             {/* Content area - the SDK viewer mounts its <video> + input capture
                 into this container (see the mount effect above). */}
             <main ref={containerRef} class="content-area">
-              {(isLoading || !isConnected) && (
+              {/* Gated on isConnected alone, not isLoading - a real,
+                  live-found bug (2026-09-04, CNN dogfooding): isLoading
+                  tracks the REMOTE PAGE's own navigation/load state, which on a heavy, ad-tech-saturated real site
+                  can legitimately stay true for minutes - CNN's own cookie-
+                  sync/RTB cascade left it true for 3+ minutes in one live
+                  test. This overlay used to block the ENTIRE video behind a
+                  translucent blur for that whole window even though
+                  isConnected was already true and real video was actively
+                  streaming and rendering the page as it loaded - exactly
+                  the point of a remote-rendering product is watching the
+                  page load live in the video itself, not waiting for the
+                  remote page's own load event before showing anything.
+                  isConnected (WebRTC transport up, same signal the landing
+                  screen's "Connecting..." indicator already uses) is the
+                  only thing that should ever hide the video; isLoading
+                  still flows to BrowserHeader's own smaller, non-blocking
+                  URL-bar indicator below. */}
+              {!isConnected && (
                 <div class="absolute inset-0 bg-white/30 backdrop-blur-sm flex items-center justify-center z-30">
                   {!isConnected && error ? (
                     <div class="text-center p-4 bg-red-100/80 border border-red-300 rounded-lg shadow">
@@ -411,6 +367,28 @@ export function App() {
                     <CustomLoader />
                   )}
                 </div>
+              )}
+              {isConnected && session.sourceStalled && (
+                <div class="absolute top-4 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-full bg-black/70 text-white text-sm shadow">
+                  Source paused, waiting for it to reconnect…
+                </div>
+              )}
+              {/* Mute toggle - the SDK's <video> element starts muted
+                  unconditionally (see GlassViewer's own comment: it always
+                  did, to guarantee autoplay with zero interaction, from
+                  before real audio existed) - now that a session can carry
+                  a genuine Opus track, this is the only way to actually
+                  hear it. Shown only once connected, same gating as the
+                  loading overlay above. */}
+              {isConnected && (
+                <button
+                  type="button"
+                  onClick={handleToggleMute}
+                  class="absolute bottom-4 right-4 z-30 px-3 py-2 rounded-full bg-black/60 text-white text-sm hover:bg-black/80 transition-colors"
+                  title={isMuted ? "Unmute" : "Mute"}
+                >
+                  {isMuted ? "Unmute" : "Mute"}
+                </button>
               )}
             </main>
           </div>
@@ -440,41 +418,34 @@ export function App() {
         />
       )}
 
-      {/* --- Hijacked URL Popup --- */}
       {hijackedUrl && (
-        <div
-          class="fixed bottom-6 right-6 z-50 cursor-pointer animate-fade-in"
-          onClick={handleHijackedUrlClick}
-        >
-          <div class="flex items-center gap-4 px-4 py-3 rounded-lg border-2 border-black shadow-lg bg-yellow-100 text-yellow-800">
-            <div class="flex-shrink-0">
-              <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                <path
-                  fill-rule="evenodd"
-                  d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.428a1 1 0 00.475 0l5 1.428a1 1 0 001.17-1.409l-7-14zM10 4.868L12.89 10.612 10 9.788l-2.89 2.824L10 4.868z"
-                  clip-rule="evenodd"
-                />
-              </svg>
-            </div>
-            <div class="text-sm font-bold">
-              <p>Blocked navigation to a new URL.</p>
-              <p class="font-mono text-xs truncate max-w-xs">{hijackedUrl}</p>
-              <p class="font-semibold text-blue-600 hover:underline">
-                Click here to open in a new tab.
-              </p>
-            </div>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setHijackedUrl(null);
-              }}
-              class="flex-shrink-0 text-current opacity-70 hover:opacity-100"
-            >
-              {" "}
-              &times;{" "}
-            </button>
-          </div>
-        </div>
+        <HijackedUrlPrompt url={hijackedUrl} onOpen={handleHijackedUrlClick} onDismiss={() => setHijackedUrl(null)} />
+      )}
+      <DownloadPrompts
+        downloads={pendingDownloads}
+        onDone={(guid) => setPendingDownloads((prev) => prev.filter((d) => d.guid !== guid))}
+      />
+      {fileChooserMultiple !== null && (
+        <UploadPrompt
+          multiple={fileChooserMultiple}
+          uploading={uploading}
+          uploadError={uploadError}
+          offset={pendingDownloads.length}
+          fileInputRef={fileInputRef}
+          onFilesPicked={handleFilesPicked}
+          onDismiss={() => setFileChooserMultiple(null)}
+        />
+      )}
+      {micAccessOrigin !== null && (
+        <MicPrompt
+          origin={micAccessOrigin}
+          micError={micError}
+          micGranting={micGranting}
+          offset={pendingDownloads.length + (fileChooserMultiple !== null ? 1 : 0)}
+          onAllow={handleMicAllow}
+          onDeny={handleMicDeny}
+          onDismiss={() => setMicAccessOrigin(null)}
+        />
       )}
     </div>
   );

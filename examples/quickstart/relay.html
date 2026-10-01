@@ -1,0 +1,69 @@
+<!doctype html>
+<!--
+  Relay quickstart: publish this device's camera into a Glass relay session,
+  and watch it from another tab or device.
+
+  Serve the repository root (e.g. `npx serve .`) after `npm run build`, and
+  open /examples/quickstart/relay.html. Creating the session from the page
+  only works against a local, token-less Glass; in a real app your backend
+  creates it (see docs/sources/producers.md).
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Glass relay quickstart</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 16px; max-width: 720px; }
+    video { width: 100%; background: #000; border-radius: 6px; }
+    input { width: 100%; box-sizing: border-box; }
+    #status { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>Glass relay</h1>
+  <p><label>Glass server <input id="server" value="http://localhost:8080" /></label></p>
+  <p><button id="start">Start camera</button> <span id="status"></span></p>
+  <p id="share" hidden>Watch link: <a id="link" target="_blank">open in another tab</a></p>
+  <video id="video" autoplay playsinline muted></video>
+
+  <script type="module">
+    import { GlassProducer, createGlassClient } from "../../packages/client/dist/index.js";
+
+    const $ = (id) => document.getElementById(id);
+    const status = (text) => ($("status").textContent = text);
+    const watchUrl = new URLSearchParams(location.search).get("watch");
+
+    if (watchUrl) {
+      // Viewer: the same createGlassClient call works for every session type.
+      $("start").hidden = true;
+      $("server").closest("p").hidden = true;
+      const client = createGlassClient({ signalingUrl: watchUrl });
+      client.on("videoTrack", (stream) => ($("video").srcObject = stream));
+      client.on("slotStateChanged", (slots) => status(`stream: ${slots.main}`));
+      client.on("closed", (reason) => status(`closed: ${reason}`));
+      client.connect().catch((err) => status(`failed: ${err.message}`));
+    } else {
+      $("start").onclick = async () => {
+        $("start").disabled = true;
+        const server = $("server").value.replace(/\/$/, "");
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        $("video").srcObject = stream;
+
+        // Your backend would do this with the API token.
+        const res = await fetch(`${server}/v1/relay-sessions`, { method: "POST" });
+        if (!res.ok) return status(`create failed: HTTP ${res.status}`);
+        const session = await res.json();
+
+        const producer = new GlassProducer({ stream, produceUrl: session.produceUrl });
+        producer.on("state", (state, detail) => status(detail ? `${state}: ${detail}` : state));
+        await producer.start();
+
+        const link = `${location.pathname}?watch=${encodeURIComponent(session.signalingUrl)}`;
+        $("link").href = link;
+        $("share").hidden = false;
+      };
+    }
+  </script>
+</body>
+</html>

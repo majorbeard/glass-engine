@@ -42,7 +42,11 @@ export function URLBar({
   const handleSubmit = (e: Event) => {
     e.preventDefault();
     let finalUrl = url.trim() || "google.com";
-    if (!finalUrl.startsWith("http://") && !finalUrl.startsWith("https://")) {
+    // Only prefix with https:// when there's no scheme at all - a naive
+    // startsWith("http") check turned "chrome://gpu" into the malformed
+    // "https://chrome://gpu", which Chrome/CDP can't navigate to and falls
+    // back to searching for instead (real bug, not a Glass/GPU issue).
+    if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(finalUrl)) {
       finalUrl = "https://" + finalUrl;
     }
     onNavigate(finalUrl);

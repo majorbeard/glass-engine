@@ -1,0 +1,16 @@
+node_modules
+dist
+*.tsbuildinfo
+
+# Capacitor native project - the project structure itself is normally
+# committed, but machine-specific/build-generated content underneath it
+# isn't.
+android/local.properties
+android/.gradle
+android/app/build
+android/build
+android/.idea
+android/*.iml
+android/app/*.iml
+android/captures
+android/.cxx

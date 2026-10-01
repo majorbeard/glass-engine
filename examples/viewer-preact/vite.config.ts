@@ -10,4 +10,15 @@ import tailwindcss from "@tailwindcss/vite";
 // so a browser connects to it directly too.
 export default defineConfig({
   plugins: [preact(), tailwindcss()],
+  server: {
+    // Vite 5+ rejects any Host header it doesn't recognize by default -
+    // fine for a normal local dev loop, but this example is also
+    // sometimes reached through a tunnel (ngrok et al.) whose hostname is
+    // ephemeral and unknowable in advance, e.g. testing against a real
+    // phone/device with no other network path to the dev machine. `true`
+    // disables the check entirely - acceptable here since this is dev-only
+    // tooling a developer already consciously opted into running, not
+    // something ever deployed as-is.
+    allowedHosts: true,
+  },
 });

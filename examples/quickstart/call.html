@@ -1,0 +1,90 @@
+<!doctype html>
+<!--
+  Call quickstart: a two-party video call through Glass.
+
+  Serve the repository root (e.g. `npx serve .`) and open
+  /examples/quickstart/call.html. "Start a call" creates the call and joins as
+  peer A; open the link it shows in another tab or device to join as peer B.
+  Creating the call from the page only works against a local, token-less
+  Glass; in a real app your backend creates it (see docs/sources/calls.md).
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Glass call quickstart</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 16px; max-width: 960px; }
+    .videos { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
+    video { width: 100%; background: #000; border-radius: 6px; }
+    input { width: 100%; box-sizing: border-box; }
+    #status { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>Glass call</h1>
+  <p><label>Glass server <input id="server" value="http://localhost:8080" /></label></p>
+  <p><button id="start">Start a call</button> <span id="status"></span></p>
+  <p id="share" hidden>Other person: <a id="link" target="_blank">join link</a></p>
+  <div class="videos">
+    <video id="local" autoplay playsinline muted></video>
+    <video id="remote" autoplay playsinline></video>
+  </div>
+
+  <script type="module">
+    const $ = (id) => document.getElementById(id);
+    const status = (text) => ($("status").textContent = text);
+    const joinUrl = new URLSearchParams(location.search).get("join");
+
+    async function joinCall(peerUrl) {
+      const local = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      $("local").srcObject = local;
+
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      local.getTracks().forEach((track) => pc.addTrack(track, local));
+      const remote = new MediaStream();
+      pc.ontrack = (e) => {
+        remote.addTrack(e.track);
+        $("remote").srcObject = remote;
+      };
+      pc.onconnectionstatechange = () => status(pc.connectionState);
+
+      const ws = new WebSocket(peerUrl);
+      pc.onicecandidate = (e) => {
+        if (e.candidate) ws.send(JSON.stringify({ type: "ice-candidate", candidate: e.candidate.toJSON() }));
+      };
+      ws.onmessage = async (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === "answer") await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
+        if (msg.type === "ice-candidate") await pc.addIceCandidate(msg.candidate);
+      };
+      ws.onclose = (e) => status(`signaling closed (${e.code})`);
+      ws.onopen = async () => {
+        // Offer only once the socket is open.
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        ws.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
+      };
+      window.addEventListener("pagehide", () => ws.close(1000, "hung up"));
+    }
+
+    if (joinUrl) {
+      $("start").hidden = true;
+      $("server").closest("p").hidden = true;
+      joinCall(joinUrl).catch((err) => status(`failed: ${err.message}`));
+    } else {
+      $("start").onclick = async () => {
+        $("start").disabled = true;
+        const server = $("server").value.replace(/\/$/, "");
+        // Your backend would do this with the API token.
+        const res = await fetch(`${server}/v1/calls`, { method: "POST" });
+        if (!res.ok) return status(`create failed: HTTP ${res.status}`);
+        const call = await res.json();
+        $("link").href = `${location.pathname}?join=${encodeURIComponent(call.peerBUrl)}`;
+        $("share").hidden = false;
+        await joinCall(call.peerAUrl);
+      };
+    }
+  </script>
+</body>
+</html>

@@ -1,158 +1,178 @@
 # Glass Engine
 
-Glass is a self-hosted runtime for interactive remote rendering. It launches
-renderers, streams pixels, delivers input, manages sessions, and exposes a
-stable protocol so you don't have to deal with Chromium lifecycle
-management, WebRTC, encoding, or transport details yourself.
+Glass is a self-hosted engine for live streaming and remote control. It
+carries video and audio from a **source** to any number of **viewers** over
+WebRTC, and carries input back from a viewer to the source.
 
-This repository holds the public-facing pieces: the installer, downloadable
-binaries (via [Releases](https://github.com/majorbeard/glass-engine/releases)),
-the client SDK, an example viewer built on it, and operator-facing docs. The
-Glass engine itself (the Go server that launches browsers, encodes video,
-and speaks the protocol) is closed-source - you get it as the `glass`
-binary or Docker image below, not as source in this repo.
+A source can be:
+
+| Source | What it is | Create it with |
+|---|---|---|
+| **Hosted browser** | A headless Chrome that Glass runs for you. Viewers see it and drive it: mouse, keyboard, touch, scroll, navigation, clipboard, files, audio and microphone. | `POST /v1/sessions` |
+| **Relay producer** | Anything that can send WebRTC video: a phone camera, a desktop capture, a hardware encoder, your own app. Glass forwards its stream to viewers without decoding it. One session can hold several producers. | `POST /v1/relay-sessions` |
+| **Two-party call** | Two peers, each sending and receiving video and audio through Glass. | `POST /v1/calls` |
+
+Whatever the source, the session model is the same: a session has
+connections, each connection has capabilities (watch, control, publish),
+control can be handed between viewers, and dropped connections resume inside
+a reconnect grace window. You build your product on the HTTP API and
+[`@glass/client`](packages/client); Glass has no user interface of its own.
+
+```text
+              ┌──────────────────────── Glass ────────────────────────┐
+ hosted       │                                                       │
+ browser ─────┤                                                       │      viewer
+              │  sessions · capabilities · control handoff ·          ├────► viewer
+ relay        │  reconnect grace · bandwidth estimation · TURN        │      viewer
+ producer ────┤                                                       │
+ (camera,     │                                                       │◄──── input
+  desktop,…)  └───────────────────────────────────────────────────────┘
+```
+
+The engine itself (the Go server) is closed-source. It ships only as the
+`ghcr.io/majorbeard/glass` Docker image (linux/amd64 and linux/arm64), which
+contains everything it needs. This repository holds the public
+pieces: the client SDK, a reference viewer, the installer and these docs.
 
 ## Status
 
-Pre-1.0. The wire protocol may change without a compatibility shim - see
-[docs/protocol.md](docs/protocol.md).
+Pre-1.0. The wire protocol carries a version number so breaking changes are
+detectable, but they are still allowed. See [docs/protocol.md](docs/protocol.md#versioning).
 
-## Install
+## Quick start
 
-```sh
-curl -fsSL https://raw.githubusercontent.com/majorbeard/glass-engine/main/install.sh | sh
-```
-
-Downloads the `glass` binary for your platform and runs `glass doctor` to
-confirm your machine has what it needs (ffmpeg, Chrome/Chromium).
-
-**On Windows**, `install.sh` needs a POSIX shell (WSL or Git Bash) - a plain
-PowerShell/cmd prompt can't run it. Native Windows also has no equivalent of
-`apt`/`brew` for ffmpeg, so unless you're already set up with WSL, the Docker
-option just below is the easier path (Docker Desktop runs a real Linux VM,
-so everything here just works regardless of host OS).
-
-Or, with `chrome-headless-shell` bundled in a container — no host
-dependency for the browser side:
+You need Docker. Start Glass for local development (loopback only, no
+token):
 
 ```sh
-docker run -p 8080:8080 ghcr.io/majorbeard/glass
+docker run -d --name glass \
+  -p 127.0.0.1:8080:8080 \
+  -p 50000:50000/udp \
+  --shm-size=1g \
+  -e GLASS_INSECURE_LOCAL_DEV=true \
+  -e GLASS_WEBRTC_NAT_1TO1_IPS=127.0.0.1 \
+  ghcr.io/majorbeard/glass
+
+curl http://localhost:8080/healthz      # {"status":"ok"}
 ```
 
-This image does not bundle ffmpeg (see "FFmpeg and licensing" below) - by
-default `glass start` in the container will fail its ffmpeg check at boot
-just like a bare-metal install without ffmpeg would. Either build your own
-image `FROM ghcr.io/majorbeard/glass` with ffmpeg installed, or pass
-`-e GLASS_AUTO_FETCH_FFMPEG=true` to have it fetch a checksum-verified
-static build itself on startup.
+Then run the reference viewer from this repository:
 
-### FFmpeg and licensing
+```sh
+npm install
+npm run build
+cd examples/viewer-preact
+VITE_GLASS_ADDR=http://localhost:8080 npm run dev
+```
 
-Glass shells out to a separately-installed `ffmpeg` binary for H.264
-encoding - it never links or bundles FFmpeg or libx264 into the `glass`
-binary itself, and the bundled Docker image doesn't include a compiled
-ffmpeg either. Consumer applications only ever talk to Glass over the
-network (REST/WebSocket, `@glass/client`), so their own codebases never
-touch FFmpeg or any codec code directly.
+Open the URL Vite prints (normally `http://localhost:5173`). You are driving
+a browser that runs inside the container.
 
-`glass doctor` and `glass start` both check for a working ffmpeg+libx264
-install at boot and fail with clear instructions if it's missing.
-`install.sh` will try to install one for you (Homebrew on macOS, a
-checksum-verified static build on Linux, skippable via
-`GLASS_SKIP_FFMPEG_INSTALL=1`); in Docker, set `GLASS_AUTO_FETCH_FFMPEG=true`
-if you'd rather Glass fetch one at startup than provide your own image.
+[docs/getting-started.md](docs/getting-started.md) walks through the same
+setup with an API token, and adds a relay producer and a call.
+[docs/deployment.md](docs/deployment.md) covers running Glass on a server.
 
-This isn't legal advice: FFmpeg's own licensing depends on how a given build
-is compiled, and encoding H.264 in production may carry its own
-patent-licensing considerations for whoever operates it, independent of
-Glass. If you're scaling a product on Glass, get your own counsel's read on
-your specific situation rather than relying on this note.
+## Using the SDK
 
-## Repo layout
+`@glass/client` isn't published to npm yet. Build it from this repository and
+depend on it by path:
 
-- `install.sh` — the installer behind the one-liner above.
-- `packages/client/` — `@glass/client`, the client SDK. A DOM-free transport
-  core (`@glass/client`: connect, reconnection, input) plus an optional
-  vanilla-DOM viewer (`@glass/client/viewer`: renders the video and captures
-  mouse/touch/keyboard/scroll/viewport input). This is the reusable client
-  engine — the thing you build a viewer on top of, in any framework or none.
-- `examples/viewer-preact/` — a reference Preact viewer built on
-  `@glass/client`. Not the product — an example client, kept deliberately
-  simple.
-- `docs/` — protocol reference, architecture overview, and deployment notes.
+```sh
+git clone https://github.com/majorbeard/glass-engine
+cd glass-engine && npm install && npm run build
+# in your app:
+npm install ../glass-engine/packages/client
+```
 
-## Using the client SDK
+**Watch and drive a hosted browser:**
 
 ```ts
-import { createGlassClient, createGlassSession } from "@glass/client";
+import { createGlassClient } from "@glass/client";
 import { mountGlassViewer } from "@glass/client/viewer";
 
-// In a real app your own backend creates the session (auth/quota stay
-// server-side) and hands the client only the signalingUrl. createGlassSession
-// is a dev convenience - pass the glass instance's address (Glass has no
-// product frontend, so your client is almost always a different origin, and
-// the backend's CORS policy allows any loopback/private-LAN origin).
-const session = await createGlassSession("http://localhost:8080");
-const client = createGlassClient({
-  signalingUrl: session.signalingUrl,
-  sessionId: session.id,
-});
+// Your backend calls POST /v1/sessions with the API token and hands the
+// browser only { id, signalingUrl }.
+const { id, signalingUrl } = await fetch("/api/glass-session").then((r) => r.json());
 
-// Mount the viewer BEFORE connecting so its initial viewport/mobile
-// declaration reaches the backend before the first navigation.
-mountGlassViewer(document.getElementById("stage")!, client);
-
-client.on("navigation", (nav) => {
-  /* update your own URL bar */
-});
+const client = createGlassClient({ sessionId: id, signalingUrl });
+mountGlassViewer(document.getElementById("stage")!, client); // video + input
 await client.connect();
 client.navigate("https://example.com");
 ```
 
-The core (`@glass/client`) has no DOM dependency and can be used with a custom
-renderer; `@glass/client/viewer` is the ready-made rendering + input layer.
+**Publish a camera (or any `MediaStream`) as a relay producer:**
 
-## Running the example viewer
+```ts
+import { GlassProducer } from "@glass/client";
 
-Against a running `glass start` instance (see Install above):
-
-```sh
-npm install                              # from the repo root - builds @glass/client too
-npm run build --workspace @glass/client  # keep the SDK's dist/ fresh if you change it
-cd examples/viewer-preact
-npm run dev
+const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+const producer = new GlassProducer({ stream, produceUrl }); // produceUrl from your backend
+producer.on("state", (s) => console.log("producer:", s));
+await producer.start(); // reconnects on its own after network drops
 ```
 
-Open the URL Vite prints (typically `http://localhost:5173`). It talks to
-the backend at `http://localhost:8080` by default; set `VITE_GLASS_ADDR` to
-point it elsewhere.
+A viewer watches a relay session with the same `createGlassClient` call as
+above, using the relay session's `signalingUrl`.
 
-## Configuration
+**Calls** use a plain `RTCPeerConnection` and a WebSocket; see
+[docs/sources/calls.md](docs/sources/calls.md).
 
-The `glass` binary/image reads these environment variables at startup (all
-optional):
+## Licensing
 
-| Variable | Default | Purpose |
+Glass runs without a license key on the Free tier. A license key
+(`GLASS_LICENSE_KEY`) raises the number of concurrent sessions:
+
+| Tier | Concurrent sessions per Glass process |
+|---|---|
+| Free | 2 |
+| Pro | 20 |
+| Pro+ | 50 |
+
+The limit applies to each session type separately: a Pro instance can run 20
+browser sessions, 20 relay sessions and 20 calls at the same time. Watch-only
+viewers don't count against it. Glass also refuses new sessions when the host
+runs out of CPU headroom, whatever the tier. See [docs/sizing.md](docs/sizing.md).
+
+## Direction
+
+What is being built next. None of it exists yet, and there are no dates.
+
+- **Per-viewer quality for relay streams.** Producers send several quality
+  layers (simulcast); Glass picks one per viewer from that viewer's own
+  bandwidth, so one slow viewer doesn't lower quality for everyone.
+- **Streams across several Glass nodes.** A node near a viewer pulls a stream
+  from the node that owns it and serves it locally.
+- **Device agents.** Small apps that publish a computer's or phone's screen
+  as a relay producer and, where the platform allows it, accept remote input.
+  Only mechanisms each platform permits for shipping software are used, so
+  anything built on Glass stays sellable. On iOS that means view-only.
+
+## Documentation
+
+| Doc | For | What's in it |
 |---|---|---|
-| `GLASS_ADDR` | `:8080` | HTTP listen address. |
-| `GLASS_POOL_SIZE` | `5` | Number of browser instances to launch. |
-| `GLASS_SESSION_CAP` | same as pool size | Max concurrent sessions. |
-| `GLASS_CHROME_BIN` | *(auto-detected)* | Path to a specific Chrome/Chromium/`chrome-headless-shell` binary. |
-| `GLASS_RECONNECT_GRACE_SECONDS` | `60` | How long a session whose signaling connection drops abnormally (network loss, phone screen lock — not an intentional client close) is held open, streaming paused, before being closed if the client never reconnects. |
-| `GLASS_DEBUG_PPROF` | off | Set to `true` to expose `net/http/pprof` under `/debug/pprof/`. Off by default — don't enable on a shared/public machine. |
-| `GLASS_LICENSE_KEY` | unset (free tier) | License key from your Polar purchase. Validated once at startup; missing/invalid keys, or Polar being unreachable, all fall back to the free tier rather than blocking startup. Clamps `GLASS_SESSION_CAP` to the tier's limit — never raises it. |
-| `GLASS_STUN_URLS` | Google's public STUN | Comma-separated STUN server URL(s), e.g. `stun:stun.example.com:19302`. |
-| `GLASS_TURN_URLS` | unset (no TURN) | Comma-separated TURN/TURNS server URL(s), e.g. `turn:turn.example.com:3478,turns:turn.example.com:5349`. STUN alone cannot connect a client behind symmetric NAT or a restrictive firewall — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#turn-nat-traversal-for-real-world-networks) for free/paid/self-hosted options. `glass doctor` reports whether this is set. |
-| `GLASS_TURN_USERNAME` / `GLASS_TURN_CREDENTIAL` | unset | Long-term credentials for `GLASS_TURN_URLS` — required by virtually every real TURN server. |
-| `GLASS_API_TOKEN` | unset (no auth) | Requires every `/v1/*` request (`Authorization: Bearer <token>` or `?token=<token>` — the latter for the signaling WebSocket/SSE stats stream, which can't set a custom header) to present it. `/healthz` stays open. Off by default — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#exposure-authentication) before binding to anything but localhost. `glass doctor` reports whether this is set. |
-| `GLASS_EGRESS_FILTER` | `true` (enabled) | Every pooled Chrome instance is launched pointed at a local forward proxy that blocks any outbound connection — not just the explicit navigate action — to a loopback/private/link-local destination. Set to `false` to disable (not recommended — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#egress-filtering-ssrf-protection)). `glass doctor` reports its status. |
+| [Getting started](docs/getting-started.md) | Everyone | First working setup for each source |
+| [Concepts](docs/concepts.md) | Integrators | Sessions, connections, capabilities, control handoff, reconnects |
+| [Hosted browser](docs/sources/browser.md) | Integrators | Navigation, viewport, clipboard, files, audio, microphone |
+| [Relay producers](docs/sources/producers.md) | Integrators | The producer contract, stream slots, `GlassProducer` |
+| [Calls](docs/sources/calls.md) | Integrators | Two-party calling |
+| [Client SDK](docs/client-sdk.md) | Integrators | `GlassClient`, `GlassProducer`, the viewer layer |
+| [Protocol](docs/protocol.md) | Integrators | HTTP API, signaling and DataChannel messages |
+| [Architecture](docs/architecture.md) | Everyone | How media and input move through the engine |
+| [Deployment](docs/deployment.md) | Operators | Ports, NAT, TURN, TLS, auth, Docker |
+| [Sizing](docs/sizing.md) | Operators | Capacity, memory, instance choice |
+| [Configuration](docs/configuration.md) | Operators | Every operator setting |
 
-Glass has no product frontend and serves none — its REST/WebSocket routes
-are CORS-enabled for any loopback/private-LAN origin, so your own client
-(the example viewer, or your own frontend) just needs to know the
-instance's address.
+## Repository layout
 
-See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for keeping the process itself
-running (systemd/Docker restart policies), and
-[docs/GLASS_ENGINE_FLOW_EXPLAINER.md](docs/GLASS_ENGINE_FLOW_EXPLAINER.md)
-for a high-level architecture walkthrough.
+- `packages/client/`: `@glass/client`, the TypeScript SDK. The core has no
+  DOM dependency; `@glass/client/viewer` is the optional video and input
+  layer.
+- `examples/viewer-preact/`: the reference viewer for hosted-browser and
+  relay sessions.
+- `examples/producer-capacitor/`: an Android app that publishes the phone's
+  camera and microphone as a relay producer and shares a watch link.
+- `examples/call-capacitor/`: an Android app for two-party calls.
+- `examples/quickstart/`: the single-page relay and call examples used by
+  the getting-started guide.
+- `docs/`: everything above.
