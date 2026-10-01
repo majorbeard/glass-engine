@@ -29,6 +29,8 @@ import type {
   GlassCapabilities,
   GlassConnectionCapabilities,
   GlassConnectionGrant,
+  GlassInputDrop,
+  GlassInputDropCode,
   GlassRosterEntry,
   GlassSlotState,
   GlassSession,
@@ -58,6 +60,8 @@ export type {
   GlassCapabilities,
   GlassConnectionCapabilities,
   GlassConnectionGrant,
+  GlassInputDrop,
+  GlassInputDropCode,
   GlassRosterEntry,
   GlassSlotState,
   GlassSession,
@@ -213,6 +217,11 @@ export type GlassClientEventMap = {
   // paused" over a frozen frame while a producer is stalled. slotStates()
   // already reflects it.
   slotStateChanged: [slots: Record<string, GlassSlotState>];
+  // Input was dropped: either this client withheld it (drop.local, when the
+  // connection has no control or isn't the owner) or Glass discarded it
+  // (rate limit, unsupported or invalid event). Coalesced: at most one
+  // report every 2 s per code and event type, with a count.
+  inputDropped: [drop: GlassInputDrop];
   // One input-latency sample, measured on this client's monotonic clock
   // (see input_latency.ts): from sending a click/key/tap to displaying the
   // first eligible frame after it, or, for drags and scrolls

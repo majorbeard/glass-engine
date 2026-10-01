@@ -96,8 +96,11 @@ viewer can raise the on-screen keyboard when the user taps one.
 | Gamepad | Mapped to keyboard and mouse input by the viewer (`gamepadMapping` option). |
 
 Input is accepted only from a connection that holds `producesInput`
-([concepts.md](../concepts.md#owner-and-control-handoff)). Invalid input
-(out-of-range coordinates, non-numeric values, too many touch points) is dropped.
+([concepts.md](../concepts.md#owner-and-control-handoff)). Input
+Glass can't accept (no control, navigation from a non-owner, too fast,
+out-of-range coordinates, too many touch points) is dropped and reported to
+the sender; the SDK fires `inputDropped`
+([client-sdk.md](../client-sdk.md#control-and-sharing)).
 
 Your backend can also send input to a session without a WebRTC connection:
 

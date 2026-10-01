@@ -49,7 +49,7 @@ which accept the per-session `?token=` from the URLs Glass returns.
 | `DELETE` | `/v1/sessions/{id}` | `204`, or `404`. |
 | `GET` | `/v1/sessions/{id}/signaling` | WebSocket upgrade. |
 | `POST` | `/v1/sessions/{id}/connections` | Mint a grant. Body: any of `consumesMedia`, `producesMedia`, `producesInput` (booleans). `201 {signalingUrl, connectionCapabilities}`. `consumesInput` is reserved: `400`. |
-| `POST` | `/v1/sessions/{id}/input` | Server-side input: `{"type", "data"}` as in the DataChannel input table. `202`. |
+| `POST` | `/v1/sessions/{id}/input` | Server-side input: `{"type", "data"}` as in the DataChannel input table. `202`; `400` for an unknown or invalid event; `429` when rate limited. |
 | `GET` | `/v1/sessions/{id}/downloads/{guid}` | A finished download (see `DownloadReady`). |
 | `POST` | `/v1/sessions/{id}/upload` | `multipart/form-data` answer to `FileChooserOpened`. |
 | `GET` | `/v1/sessions/{id}/stats/stream` | Server-Sent Events: frame, transport and resource statistics, for operators. |
@@ -147,8 +147,8 @@ later without renegotiation, which Glass doesn't do. After sending
 
 ## DataChannel input (client → Glass)
 
-Each message is a JSON string: `{"type": "<action>", "data": {…}}`. Input from a
-connection without `producesInput` is dropped. Coordinates are in the remote
+Each message is a JSON string: `{"type": "<action>", "data": {…}}`. Input Glass can't accept is dropped and reported back
+(see [Dropped input](#dropped-input)). Coordinates are in the remote
 page's CSS pixels.
 
 | `type` | `data` | Notes |
@@ -192,7 +192,33 @@ Binary. The first byte is the message type; most carry JSON after it.
 | `0x0D` | `FileChooserOpened` | `{multiple}` | Answer with `POST …/upload` within 60 s. |
 | `0x0E` | `FileChooserClosed` | `{}` | The file picker expired or was replaced. |
 | `0x0F` | `MicAccessRequested` | `{origin}` | Answer with `mic_granted` or `mic_denied` within 60 s; silence denies. |
+| `0x10` | `InputDropped` | `{code, eventType, count, s?}` | Glass discarded this connection's input. See [Dropped input](#dropped-input). |
 | `0xFF` | `Error` | `{error}` | The video encoder failed. |
 
-Types `0x01`–`0x0F` are control and state; `0xF0`–`0xFF` are errors and
+Types `0x01`–`0x1F` are control and state; `0xF0`–`0xFF` are errors and
 reserved.
+
+### Dropped input
+
+Glass never drops input silently. It sends `InputDropped` (`0x10`) on the
+reliable DataChannel:
+
+| `code` | Meaning | What to do |
+|---|---|---|
+| `rate_limited` | The connection is sending this event type too fast. | Send less. |
+| `not_authorized` | The connection has no `producesInput`. | Request control, or use a grant that has it. |
+| `owner_only` | Only the session owner may do this (navigation). | Nothing; ask the owner. |
+| `unsupported` | The source doesn't accept this event type, or accepts no input. | Don't retry. Check `capabilities.inputActions`. |
+| `invalid` | The message was malformed or failed validation (out-of-range coordinates, too many touch points). | Fix the sender. |
+
+- `eventType` is the dropped event's type when the source knows it, and empty
+  otherwise. Glass doesn't echo a type it doesn't recognise.
+- Reports are coalesced per `code` and `eventType`: the first drop is reported
+  at once, then at most one report every 2 s. `count` is the number of drops
+  since the previous report.
+- `s` is the sequence number of the first dropped event in the report, when
+  the client numbered its input.
+
+A client knows its own rights from the `offer` and `capabilities_changed`, so
+it shouldn't send input it has no right to send. `@glass/client` withholds it
+and reports it through the same `inputDropped` event.

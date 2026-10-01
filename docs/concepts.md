@@ -60,7 +60,8 @@ curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
 
 The response has its own `signalingUrl`, limited to what you asked for. The
 limits are enforced by the server: input from a connection without
-`producesInput` is dropped by Glass, not merely hidden by the client. For relay
+`producesInput` is dropped by Glass, not merely hidden by the client, and the
+sender is told why ([protocol.md](protocol.md#dropped-input)). For relay
 sessions, use `POST /v1/relay-sessions/{id}/connections`; the response includes
 a `produceUrl` only if you asked for `producesMedia`.
 

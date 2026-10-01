@@ -213,7 +213,7 @@ export function installFakeAudioContext(): void {
   vi.stubGlobal("AudioContext", FakeAudioContext);
 }
 
-const TEST_URL = "ws://glass.test/v1/sessions/s1/signaling?token=tok";
+export const TEST_URL = "ws://glass.test/v1/sessions/s1/signaling?token=tok";
 
 // connectedClient drives one full handshake and returns the client plus
 // the server-side fakes.

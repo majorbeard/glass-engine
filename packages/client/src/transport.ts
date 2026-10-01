@@ -2,6 +2,7 @@
 // binary DataChannel messages and signaling messages. See GlassClient (index.ts) for the public API.
 
 import type { ClientCore } from "./core";
+import * as drops from "./drops";
 import * as lifecycle from "./lifecycle";
 import * as handoff from "./handoff";
 import * as mic from "./mic";
@@ -27,6 +28,7 @@ const enum MessageType {
   FileChooserOpened = 0x0d,
   FileChooserClosed = 0x0e,
   MicAccessRequested = 0x0f,
+  InputDropped = 0x10,
   Error = 0xff,
 }
 
@@ -268,6 +270,11 @@ export function handleBinaryMessage(c: ClientCore, data: ArrayBuffer): void {
             decoder.decode(new Uint8Array(view.buffer, offset))
           );
           c.emit("micAccessRequested", parsed.origin || "");
+        }
+        break;
+      case MessageType.InputDropped:
+        if (data.byteLength > offset) {
+          drops.onServerDrop(c, JSON.parse(decoder.decode(new Uint8Array(view.buffer, offset))));
         }
         break;
       case MessageType.Error:

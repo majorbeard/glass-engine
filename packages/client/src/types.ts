@@ -73,6 +73,27 @@ export interface GlassRosterEntry {
 // media and may come back; "empty" means no producer.
 export type GlassSlotState = "empty" | "live" | "stalled";
 
+// Why an input event was dropped (docs/protocol.md, InputDropped).
+export type GlassInputDropCode =
+  | "rate_limited"
+  | "not_authorized"
+  | "owner_only"
+  | "unsupported"
+  | "invalid";
+
+// One "inputDropped" report. local is true when this client withheld the
+// input itself (it has no control, or isn't the owner) and false when Glass
+// reported the drop. count is the drops since the previous report for the
+// same code and event type. eventType is empty when Glass doesn't know the
+// type. seq is the first dropped event's sequence number, when Glass sent it.
+export interface GlassInputDrop {
+  code: GlassInputDropCode | (string & {});
+  eventType: string;
+  count: number;
+  local: boolean;
+  seq?: number;
+}
+
 // Returned by createGlassSession / the backend's POST /v1/sessions.
 export interface GlassSession {
   id: string;

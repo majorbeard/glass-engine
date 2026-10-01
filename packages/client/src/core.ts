@@ -123,6 +123,8 @@ export class ClientCore {
   lastReceiverCounters: ReceiverCounters | null = null;
   // Last slot_state snapshot; empty for non-relay sessions.
   _slotStates: Record<string, GlassSlotState> = {};
+  // Coalescing state for locally withheld input; see drops.ts.
+  localDrops = new Map<string, { reportedAt: number | null; pending: number }>();
   unloadHandler: ((event: PageTransitionEvent) => void) | null = null;
   // Owns createEncodedStreams() against the current receiver - see
   // InternalGlassClientOptions.__internalEncodedStreamCheckEnabled. One per

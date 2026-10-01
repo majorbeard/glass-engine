@@ -35,6 +35,14 @@ interface GlassRosterEntry {
     isOwner: boolean;
 }
 type GlassSlotState = "empty" | "live" | "stalled";
+type GlassInputDropCode = "rate_limited" | "not_authorized" | "owner_only" | "unsupported" | "invalid";
+interface GlassInputDrop {
+    code: GlassInputDropCode | (string & {});
+    eventType: string;
+    count: number;
+    local: boolean;
+    seq?: number;
+}
 interface GlassSession {
     id: string;
     signalingUrl: string;
@@ -244,6 +252,7 @@ type GlassClientEventMap = {
     inputRequested: [connectionId: string];
     rosterChanged: [connections: GlassRosterEntry[]];
     slotStateChanged: [slots: Record<string, GlassSlotState>];
+    inputDropped: [drop: GlassInputDrop];
     inputLatency: [sample: InputLatencySample];
     closed: [reason: string];
     newTabRequested: [url: string];
@@ -311,6 +320,8 @@ export {
     type GlassClientOptions,
     type GlassConnectionCapabilities,
     type GlassConnectionGrant,
+    type GlassInputDrop,
+    type GlassInputDropCode,
     GlassProducer,
     type GlassProducerEvents,
     type GlassProducerOptions,
