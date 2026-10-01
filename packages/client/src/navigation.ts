@@ -2,11 +2,13 @@
 // DataChannel. See GlassClient (index.ts) for the public API.
 
 import type { ClientCore } from "./core";
+import * as drops from "./drops";
 import * as transport from "./transport";
 import type { UserAgentClientHints } from "./types";
 
 // See GlassClient.navigate.
 export function navigate(c: ClientCore, url: string): void {
+  if (!drops.allowed(c, "navigate", true)) return;
   if (c.ws && c.signalingConnected) {
     c.ws.send(JSON.stringify({ type: "navigate", sdp: url }));
   }
@@ -38,15 +40,18 @@ export function sendInitialViewport(
 
 // See GlassClient.navigateBack.
 export function navigateBack(c: ClientCore): void {
+  if (!drops.allowed(c, "back", true)) return;
   transport.sendInput(c, "back", {});
 }
 
 // See GlassClient.navigateForward.
 export function navigateForward(c: ClientCore): void {
+  if (!drops.allowed(c, "forward", true)) return;
   transport.sendInput(c, "forward", {});
 }
 
 // See GlassClient.refresh.
 export function refresh(c: ClientCore): void {
+  if (!drops.allowed(c, "refresh", true)) return;
   transport.sendInput(c, "refresh", {});
 }

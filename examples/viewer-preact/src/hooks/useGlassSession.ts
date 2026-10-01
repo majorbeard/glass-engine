@@ -240,6 +240,20 @@ export function useGlassSession(notify: Notify) {
           type: "info",
         });
       });
+      // Tell the user why nothing happened. Only for deliberate actions (a
+      // click, key or tap): pointer moves and scrolling over a view-only
+      // stream aren't worth a notice. Reports are already coalesced.
+      c.on("inputDropped", (drop) => {
+        if (cancelled) return;
+        if (drop.code === "owner_only") {
+          notify({ message: "Only the session owner can navigate", type: "info" });
+        } else if (
+          drop.code === "not_authorized" &&
+          ["mousedown", "keydown", "touchstart"].includes(drop.eventType)
+        ) {
+          notify({ message: "View only: you don't have control of this session", type: "info" });
+        }
+      });
       c.on("reconnecting", (attempt, max) => {
         if (!cancelled) setError(`Reconnecting… (attempt ${attempt}/${max})`);
       });

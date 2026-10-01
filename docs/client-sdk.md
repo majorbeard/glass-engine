@@ -80,6 +80,7 @@ await client.connect();
 | Method / event | |
 |---|---|
 | `connectionId()`, `producesInput()`, `isOwner()` | This connection's identity and rights. |
+| `inputDropped(drop)` | Input was dropped. See below. |
 | `requestInput()`, `releaseInput()` | Ask for or give up control. |
 | `grantInput(id)`, `revokeInput(id)` | Owner only. |
 | `connections()` | Owner only: everyone else on the session. |
@@ -88,6 +89,25 @@ await client.connect();
 | `rosterChanged(connections)` | Owner only. |
 
 See [concepts.md](concepts.md#owner-and-control-handoff).
+
+**Dropped input.** The client doesn't send input its connection has no right
+to send: nothing when it has no control, and no navigation unless it is the
+owner. Instead it fires `inputDropped`, and it fires the same event when
+Glass reports a drop:
+
+```ts
+client.on("inputDropped", (drop) => {
+  // drop.code: "not_authorized" | "owner_only" | "rate_limited" | "unsupported" | "invalid"
+  // drop.eventType: e.g. "mousedown" ("" when Glass doesn't know the type)
+  // drop.count: drops since the previous report for this code and type
+  // drop.local: true if this client withheld it, false if Glass dropped it
+  if (drop.code === "not_authorized" && drop.eventType === "mousedown") showViewOnlyHint();
+});
+```
+
+Reports are coalesced: the first drop fires at once, then at most one event
+every 2 s per code and event type. See
+[protocol.md](protocol.md#dropped-input).
 
 ### Hosted-browser input and state
 
