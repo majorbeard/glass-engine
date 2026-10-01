@@ -1,177 +1,198 @@
-# Glass Protocol
+# Glass protocol
 
-This document describes the wire contract between the Glass runtime (Go
-backend) and a viewer/client, as it exists today. It is the authoritative
-reference — if code and docs disagree, that's a bug in one of them.
+The wire contract between Glass and its clients. `@glass/client` implements
+all of it; read this page to build a client in another language or to debug
+one. For the model behind the messages, read [concepts.md](concepts.md) first.
 
 There are three layers:
 
-- **Session HTTP API**, a REST surface for creating and managing sessions.
-  Each session reserves one browser from the pool.
-- **Signaling**, over a WebSocket at `/v1/sessions/{id}/signaling`. Used to
-  negotiate the WebRTC connection for an already-created session, and to
-  carry a handful of control messages that predate the DataChannel being
-  open.
-- **DataChannel**, once the WebRTC connection is established. Carries input
-  (client → server) and JSON state updates (server → client). Video does
-  **not** travel over the DataChannel — it arrives as a real WebRTC media
-  track (RTP, H.264), negotiated in the same offer/answer exchange as the
-  DataChannel but delivered by the browser's own WebRTC stack, not this
-  protocol. `backend/internal/browser/frame_sink.go` fans encoded H.264
-  access units out to that track.
+- **HTTP API**: create, inspect and close sessions; mint grants; health.
+- **Signaling**: a WebSocket per connection. Negotiates WebRTC, then stays
+  open for control messages for the connection's whole life.
+- **WebRTC**: media as normal RTP tracks; input and state as messages on a
+  DataChannel. Video never travels on the DataChannel.
 
-Versioning: there is no version field on any of these yet, beyond the `/v1`
-path prefix on the REST API. The protocol is pre-1.0 and may change without
-a compatibility shim. A response version field should be added before the
-first external release (see the evolution plan's open decisions).
+## Versioning
 
-## Session HTTP API
+Session-creation responses and `GET /v1/info` carry `protocolVersion`, the
+major version of everything on this page. It is currently **1**.
 
-| Method | Path | Purpose |
+- It changes only for a breaking change: a removed or repurposed message, a
+  changed message shape, a changed meaning for a capability.
+- Additions don't change it: new capabilities, new messages, new optional
+  fields. **Ignore what you don't recognise.**
+- **Refuse a higher major version** than you support instead of trying to
+  proceed; guessing wrong looks like a black screen or silently lost input.
+- A missing `protocolVersion` means 1.
+
+## HTTP API
+
+When `GLASS_API_TOKEN` is set, every `/v1/*` request needs
+`Authorization: Bearer <token>`, except the WebSocket, stats and file routes,
+which accept the per-session `?token=` from the URLs Glass returns.
+`/healthz` and `/readyz` are always open.
+
+### Runtime
+
+| Method | Path | Response |
 |---|---|---|
-| `GET` | `/healthz` | Liveness check. `200 {"status":"ok"}`. |
-| `GET` | `/v1/info` | Runtime status: `{"sessions":{"active":N,"capacity":C},"uptimeSeconds":N}`. |
-| `POST` | `/v1/sessions` | Reserve a browser and create a session. `201 {"id":"...","signalingUrl":"ws://.../v1/sessions/{id}/signaling"}`. `503` if at capacity or shutting down. |
-| `GET` | `/v1/sessions/{id}` | Session status: `{"id","state":"pending"\|"active"\|"closed","createdAt","connectedAt"?}`. `404` if unknown. |
-| `DELETE` | `/v1/sessions/{id}` | Explicitly close a session and release its browser. `204` on success, `404` if unknown. |
-| `GET` | `/v1/sessions/{id}/signaling` | Upgrade to the signaling WebSocket for this session (see below). `404` if the session doesn't exist, `409` if it already has a connection. |
+| `GET` | `/healthz` | `200 {"status":"ok"}` whenever the process is up. |
+| `GET` | `/readyz` | `200` when at least one pooled browser answers, else `503`. Body: `{"status","browsers":{…},"diskFreeMB":{…},"diskLow"}`. Disk fields are informational. |
+| `GET` | `/v1/info` | `{"sessions":{"active","relayActive","callActive","capacity"},"capacity":{"licensedMax","configuredCap","effectiveCeiling","hardCapEnabled","currentCpuPercent",…},"license":{"tier","sessionLimit"},"protocolVersion","uptimeSeconds"}`. `license.tier` is the tier actually in effect; `capacity.effectiveCeiling` is how many sessions can be admitted right now. |
 
-Session lifecycle: `POST /v1/sessions` reserves a browser immediately and
-returns `pending`. The client is expected to open the returned
-`signalingUrl` promptly — a pending session that never connects is
-automatically closed after an idle timeout (`Config.PendingTTL`, default
-30s) so an abandoned `POST` can't hold a browser hostage. Once the signaling
-WebSocket connects, the session moves to `active` and stays that way for the
-life of that connection; when the WebSocket closes for any reason, the
-session is closed and its browser is released back to the pool. A session
-supports exactly one signaling connection — reconnecting requires creating a
-new session.
+### Browser sessions
 
-## Signaling (WebSocket, `/v1/sessions/{id}/signaling`)
-
-All signaling messages are JSON with a `type` field. The server upgrades the
-HTTP connection, then immediately performs the offer/answer exchange.
-
-### Client → Server
-
-| `type` | Fields | Purpose |
+| Method | Path | Response |
 |---|---|---|
-| `answer` | `sdp: string` | SDP answer, in response to the server's offer. |
-| `ice-candidate` | `candidate: RTCIceCandidateInit` | ICE candidate trickled from the client. |
-| `navigate` | `sdp: string` (holds the target URL, not an SDP blob) | Request navigation before/without using the DataChannel. |
-| `initial_viewport` | `width, height: number`, `isMobile?: boolean`, `userAgent?: string` | Reported once, right after connect, before the first resize. `isMobile`/`userAgent` are optional — omitted or `isMobile: false` leaves the browser in its default desktop emulation state (`Mobile: false`, no UA override). When `isMobile: true`, the server applies CDP mobile viewport emulation and, if `userAgent` is non-empty, a matching `Network.setUserAgentOverride`. Intended to relay the *client's own* `navigator.userAgent` when it's a real phone, not a fabricated string. |
+| `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities}`. Optional body `{"audioInput": true}`. `503` at capacity. |
+| `GET` | `/v1/sessions/{id}` | `{id, state: "pending"\|"active"\|"closed", createdAt, connectedAt?}`, or `404`. |
+| `DELETE` | `/v1/sessions/{id}` | `204`, or `404`. |
+| `GET` | `/v1/sessions/{id}/signaling` | WebSocket upgrade. |
+| `POST` | `/v1/sessions/{id}/connections` | Mint a grant. Body: any of `consumesMedia`, `producesMedia`, `producesInput` (booleans). `201 {signalingUrl, connectionCapabilities}`. `consumesInput` is reserved: `400`. |
+| `POST` | `/v1/sessions/{id}/input` | Server-side input: `{"type", "data"}` as in the DataChannel input table. `202`. |
+| `GET` | `/v1/sessions/{id}/downloads/{guid}` | A finished download (see `DownloadReady`). |
+| `POST` | `/v1/sessions/{id}/upload` | `multipart/form-data` answer to `FileChooserOpened`. |
+| `GET` | `/v1/sessions/{id}/stats/stream` | Server-Sent Events: frame, transport and resource statistics, for operators. |
 
-### Server → Client
+### Relay sessions
 
-| `type` | Fields | Purpose |
+| Method | Path | Response |
 |---|---|---|
-| `offer` | `sdp: string` | SDP offer, sent immediately after signaling connects. |
-| `answer` | `sdp: string` | Only used if the server ever originates an offer/answer itself (not currently exercised). |
-| `ice-candidate` | `candidate: RTCIceCandidateInit` | ICE candidate trickled from the server. |
-| `new_tab_request` | `url: string` | The page tried to open a popup/new tab; the client decides what to do with the URL. |
+| `POST` | `/v1/relay-sessions` | `201` with `{id, signalingUrl, produceUrl, videoCodec, protocolVersion, sourceType, capabilities}`, plus `slots` and `produceUrls` when the body declares `{"slots": [...]}`. |
+| `GET` | `/v1/relay-sessions/{id}` | As for browser sessions. |
+| `DELETE` | `/v1/relay-sessions/{id}` | As for browser sessions. |
+| `GET` | `/v1/relay-sessions/{id}/signaling` | Viewer WebSocket. |
+| `GET` | `/v1/relay-sessions/{id}/produce` | Producer WebSocket. `409` while the slot has another producer. |
+| `POST` | `/v1/relay-sessions/{id}/connections` | Mint a grant; the response has `produceUrl` only when `producesMedia` was requested. A non-empty `slots` field is reserved: `400`. |
+| `GET` | `/v1/relay-sessions/{id}/stats/stream` | Server-Sent Events. |
 
-There is currently no `error` message on the signaling channel — connection
-failures are only logged server-side and surface to the client as a closed
-WebSocket. A `session_created` / `session_closed` / explicit `error` message
-set is planned (see the evolution plan's Phase 3+), but not implemented yet.
+### Calls
 
-Reusing the `sdp` field to carry a plain URL for `navigate` is a wart, not a
-feature — kept as-is here because both sides already agree on it, but a
-`url` field would be cleaner if this message is revisited.
-
-## DataChannel input (client → server)
-
-Every input message is a JSON string with the shape:
-
-```json
-{ "type": "<action>", "data": { ... } }
-```
-
-| `type` | `data` fields | Notes |
+| Method | Path | Response |
 |---|---|---|
-| `mousemove` | `x, y: number`, `dragging: boolean` | Batched client-side at ~60fps; sent immediately while dragging. |
-| `mousedown` | `x, y: number` | |
-| `mouseup` | `x, y: number` | |
-| `scroll` | `deltaY: number` | |
-| `touchstart` / `touchmove` | `points: [{x, y, id: number}, ...]` | Dispatched via CDP's native touch input (`Input.dispatchTouchEvent`), not synthesized mouse events, so pages with touch-specific handling (`ontouchstart`, pointer-type checks) behave as they would on a real device. Capped server-side at 5 points. |
-| `touchend` / `touchcancel` | `points: [...]` (ignored) | Per CDP's own contract, `touchEnd`/`touchCancel` are dispatched with zero points regardless of what the client sends — only the *set* of lifted fingers matters, and CDP doesn't want them re-listed. |
-| `keydown` / `keyup` | `key, code: string`, `modifiers: number` | `modifiers` is a bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8. |
-| `navigate` | `url: string` | Equivalent to the signaling `navigate` message; either path works. |
-| `back` | *(none)* | |
-| `forward` | *(none)* | |
-| `refresh` | *(none)* | |
-| `set_viewport` | `width, height: number` | Equivalent to the signaling `initial_viewport` message; used for later resizes. |
-| `copy_text` | *(none)* | Reads the page's current text selection server-side. Response delivery back to the client is not implemented yet (see `handleInputEvent` in `webrtc_handler.go`). |
-| `paste_text` | `text: string` | |
+| `POST` | `/v1/calls` | `201 {id, peerAUrl, peerBUrl, videoCodec, protocolVersion, sourceType}`. |
+| `GET` | `/v1/calls/{id}` | As for browser sessions. |
+| `DELETE` | `/v1/calls/{id}` | As for browser sessions. |
+| `GET` | `/v1/calls/{id}/peers/{a\|b}/signaling` | Peer WebSocket. The token must belong to that peer (`403` otherwise). |
 
-Every numeric field above (mouse coordinates, scroll delta, viewport
-dimensions, touch points) is checked by `internal/security.InputValidator`
-before dispatch — range bounds, integer-ness for viewport dimensions, and
-NaN/Infinity rejection — via `BrowserManager.ValidateInput`/
-`ValidateKeyInput`. Touch points additionally go through
-`ValidateTouchInput`, which caps the point count at 5. Invalid
-input is still dropped silently today (logged server-side only). The
-`0xFF Error` type below is wired up, but only for one specific fatal
-condition (the H.264 encoder failing to start/restart) — routine per-message
-input validation failures don't use it yet. This also covers
-the signaling-layer `initial_viewport` message, which goes through the same
-`set_viewport` bounds check. `ValidateNavigationURL` (used by `Navigate`) also
-blocks link-local addresses (`169.254.0.0/16`, `fe80::/10`) in addition to
-localhost and RFC1918/ULA ranges, closing a cloud-metadata-endpoint SSRF gap.
+### Session-creation fields
 
-## DataChannel binary messages (server → client)
+- `capabilities`: what this session's source can do: `video`, `navigation`,
+  `viewport`, `clipboard`, `pauseResume`, `mobileEmulation`, and
+  `inputActions` (the exact input `type`s the source accepts). Unknown keys are
+  additions, not errors.
+- `sourceType`: `"browser"`, `"relay"` or `"call"`.
+- `videoCodec` (relay, call): `"h264"` or `"vp8"`. Producers and call peers
+  must send it.
 
-Every binary message starts with a one-byte message type, defined once in
-`backend/internal/protocol/protocol.go` (`MessageType`). The frontend's
-`MessageType` enum in `examples/viewer-preact/src/services/webrtc.ts` must
-mirror this exactly — there is no code generation tying them together, so a
-change to one must be reflected in the other by hand until that's automated.
+### WebSocket close codes
 
-Ranges:
+| Code | Sent by | Meaning |
+|---|---|---|
+| `1000` | Client | Deliberate leave. The connection ends; no reconnect grace. |
+| `4001` | Glass | Relay producer sent no media. Held for grace; resume. |
+| `4404` | Glass | The session doesn't exist (never created, closed or expired). Don't retry. |
+| anything else | either | Treated as a lost connection: held for the reconnect grace. |
 
-```
-0x01-0x0F  Control/state messages (JSON)
-0xF0-0xFF  Error/reserved
-```
+Glass also sends WebSocket pings; a client that doesn't answer within 30 s is
+treated as disconnected. Browsers answer automatically.
 
-The `0x10-0x1F` frame-message range (`IFrame`/`PFrame`/`ChunkedFrame`/
-`RawTexture`/`H264Frame`) and `0x20-0x2F` (reserved for chunking) are
-retired — video used to travel over the DataChannel as chunked JPEG/H.264
-messages, encoded/decoded/reassembled by hand on both ends. The RTP video
-migration replaced all of that with a real WebRTC media track (see the
-DataChannel section above), so as of that migration the backend never emits
-any byte in `0x10-0x2F` and the frontend has no decoder for them. Removed
-from both `protocol.go` and `webrtc.ts` rather than kept as dead reserved
-values.
+## Signaling: viewers
 
-| Byte | Name | Layout | Status |
+This applies to browser-session and relay-session viewers
+(`…/signaling`). Producers and call peers use the shorter exchange in
+[sources/producers.md](sources/producers.md#connecting) and
+[sources/calls.md](sources/calls.md#joining).
+
+Every message is JSON with a `type`. On connect, **Glass sends the offer**;
+the client answers.
+
+### Glass → client
+
+| `type` | Fields | Meaning |
+|---|---|---|
+| `offer` | `sdp`, `connectionId`, `producesInput`, `isOwner` | First message. Identifies this connection and its starting rights. The booleans are always present. |
+| `ice-candidate` | `candidate` | Trickled ICE. Never sent before `offer`. |
+| `capabilities_changed` | `connectionId`, `producesInput` | Someone's control changed. Sent to every connection, including the one it concerns. |
+| `input_requested` | `connectionId` | Sent to the control holder when a request can't be granted outright. |
+| `roster` | `connections: [{connectionId, producesInput, isOwner}]` | Owner only, once after `offer`: everyone else already connected. |
+| `connection_joined` | `connectionId`, `producesInput`, `isOwner` | Owner only. Not sent when a connection resumes. |
+| `connection_left` | `connectionId` | Owner only. |
+| `slot_state` | `slots: {name: "empty"\|"live"\|"stalled"}` | Relay only. Once after `offer`, then on every change. |
+| `new_tab_request` | `url` | Browser only: the page tried to open a popup or tab. |
+| `clock_probe` | `id` | Clock calibration before the DataChannel opens. Reply `clock_probe_reply`. |
+| `error` | `error` | The source failed for good. Glass closes the socket next; don't reconnect. |
+
+### Client → Glass
+
+| `type` | Fields | Meaning |
+|---|---|---|
+| `answer` | `sdp` | Answer to the offer. |
+| `ice-candidate` | `candidate` | Trickled ICE. |
+| `initial_viewport` | `width`, `height`, `isMobile?`, `userAgent?` | Browser only, right after connect. `isMobile: true` turns on mobile emulation with the given user agent. |
+| `navigate` | `sdp` (holds the URL) | Browser only, owner only. Same as the DataChannel `navigate`; the field name is historical. |
+| `request_input`, `release_input` | none | Ask for or give up control. |
+| `grant_input`, `revoke_input` | `connectionId` | Owner only. |
+| `mic_granted`, `mic_denied` | none | Answer to `MicAccessRequested`. |
+| `clock_probe_reply` | `id`, `clientT` (epoch ms) | Answer to `clock_probe`. |
+
+### Microphone negotiation
+
+A browser-session client must add a silent placeholder audio track to its
+peer connection **before creating its answer**, on every connection. Without
+it the answer negotiates receive-only audio, and a microphone can't be added
+later without renegotiation, which Glass doesn't do. After sending
+`mic_granted`, the client swaps the real microphone into that track with
+`replaceTrack`. `@glass/client` does both.
+
+## DataChannel input (client → Glass)
+
+Each message is a JSON string: `{"type": "<action>", "data": {…}}`. Input from a
+connection without `producesInput` is dropped. Coordinates are in the remote
+page's CSS pixels.
+
+| `type` | `data` | Notes |
+|---|---|---|
+| `mousemove` | `x`, `y`, `dragging` | |
+| `mousedown`, `mouseup` | `x`, `y`, `button?` (`left`\|`right`\|`middle`), `modifiers?`, `clickCount?` | `clickCount` is the browser's own `MouseEvent.detail`. |
+| `scroll` | `deltaY`, `deltaX?`, `modifiers?` | Dispatched as a real wheel event. |
+| `keydown`, `keyup` | `key`, `code`, `modifiers` | |
+| `touchstart`, `touchmove` | `points: [{x, y, id}]` | At most 5 points. |
+| `touchend`, `touchcancel` | `points` | Points are ignored. |
+| `navigate` | `url` | Owner only. |
+| `back`, `forward`, `refresh` | none | Owner only. |
+| `set_viewport` | `width`, `height` | |
+| `copy_text` | none | Answered with `ClipboardText`. |
+| `paste_text` | `text` | |
+
+`modifiers` is a bitmask: Alt = 1, Ctrl = 2, Meta = 4, Shift = 8. Interaction
+messages may carry `s`, a per-connection sequence number used for latency
+measurement.
+
+Two diagnostic messages are accepted from every connection, watch-only
+included: `input_latency_report` (the client's measured input-to-display
+latency and receiver statistics, every 5 s) and `clock_probe_reply`. Both are
+optional.
+
+## DataChannel messages (Glass → client)
+
+Binary. The first byte is the message type; most carry JSON after it.
+
+| Byte | Name | Payload | Meaning |
 |---|---|---|---|
-| `0x05` | `ElementStateUpdate` | `[type][JSON: {cursor}]` | Live |
-| `0x06` | `NavigationState` | `[type][JSON: {url, loading, canGoBack, canGoForward}]` | Live |
-| `0x07` | `ViewportSize` | `[type][int32 LE width][int32 LE height]` | Live |
-| `0x08` | `PerformanceStats` | `[type][JSON: {memAllocMB, totalBytesSentMB, framesSent, framesSkipped, largeChangePercent}]` | Defined, not yet emitted. The frontend `BrowserHeader` stats menu already has a UI slot waiting for this. |
-| `0xFF` | `Error` | `[type][JSON: {error}]` | Live, but narrow: the only producer today is the H.264 encoder failing to (re)start (`screencast_webrtc.go`'s `Start()`/`reestablishScreencastLocked()`) — there is no fallback video renderer anymore, so this is how the backend tells the client "video is dead" instead of it just silently freezing. Not yet used for routine input-validation failures (see above). |
+| `0x04` | `InputFrame` | `{f, i: [{s, c?}]}` | The frame (RTP timestamp `f`) that followed the listed inputs. Latency measurement. |
+| `0x05` | `ElementStateUpdate` | `{cursor, editableFocused}` | Cursor shape; whether a text field has focus. |
+| `0x06` | `NavigationState` | `{url, loading, canGoBack, canGoForward}` | |
+| `0x07` | `ViewportSize` | int32 LE width, int32 LE height | The browser's actual size. |
+| `0x08` | `ClockProbe` | `{id}` | Reply at once with `clock_probe_reply`. |
+| `0x09` | `ClipboardText` | `{text}` | Answer to `copy_text`. |
+| `0x0A` | `InteractiveElements` | `{elements: [{x, y, width, height}]}` | Phones only: text-field positions. Replaces the previous list. |
+| `0x0B` | `ConsoleMessage` | `{level, text}` | The page's console output. |
+| `0x0C` | `DownloadReady` | `{filename, guid}` | Fetch `GET …/downloads/{guid}` when the user chooses to. |
+| `0x0D` | `FileChooserOpened` | `{multiple}` | Answer with `POST …/upload` within 60 s. |
+| `0x0E` | `FileChooserClosed` | `{}` | The file picker expired or was replaced. |
+| `0x0F` | `MicAccessRequested` | `{origin}` | Answer with `mic_granted` or `mic_denied` within 60 s; silence denies. |
+| `0xFF` | `Error` | `{error}` | The video encoder failed. |
 
-## Testing
-
-`backend/internal/protocol/protocol_test.go` covers:
-
-- Every `MessageType` constant is unique (fails loudly if a future change
-  reintroduces a collision).
-- Round-trip encode → decode for every JSON-carrying message type.
-- Byte-exact layout for `ViewportSize` (the one fixed-binary, non-JSON
-  control message).
-
-The frame-chunking and H.264/JPEG framing logic in
-`internal/browser/screencast_webrtc.go` is not covered by automated tests —
-it's exercised through `ScreencastEngineWebRTC`, which owns a live WebRTC
-DataChannel and isn't currently mockable without a larger refactor. It's
-verified manually today (see the evolution plan's smoke-test checklist).
-
-`backend/internal/sessions/manager_test.go` covers the session lifecycle
-against a fake, channel-backed browser pool (`BrowserSource` interface, so
-tests don't need to launch real Chrome): capacity enforcement and predictable
-rejection once full, close freeing capacity back up, idempotent close, the
-pending-session idle sweep (and that an active session survives it),
-`MarkConnecting` being exclusive (one signaling connection per session), and
-`Shutdown` closing every session and releasing their browsers.
+Types `0x01`–`0x0F` are control and state; `0xF0`–`0xFF` are errors and
+reserved.

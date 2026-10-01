@@ -3,7 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- maximum-scale=1, user-scalable=no: without this, a stray double-tap
+         or an off-target pinch (one finger landing just outside the video's
+         own touch-handled area) triggers the mobile browser's OWN native
+         zoom instead of being forwarded as input - found live 2026-09-13,
+         confirmed via server logs to also corrupt the reported viewport
+         size (visualViewport shrinks under native zoom), which in turn
+         triggered real, repeated screencast/encoder restarts server-side -
+         not just a cosmetic zoom, a real streaming-pipeline disruption. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Glass Viewer Example</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

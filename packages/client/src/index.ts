@@ -2,46 +2,80 @@
 //
 // createGlassClient() owns the entire client-side transport loop against a
 // Glass session: the signaling WebSocket handshake, the RTCPeerConnection and
-// input DataChannel, low-latency receiver tuning, ICE restart, and - unlike the
-// old example, where this lived in app.tsx - built-in reconnection with backoff
-// to the SAME session. Subscribe with client.on(event, cb); send input with the
-// typed methods. This module never touches the DOM (no document); the optional
+// input DataChannel, low-latency receiver tuning, and - unlike the old example,
+// where this lived in app.tsx - built-in reconnection with backoff to the SAME
+// session. Subscribe with client.on(event, cb); send input with the typed
+// methods. This module never touches the DOM (no document); the optional
 // "@glass/client/viewer" entry provides the rendering + input-capture layer.
+//
+// Recovery is deliberately full-reconnect only, with no client-side ICE
+// restart: the backend's signaling loop has no "offer" handler, so a
+// renegotiation offer went unanswered and left the peer connection wedged in
+// have-local-offer forever. See scheduleDisconnectedGrace.
 
 import { Emitter } from "./emitter.js";
+import { ClientCore, type Emit } from "./core";
+import { authHeaders } from "./internal";
+import * as lifecycle from "./lifecycle";
+import * as transport from "./transport";
+import * as inputs from "./input";
+import * as handoff from "./handoff";
+import * as mic from "./mic";
+import * as navigation from "./navigation";
+import * as fileTransfer from "./files";
+import * as statsTrace from "./stats_trace";
 import type {
   ElementState,
+  GlassCapabilities,
+  GlassConnectionCapabilities,
+  GlassConnectionGrant,
+  GlassRosterEntry,
+  GlassSlotState,
   GlassSession,
   GlassStats,
+  InteractiveElement,
   KeyEvent,
+  MouseButton,
   NavigationState,
   TouchDispatchType,
   TouchPoint,
+  UserAgentClientHints,
 } from "./types.js";
+
+export { GlassProducer } from "./producer";
+import type { InputLatencySample, InputLatencyStats } from "./input_latency";
+export type { InputLatencySample, InputLatencyStats, InputLatencySummary } from "./input_latency";
+export type {
+  GlassProducerEvents,
+  GlassProducerOptions,
+  ProducerSession,
+  ProducerState,
+  ProducerStats,
+} from "./producer";
 
 export type {
   ElementState,
+  GlassCapabilities,
+  GlassConnectionCapabilities,
+  GlassConnectionGrant,
+  GlassRosterEntry,
+  GlassSlotState,
   GlassSession,
   GlassStats,
+  InteractiveElement,
   KeyEvent,
   NavigationState,
   TouchDispatchType,
   TouchPoint,
+  UserAgentClientHints,
 };
 
-// Binary DataChannel message types pushed from the backend. Must match
-// backend/internal/protocol/protocol.go. See docs/protocol.md.
-const enum MessageType {
-  ElementStateUpdate = 0x05,
-  NavigationState = 0x06,
-  ViewportSize = 0x07,
-  Error = 0xff,
-}
 
 export interface GlassReconnectOptions {
   // Max full-reconnect attempts before giving up (emitting "closed").
   maxAttempts?: number;
-  // Backoff schedule; the last value repeats for attempts beyond its length.
+  // Backoff schedule: the wait after each failed attempt (a first retry
+  // after a drop is immediate); the last value repeats beyond its length.
   delaysMs?: number[];
 }
 
@@ -84,6 +118,7 @@ export interface GlassClientOptions {
   apiToken?: string;
 }
 
+
 // A `type` (not `interface`) so it satisfies the Emitter's
 // Record<string, unknown[]> constraint - interfaces don't get an implicit
 // index signature.
@@ -94,6 +129,47 @@ export type GlassClientEventMap = {
   state: [state: ElementState];
   // URL-bar / navigation state from the remote page.
   navigation: [nav: NavigationState];
+  // Text-editable candidate bounding boxes on the remote page, mobile-only,
+  // full-snapshot-replace (see mobileKeyboard.ts's three-case handleTap).
+  interactiveElements: [elements: InteractiveElement[]];
+  // The remote page's selected text, in response to copyText(). May be an
+  // empty string if nothing was selected - callers should check before
+  // writing to the OS clipboard.
+  clipboardText: [text: string];
+  // One real console.*() call (or uncaught exception, level "error") from
+  // the remote page's own JS - the "dev console" feature. level is Chrome's
+  // own console-method vocabulary verbatim ("log"/"warning"/"error"/
+  // "info"/"debug"/...), not remapped. text is a shallow, best-effort
+  // flattening of the call's arguments - see docs/protocol.md's
+  // ConsoleMessage row for why deep object inspection isn't attempted.
+  consoleMessage: [level: string, text: string];
+  // A remote-page-triggered download finished server-side and is ready to
+  // be pulled down. This is
+  // the prompt signal, not the file (prompt-then-save, not auto-save): GlassClient never fetches it on its own. The
+  // app is expected to surface filename to the operator and, only on their
+  // explicit click, use downloadUrl(guid) to trigger a real browser save
+  // (e.g. as an <a href> or window.open target).
+  downloadReady: [filename: string, guid: string];
+  // The remote page just opened a file input. The app is expected to raise
+  // the *operator's own* local file picker (a real <input type="file">,
+  // with its `multiple` attribute matching this event's argument) and,
+  // once they've picked something, call uploadFiles() with the result.
+  // Glass never opens anything server-side.
+  fileChooserOpened: [multiple: boolean];
+  // A previously-announced fileChooserOpened prompt is no longer valid -
+  // the operator's 60s window to respond elapsed, or a second file
+  // chooser opened before the first was answered. The app should dismiss
+  // whatever prompt UI it raised for fileChooserOpened. Not fired for the
+  // ordinary success path (a completed uploadFiles() call) - the app
+  // already knows that outcome from the promise it awaited.
+  fileChooserClosed: [];
+  // The remote page just called getUserMedia({audio:true}). Unlike every other event
+  // here, the remote page's own JS is genuinely blocked waiting for an
+  // answer: the app must call grantMicAccess() or denyMicAccess() within
+  // 60s, or the request is denied automatically (silence never grants -
+  // a live mic feed is privacy-sensitive). origin is the requesting
+  // page's own origin, for the app's own prompt UI only.
+  micAccessRequested: [origin: string];
   // A fatal, session-level backend error (e.g. the encoder died). Distinct
   // from a transport drop - there is no recovery, video is gone.
   error: [message: string];
@@ -106,50 +182,96 @@ export type GlassClientEventMap = {
   reconnecting: [attempt: number, maxAttempts: number];
   // Optional periodic transport/quality snapshot (see statsIntervalMs).
   stats: [stats: GlassStats];
+  // A connection's live producesInput actually changed (docs/protocol.md's
+  // "Control handoff" section) - broadcast to every connection on the
+  // session, including this one. isSelf is true when connectionId matches
+  // this client's own (see the connectionId() getter); producesInput()
+  // already reflects the new value by the time this fires.
+  capabilitiesChanged: [
+    connectionId: string,
+    producesInput: boolean,
+    isSelf: boolean
+  ];
+  // Someone without producesInput called requestInput() while this client
+  // already held it, and there was no fresh capacity to grant them one
+  // immediately - Glass relayed the ask here instead of deciding anything.
+  // Nothing changed server-side; it's entirely up to this app whether to
+  // prompt a human, auto-decline, or ignore it (see requestInput's own doc
+  // comment - Glass never queues, prompts, or auto-preempts on its own).
+  // Only ever fires for a connection that currently produces input.
+  inputRequested: [connectionId: string];
+  // Owner-only roster (docs/protocol.md's Control handoff section) - fires
+  // whenever the known set of other connections changes: someone joined,
+  // left, or had their producesInput granted/revoked. Never fires for a
+  // non-owner connection (see isOwner()) - it has no grantInput()/
+  // revokeInput() authority to act on this anyway. connections() already
+  // reflects the new state by the time this fires; the event exists so the
+  // app doesn't have to poll.
+  rosterChanged: [connections: GlassRosterEntry[]];
+  // Relay sessions only: every slot's state (docs/protocol.md, slot_state),
+  // once on connect and again whenever one changes. Use it to show "source
+  // paused" over a frozen frame while a producer is stalled. slotStates()
+  // already reflects it.
+  slotStateChanged: [slots: Record<string, GlassSlotState>];
+  // One input-latency sample, measured on this client's monotonic clock
+  // (see input_latency.ts): from sending a click/key/tap to displaying the
+  // first eligible frame after it, or, for drags and scrolls
+  // (continuous: true), how old the input behind the displayed frame was.
+  // Needs a mounted viewer or calls to notePresentedFrame().
+  inputLatency: [sample: InputLatencySample];
   // Terminal: reconnection was exhausted/disabled, or disconnect() was called.
   // No further events will fire.
   closed: [reason: string];
+  // The remote page tried to open a popup/new tab (window.open(),
+  // target="_blank", etc.) - the browser popup was blocked server-side
+  // and the URL it would have opened is handed to the app instead
+  // (docs/protocol.md's new_tab_request). Glass never opens it on its
+  // own; it's entirely up to the app whether to surface it, navigate the
+  // remote page there itself, or open it locally for the operator.
+  newTabRequested: [url: string];
 };
 
-const DEFAULT_RECONNECT_DELAYS_MS = [1000, 2000, 4000, 8000, 16000];
-const DEFAULT_MAX_RECONNECT_ATTEMPTS = 8;
-const MOUSE_BATCH_INTERVAL_MS = 16; // ~60fps
-const SIGNALING_TIMEOUT_MS = 10000;
-const PEER_TIMEOUT_MS = 15000;
 
-// authHeaders builds the Authorization header for a REST call, shared by
-// every call site that needs one (createGlassSession, deleteGlassSession,
-// GlassClient's page-unload beacon) - found by code review (reuse angle):
-// the same `if (apiToken) headers["Authorization"] = \`Bearer ${apiToken}\`;`
-// line was previously repeated verbatim at all three, which meant a future
-// change to the auth scheme (a different header name, an extra required
-// header) could easily be applied to two of the three and silently miss
-// the third - most plausibly the page-unload beacon, the least likely path
-// to be exercised during manual testing.
-function authHeaders(apiToken?: string): HeadersInit {
-  return apiToken ? { Authorization: `Bearer ${apiToken}` } : {};
-}
+/**
+ * WebSocket close code Glass sends for a session that doesn't exist: never created, closed, or swept
+ * before anyone connected. Retrying can't help.
+ */
+export const CLOSE_SESSION_NOT_FOUND = 4404;
+// Highest wire-contract major this client understands. Must track the
+// engine's protocol version (docs/protocol.md, "Versioning"); see
+// createGlassSession for the fail-closed check and why absent means 1.
+export const SUPPORTED_PROTOCOL_VERSION = 1;
+
 
 // Creates a session via the runtime's REST API (POST {baseUrl}/v1/sessions)
 // and returns its id + signaling URL. A dev-convenience helper - in a real
 // app your own backend creates the session so auth/quota stay server-side, and
 // hands the client only the signalingUrl. baseUrl defaults to same-origin.
 //
-// apiToken is only relevant if the runtime has GLASS_API_TOKEN set (see
-// runtime.Config.APIToken) - passed here purely for local testing symmetry;
+// apiToken is only relevant if the runtime has GLASS_API_TOKEN set - passed here purely for local testing symmetry;
 // a real deployment's actual token belongs in your own backend, never
 // shipped to a browser bundle. When a session is created with a token, the
 // returned signalingUrl already has it embedded as a query param (the
 // runtime does this server-side), so GlassClient needs no separate token
 // handling to open the signaling WebSocket - only this helper's own
 // follow-up REST calls (deleteGlassSession) need it passed again.
+// audioInput requests the mic-capable browser pool - false by default,
+// since it costs real, measured extra CPU/memory
+// and most sessions don't need it. Only takes effect if the runtime was
+// actually started with GLASS_MIC_POOL_CHROME_BIN configured - otherwise
+// the flag is accepted and the session uses the default pool, not an
+// error.
 export async function createGlassSession(
   baseUrl = "",
-  apiToken?: string
+  apiToken?: string,
+  audioInput = false
 ): Promise<GlassSession> {
   const res = await fetch(`${baseUrl}/v1/sessions`, {
     method: "POST",
-    headers: authHeaders(apiToken),
+    headers: audioInput
+      ? { ...authHeaders(apiToken), "Content-Type": "application/json" }
+      : authHeaders(apiToken),
+    body: audioInput ? JSON.stringify({ audioInput: true }) : undefined,
   });
   if (!res.ok) {
     let detail = "";
@@ -162,7 +284,22 @@ export async function createGlassSession(
       `Failed to create session (${res.status}): ${detail || res.statusText}`
     );
   }
-  return res.json();
+  const session: GlassSession = await res.json();
+
+  // Fail closed on a wire contract we don't understand. A runtime that predates
+  // the handshake sends no protocolVersion at all, so an absent value means
+  // "1", not "unsupported" - that keeps this client working against an older
+  // backend. A HIGHER major means the runtime has made a breaking change to
+  // the signaling shape or DataChannel messages, and proceeding would produce a
+  // black screen or silently-dropped input with nothing pointing at the cause.
+  // Better to say so here, at the one call every client makes first.
+  const version = session.protocolVersion ?? 1;
+  if (version > SUPPORTED_PROTOCOL_VERSION) {
+    throw new Error(
+      `Glass runtime speaks protocol v${version}, but this client only supports v${SUPPORTED_PROTOCOL_VERSION}. Upgrade @glass/client.`
+    );
+  }
+  return session;
 }
 
 // Best-effort session close via DELETE {baseUrl}/v1/sessions/{id}. The backend
@@ -181,113 +318,55 @@ export function deleteGlassSession(
   });
 }
 
+// Mints a fresh, capability-scoped connection to an already-created session
+// (POST {baseUrl}/v1/sessions/{id}/connections) - see docs/protocol.md's
+// "Connection capabilities" section. The returned signalingUrl connects
+// with exactly `capabilities`, nothing more, structurally: e.g.
+// `{ consumesMedia: true }` for a watch-only viewer that can never gain
+// input control no matter what it does, unless it later calls
+// requestInput() and the resolved license tier admits it (see
+// docs/protocol.md's "Control handoff" section) - minting a grant and
+// requesting input at runtime are two independent mechanisms.
+//
+// Same dev-convenience/trust-model caveat as createGlassSession: a real app
+// mints grants from its own backend (which already holds whatever auth this
+// call needs), not from a browser bundle carrying apiToken.
+export async function mintConnectionGrant(
+  sessionId: string,
+  capabilities: Partial<GlassConnectionCapabilities>,
+  baseUrl = "",
+  apiToken?: string
+): Promise<GlassConnectionGrant> {
+  const res = await fetch(`${baseUrl}/v1/sessions/${sessionId}/connections`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(apiToken),
+    },
+    body: JSON.stringify(capabilities),
+  });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      detail = (await res.json()).error;
+    } catch {
+      // ignore parse failure, fall back to status text
+    }
+    throw new Error(
+      `Failed to mint connection grant (${res.status}): ${detail || res.statusText}`
+    );
+  }
+  return res.json();
+}
+
 export class GlassClient extends Emitter<GlassClientEventMap> {
-  private pc: RTCPeerConnection | null = null;
-  private ws: WebSocket | null = null;
-  private dataChannel: RTCDataChannel | null = null;
-  private iceCandidateQueue: RTCIceCandidateInit[] = [];
-  // The latest received video stream, retained so a viewer that subscribes
-  // AFTER the track already arrived (very common: the app connects up front and
-  // mounts the viewer only on first navigation, long after ontrack fired) can
-  // still bind it via getVideoStream(). Without this, the "videoTrack" event is
-  // fire-and-forget and a late subscriber renders black.
-  private currentStream: MediaStream | null = null;
-  private unloadHandler: ((event: PageTransitionEvent) => void) | null = null;
-
-  private readonly signalingUrl: string;
-  private readonly sessionId?: string;
-  private readonly iceServers: RTCIceServer[];
-  private readonly iceTransportPolicy?: RTCIceTransportPolicy;
-  private readonly reconnectEnabled: boolean;
-  private readonly maxAttempts: number;
-  private readonly delaysMs: number[];
-  private readonly statsIntervalMs: number;
-  private readonly deleteOnClose: boolean;
-  private readonly sessionBaseUrl: string;
-  private readonly apiToken?: string;
-
-  // Lifecycle state.
-  private userClosed = false;
-  private peerConnected = false;
-  private signalingConnected = false;
-  private reconnectAttempt = 0;
-  private supervising = false; // a background reconnect loop is running
-
-  // Per-attempt settle guard (so a late ws/pc event can't resolve/reject an
-  // already-settled establish() attempt).
-  private attemptSettled = true;
-
-  // Timers we must clear on close (backoff waits, batch timer, stats timer).
-  private pendingTimeouts = new Set<ReturnType<typeof setTimeout>>();
-  private mouseBatchTimer: ReturnType<typeof setInterval> | null = null;
-  private statsTimer: ReturnType<typeof setInterval> | null = null;
-
-  // Mouse-move batching.
-  private mouseEventQueue: Array<{ x: number; y: number; dragging: boolean }> =
-    [];
-  private lastMouseSendTime = 0;
-
-  // Stats sampling state.
-  private lastStatsSample: { time: number; bytesReceived: number } | null =
-    null;
-  private lastJitterSample: { delaySec: number; emittedCount: number } | null =
-    null;
+  private readonly core: ClientCore;
 
   constructor(options: GlassClientOptions) {
     super();
-    this.signalingUrl = options.signalingUrl;
-    this.sessionId = options.sessionId;
-    this.iceServers = options.iceServers ?? [
-      { urls: "stun:stun.l.google.com:19302" },
-    ];
-    this.iceTransportPolicy = options.iceTransportPolicy;
-    const rc = options.reconnect ?? true;
-    this.reconnectEnabled = rc !== false;
-    const rcOpts = typeof rc === "object" ? rc : {};
-    this.maxAttempts = rcOpts.maxAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
-    this.delaysMs = rcOpts.delaysMs ?? DEFAULT_RECONNECT_DELAYS_MS;
-    this.statsIntervalMs = options.statsIntervalMs ?? 0;
-    this.deleteOnClose = options.deleteSessionOnClose ?? !!options.sessionId;
-    this.sessionBaseUrl = options.sessionBaseUrl ?? originOf(options.signalingUrl);
-    this.apiToken = options.apiToken;
-    this.installUnloadHandler();
-  }
-
-  // A deliberate page unload (reload, tab close, navigate away) closes the
-  // signaling socket, which the backend can't tell apart from a network drop -
-  // so it holds the session open for the whole reconnect grace before freeing
-  // its pool slot. That's correct for a real drop, but wasteful for a reload:
-  // the slot is blocked (and at small pool sizes, new sessions get 503) for up
-  // to a minute. So on a real page discard we proactively DELETE the session.
-  //
-  // Guarded so it never fires on a backgrounding that the reconnect machinery
-  // SHOULD handle: `event.persisted` means the page is going into the bfcache
-  // (e.g. a mobile app-switch / screen lock - exactly the reconnect case), so
-  // we skip the delete there and let the grace period do its job.
-  private installUnloadHandler(): void {
-    if (typeof window === "undefined") return;
-    if (!this.sessionId || !this.deleteOnClose) return;
-    this.unloadHandler = (event: PageTransitionEvent) => {
-      if (event.persisted) return;
-      this.sendDeleteBeacon();
-    };
-    window.addEventListener("pagehide", this.unloadHandler);
-  }
-
-  private sendDeleteBeacon(): void {
-    if (!this.sessionId) return;
-    try {
-      // keepalive lets this request outlive the unloading page. DELETE (rather
-      // than navigator.sendBeacon, which is POST-only) matches the runtime's
-      // session API.
-      void fetch(`${this.sessionBaseUrl}/v1/sessions/${this.sessionId}`, {
-        method: "DELETE",
-        keepalive: true,
-        headers: authHeaders(this.apiToken),
-      });
-    } catch {
-      // best-effort; the reconnect grace is the fallback
-    }
+    this.core = new ClientCore(options, ((event: keyof GlassClientEventMap, ...args: unknown[]) =>
+      (this.emit as (e: keyof GlassClientEventMap, ...a: unknown[]) => void)(event, ...args)) as Emit);
+    lifecycle.installUnloadHandler(this.core);
   }
 
   // Connect to the session. Resolves once the peer connection is established
@@ -295,682 +374,314 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
   // enabled); rejects only if it can't connect and retries are exhausted or
   // disabled. Subsequent mid-session drops are recovered in the background.
   async connect(): Promise<void> {
-    this.userClosed = false;
-    this.reconnectAttempt = 0;
-    for (;;) {
-      try {
-        await this.establish();
-        return;
-      } catch (err) {
-        if (
-          this.userClosed ||
-          !this.reconnectEnabled ||
-          this.reconnectAttempt >= this.maxAttempts
-        ) {
-          if (!this.userClosed) this.emit("closed", `failed to connect: ${err}`);
-          throw err;
-        }
-        this.reconnectAttempt++;
-        this.emit("reconnecting", this.reconnectAttempt, this.maxAttempts);
-        await this.wait(this.nextDelayMs());
-        if (this.userClosed) throw new Error("connect aborted");
-      }
-    }
-  }
-
-  private nextDelayMs(): number {
-    const i = Math.min(this.reconnectAttempt, this.delaysMs.length - 1);
-    return this.delaysMs[i] ?? DEFAULT_RECONNECT_DELAYS_MS[0]!;
-  }
-
-  private wait(ms: number): Promise<void> {
-    return new Promise((resolve) => {
-      const t = setTimeout(() => {
-        this.pendingTimeouts.delete(t);
-        resolve();
-      }, ms);
-      this.pendingTimeouts.add(t);
-    });
-  }
-
-  // One full connection attempt: signaling WS -> offer/answer -> PC/DC. Resolves
-  // when the PC reaches "connected"; rejects on any failure/timeout during the
-  // handshake. Once resolved, a later drop is handled by the state-change
-  // handlers (ICE restart for a transient PC drop, background full reconnect
-  // for a lost signaling socket), NOT by rejecting this settled promise.
-  private establish(): Promise<void> {
-    this.teardownInternals();
-    this.signalingConnected = false;
-    this.peerConnected = false;
-    this.iceCandidateQueue = [];
-    this.attemptSettled = false;
-
-    return new Promise<void>((resolve, reject) => {
-      const settle = (fn: () => void) => {
-        if (this.attemptSettled) return;
-        this.attemptSettled = true;
-        fn();
-      };
-
-      let ws: WebSocket;
-      try {
-        ws = new WebSocket(this.signalingUrl);
-      } catch (err) {
-        settle(() => reject(err));
-        return;
-      }
-      this.ws = ws;
-
-      const signalingTimeout = this.timeout(() => {
-        if (!this.signalingConnected) {
-          settle(() => reject(new Error("signaling connection timed out")));
-          this.teardownInternals();
-        }
-      }, SIGNALING_TIMEOUT_MS);
-
-      const peerTimeout = this.timeout(() => {
-        if (!this.peerConnected) {
-          settle(() => reject(new Error("peer connection timed out")));
-          this.teardownInternals();
-        }
-      }, PEER_TIMEOUT_MS);
-
-      ws.onopen = () => {
-        this.signalingConnected = true;
-        this.clearTimeoutTracked(signalingTimeout);
-      };
-
-      ws.onmessage = async (event) => {
-        try {
-          const signal = JSON.parse(event.data);
-          if (!this.pc && signal.type === "offer") {
-            this.initPeerConnection(() => {
-              // onConnected for this attempt
-              this.clearTimeoutTracked(peerTimeout);
-              settle(() => resolve());
-            });
-          }
-          if (this.pc) {
-            await this.handleSignal(signal);
-          }
-        } catch (err) {
-          settle(() => reject(err as Error));
-        }
-      };
-
-      ws.onerror = () => {
-        if (this.peerConnected) {
-          this.onTerminalDrop();
-        } else {
-          settle(() => reject(new Error("signaling socket error")));
-        }
-      };
-
-      ws.onclose = () => {
-        this.signalingConnected = false;
-        if (this.peerConnected) {
-          this.onTerminalDrop();
-        } else {
-          settle(() => reject(new Error("signaling socket closed")));
-        }
-      };
-    });
-  }
-
-  private initPeerConnection(onConnectedThisAttempt: () => void): void {
-    if (this.pc) return;
-    const pc = new RTCPeerConnection({
-      iceServers: this.iceServers,
-      ...(this.iceTransportPolicy
-        ? { iceTransportPolicy: this.iceTransportPolicy }
-        : {}),
-    });
-    this.pc = pc;
-
-    pc.ontrack = (event) => {
-      // Chromium buffers a few frames by default even in low-latency mode;
-      // these non-standard receiver hints ask for near-zero playout delay,
-      // appropriate for a genuinely real-time (not prerecorded) track.
-      const receiver = event.receiver as RTCRtpReceiver & {
-        playoutDelayHint?: number;
-        jitterBufferTarget?: number;
-      };
-      if (receiver) {
-        try {
-          receiver.playoutDelayHint = 0;
-          receiver.jitterBufferTarget = 0;
-        } catch {
-          // non-Chromium browser - ignore
-        }
-      }
-      if (event.streams && event.streams[0]) {
-        this.currentStream = event.streams[0];
-        this.emit("videoTrack", event.streams[0]);
-      }
-    };
-
-    pc.ondatachannel = (event) => {
-      this.dataChannel = event.channel;
-      this.setupDataChannel();
-    };
-
-    pc.onicecandidate = (event) => {
-      if (event.candidate && this.ws && this.signalingConnected) {
-        this.ws.send(
-          JSON.stringify({
-            type: "ice-candidate",
-            candidate: event.candidate.toJSON(),
-          })
-        );
-      }
-    };
-
-    pc.onconnectionstatechange = () => {
-      const state = this.pc?.connectionState;
-      if (state === "connected") {
-        if (!this.peerConnected) {
-          this.peerConnected = true;
-          this.reconnectAttempt = 0;
-          this.emit("connected");
-          onConnectedThisAttempt();
-          this.startStatsPollingIfEnabled();
-        }
-      } else if (state === "failed") {
-        if (this.peerConnected) {
-          this.triggerIceRestart();
-        }
-      } else if (state === "disconnected") {
-        if (this.peerConnected) {
-          this.triggerIceRestart();
-        }
-      } else if (state === "closed") {
-        if (this.peerConnected) {
-          this.onTerminalDrop();
-        }
-      }
-    };
-  }
-
-  private setupDataChannel(): void {
-    const dc = this.dataChannel;
-    if (!dc) return;
-    dc.binaryType = "arraybuffer";
-    dc.onmessage = (event) => {
-      if (event.data instanceof ArrayBuffer) {
-        this.handleBinaryMessage(event.data);
-      }
-    };
-  }
-
-  private handleBinaryMessage(data: ArrayBuffer): void {
-    if (data.byteLength < 1) return;
-    const view = new DataView(data);
-    const messageType = view.getUint8(0);
-    const offset = 1;
-    const decoder = new TextDecoder();
-    try {
-      switch (messageType) {
-        case MessageType.NavigationState:
-          if (data.byteLength > offset) {
-            const nav: NavigationState = JSON.parse(
-              decoder.decode(new Uint8Array(view.buffer, offset))
-            );
-            this.emit("navigation", nav);
-          }
-          break;
-        case MessageType.ElementStateUpdate:
-          if (data.byteLength > offset) {
-            const state: ElementState = JSON.parse(
-              decoder.decode(new Uint8Array(view.buffer, offset))
-            );
-            this.emit("state", state);
-          }
-          break;
-        case MessageType.ViewportSize:
-          // Backend echo of the applied viewport; not surfaced today.
-          break;
-        case MessageType.Error:
-          if (data.byteLength > offset) {
-            const parsed: { error?: string } = JSON.parse(
-              decoder.decode(new Uint8Array(view.buffer, offset))
-            );
-            this.emit("error", parsed.error || "Unknown server error");
-          }
-          break;
-      }
-    } catch {
-      // malformed message - ignore rather than tear down the channel
-    }
-  }
-
-  private async handleSignal(signal: any): Promise<void> {
-    const pc = this.pc;
-    if (!pc) return;
-    try {
-      switch (signal.type) {
-        case "offer": {
-          await pc.setRemoteDescription({ type: "offer", sdp: signal.sdp });
-          const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          this.ws?.send(JSON.stringify({ type: "answer", sdp: answer.sdp || "" }));
-          while (this.iceCandidateQueue.length > 0) {
-            const candidate = this.iceCandidateQueue.shift();
-            if (candidate) {
-              try {
-                await pc.addIceCandidate(new RTCIceCandidate(candidate));
-              } catch {
-                // ignore a single bad queued candidate
-              }
-            }
-          }
-          break;
-        }
-        case "ice-candidate":
-          if (signal.candidate && signal.candidate.candidate) {
-            const candidate = new RTCIceCandidate(signal.candidate);
-            if (pc.remoteDescription) {
-              try {
-                await pc.addIceCandidate(candidate);
-              } catch {
-                // ignore
-              }
-            } else {
-              this.iceCandidateQueue.push(signal.candidate);
-            }
-          }
-          break;
-      }
-    } catch {
-      // A signaling-level failure will surface as a PC state change; don't
-      // tear down here.
-    }
-  }
-
-  private async triggerIceRestart(): Promise<void> {
-    const pc = this.pc;
-    if (!pc || !this.ws || !this.signalingConnected) {
-      this.onTerminalDrop();
-      return;
-    }
-    if (pc.signalingState !== "stable") return; // renegotiation already in flight
-    try {
-      const offer = await pc.createOffer({ iceRestart: true });
-      await pc.setLocalDescription(offer);
-      this.ws.send(JSON.stringify({ type: "offer", sdp: offer.sdp || "" }));
-    } catch {
-      this.onTerminalDrop();
-    }
-  }
-
-  // A terminal drop (signaling socket lost, or PC closed) after having been
-  // connected. Emit "disconnected", then run a background reconnect loop to the
-  // same session unless disabled/aborted.
-  private onTerminalDrop(): void {
-    if (this.userClosed) return;
-    if (!this.peerConnected && this.supervising) return; // already recovering
-    this.peerConnected = false;
-    this.emit("disconnected");
-    this.teardownInternals();
-    if (!this.reconnectEnabled) {
-      this.emit("closed", "connection lost");
-      return;
-    }
-    if (this.supervising) return;
-    this.supervising = true;
-    this.reconnectAttempt = 0;
-    void this.reconnectLoop();
-  }
-
-  private async reconnectLoop(): Promise<void> {
-    try {
-      for (;;) {
-        if (this.userClosed) return;
-        this.reconnectAttempt++;
-        if (this.reconnectAttempt > this.maxAttempts) {
-          this.emit("closed", "reconnection attempts exhausted");
-          return;
-        }
-        this.emit("reconnecting", this.reconnectAttempt, this.maxAttempts);
-        try {
-          await this.establish();
-          return; // reconnected; "connected" already emitted
-        } catch {
-          await this.wait(this.nextDelayMs());
-        }
-      }
-    } finally {
-      this.supervising = false;
-    }
+    return lifecycle.connect(this.core);
   }
 
   // --- Input sending ---
+  // @internal Whether mountGlassViewer should instantiate PixelTraceSampler
+  // against its <video> element - see InternalGlassClientOptions'
+  // __internalPixelTraceEnabled doc comment for why this lives here rather
+  // than the viewer owning its own separate opt-in flag (GlassClient is
+  // this whole SDK's single source of truth for what diagnostics are
+  // enabled for a given session).
+  get pixelTraceEnabled(): boolean {
+    return this.core._pixelTraceEnabled;
+  }
 
-  private sendInput(type: string, data: Record<string, unknown>): void {
-    const dc = this.dataChannel;
-    if (!dc || dc.readyState !== "open") return;
-    // `t`: client send time (epoch ms) so the backend can measure true
-    // end-to-end input latency. Valid to compare against the backend wall
-    // clock only when both run on the same host (true in every tested setup).
-    try {
-      dc.send(JSON.stringify({ type, data: { ...data, t: Date.now() } }));
-    } catch {
-      // drop on transient send failure
-    }
+  // @internal Mirrors pixelTraceEnabled exactly - see
+  // InternalGlassClientOptions.__internalDecodeReadbackEnabled.
+  get decodeReadbackEnabled(): boolean {
+    return this.core._decodeReadbackEnabled;
+  }
+
+  // @internal Reports one batch of real capture-to-paint samples (see
+  // pixel_trace.ts's PixelTraceSampler) to the backend - same wire
+  // mechanism as collectAndSendTraceReport (sendInput over the existing
+  // reliable DataChannel), just triggered by the viewer right after a
+  // discrete input dispatch rather than on a fixed interval. Not part of
+  // the documented public API (see traceReportIntervalMs' own doc comment
+  // for why this whole diagnostic channel stays internal-only for now).
+  reportPixelTraceSamples(samples: { rtpTimestamp: number; paintedAtMs: number }[]): void {
+    return statsTrace.reportPixelTraceSamples(this.core, samples);
   }
 
   // Navigation travels over the signaling socket, not the DataChannel.
   navigate(url: string): void {
-    if (this.ws && this.signalingConnected) {
-      this.ws.send(JSON.stringify({ type: "navigate", sdp: url }));
-    }
+    return navigation.navigate(this.core, url);
+  }
+
+  // --- Input handoff (docs/protocol.md's "Control handoff" section) ---
+  // Asks the backend for producesInput, over the signaling socket (not the
+  // DataChannel) - a no-op if this connection already has it. Glass's
+  // entire server-side policy: grant immediately (a "capabilitiesChanged"
+  // event with isSelf=true follows) if nothing/no one else currently holds
+  // it and the resolved license tier admits it; otherwise relay the ask to
+  // whoever already holds it (they get an "inputRequested" event - nothing
+  // changes here) or drop it if there's no one to relay to and no capacity
+  // either. Glass never queues, prompts, or auto-preempts on its own - it's
+  // entirely up to this app what to do while waiting, including whether to
+  // retry at all. See producesInput()/connectionId() for reading the
+  // resulting state, and the "capabilitiesChanged"/"inputRequested" events.
+  requestInput(): void {
+    return handoff.requestInput(this.core);
+  }
+
+  // The real operator consent answer for a pending "micAccessRequested"
+  // event - captures the OPERATOR's own
+  // real microphone (this device's getUserMedia, NOT the remote page's),
+  // swaps it onto the placeholder sender attachMicPlaceholder already
+  // negotiated, then tells the backend. Real device/permission failures
+  // (no mic, operator denies the browser's own native prompt) fall back
+  // to denyMicAccess() automatically - a real "I don't have a working
+  // mic" is not different from "I said no" from the remote page's own
+  // point of view. Safe to call even if no request is currently pending
+  // (the backend's own ResolveMicConsent is itself a no-op then).
+  //
+  // Rejects (rather than swallowing) a real device/permission failure -
+  // the remote page is still denied promptly either way (see the catch
+  // below), but the caller gets the real error back to show the operator
+  // WHY, instead of a silent no-op that looks identical to success.
+  async grantMicAccess(): Promise<void> {
+    return mic.grantMicAccess(this.core);
+  }
+
+  // Explicit denial for a pending "micAccessRequested" event - see
+  // grantMicAccess's own doc comment. A no-op backend-side if nothing is
+  // actually pending.
+  denyMicAccess(): void {
+    return mic.denyMicAccess(this.core);
+  }
+
+  // Voluntarily gives up producesInput - a no-op if this connection doesn't
+  // currently hold it. Frees whatever interactive-input slot this
+  // connection holds immediately (however it was acquired - a mint-time
+  // grant or an earlier requestInput()), not just on disconnect, so it's
+  // available to someone else in a shared-pool tier right away. A
+  // "capabilitiesChanged" event (isSelf=true, producesInput=false) follows.
+  releaseInput(): void {
+    return handoff.releaseInput(this.core);
+  }
+
+  // This connection's own id, as assigned by the backend - null until the
+  // first "offer" has arrived (see the field's own doc comment). Compare
+  // against a "capabilitiesChanged" event's connectionId yourself if you
+  // need to, though isSelf already does that for you.
+  connectionId(): string | null {
+    return handoff.connectionId(this.core);
+  }
+
+  // Whether THIS connection currently produces input - the live state
+  // requestInput()/releaseInput() (and a connection's own mint-time grant)
+  // control. Starts at whatever the initial "offer" reported and stays
+  // current via "capabilitiesChanged".
+  producesInput(): boolean {
+    return handoff.producesInput(this.core);
+  }
+
+  // Whether THIS connection is the session owner - the offer's isOwner
+  // field (docs/protocol.md) - which (authenticated with the session's own unscoped credential, not a
+  // minted grant). Only an owner connection ever receives roster traffic
+  // (connections() stays empty otherwise) or has grantInput()/
+  // revokeInput() actually take effect server-side - both are still safe
+  // to call from a non-owner connection, they just get silently denied
+  // (see handleGrantInputMessage/handleRevokeInputMessage's own IsOwner
+  // check), so use this to decide whether to show owner-only UI at all.
+  isOwner(): boolean {
+    return handoff.isOwner(this.core);
+  }
+
+  // The current known roster of every OTHER connection on this session -
+  // see docs/protocol.md's Control handoff section and the
+  // "rosterChanged" event. Always empty for a non-owner connection (see
+  // isOwner()). A snapshot at call time, not a live view - listen for
+  // "rosterChanged" rather than polling this.
+  connections(): GlassRosterEntry[] {
+    return handoff.connections(this.core);
+  }
+
+  // Reports that the frame with this RTP timestamp was presented at
+  // expectedDisplayTime (performance.now() clock), completing any input
+  // latency samples waiting on it. mountGlassViewer calls this from its
+  // requestVideoFrameCallback loop; an app rendering the video itself can
+  // call it the same way.
+  notePresentedFrame(rtpTimestamp: number, expectedDisplayTime: number): void {
+    return statsTrace.notePresentedFrame(this.core, rtpTimestamp, expectedDisplayTime);
+  }
+
+  // Recent input latency (last 200 samples): median and p95 in ms for
+  // clicks/keys/taps and for drags/scrolls.
+  inputLatencyStats(): InputLatencyStats {
+    return statsTrace.inputLatencyStats(this.core);
+  }
+
+  // Each relay slot's last reported state (see "slotStateChanged"); empty
+  // for a browser session or before the first report.
+  slotStates(): Record<string, GlassSlotState> {
+    return handoff.slotStates(this.core);
+  }
+
+  // Grants producesInput to a SPECIFIC other connection by ID - the
+  // owner-driven counterpart to requestInput() (that connection asking for
+  // it itself). Routed through the exact same license-tier/capacity gate
+  // request_input uses - an owner can't grant
+  // more interactive slots than the resolved tier allows. Silently denied
+  // (no error, no exception - watch for the resulting "rosterChanged"/
+  // "capabilitiesChanged" or their absence) if this connection isn't the
+  // owner, or if admission fails.
+  grantInput(connectionId: string): void {
+    return handoff.grantInput(this.core, connectionId);
+  }
+
+  // Forcibly releases a SPECIFIC other connection's producesInput,
+  // regardless of how it was acquired (a mint-time grant, its own
+  // requestInput(), or an earlier grantInput()) - the owner-driven
+  // counterpart to releaseInput() (a connection giving up its own).
+  // Silently denied if this connection isn't the owner.
+  revokeInput(connectionId: string): void {
+    return handoff.revokeInput(this.core, connectionId);
   }
 
   sendInitialViewport(
     width: number,
     height: number,
     isMobile?: boolean,
-    userAgent?: string
+    userAgent?: string,
+    userAgentData?: UserAgentClientHints
   ): void {
-    if (!this.ws || !this.signalingConnected) return;
-    this.ws.send(
-      JSON.stringify({
-        type: "initial_viewport",
-        width,
-        height,
-        isMobile: !!isMobile,
-        userAgent: userAgent || "",
-      })
-    );
+    return navigation.sendInitialViewport(this.core, width, height, isMobile, userAgent, userAgentData);
   }
 
   navigateBack(): void {
-    this.sendInput("back", {});
+    return navigation.navigateBack(this.core);
   }
+
   navigateForward(): void {
-    this.sendInput("forward", {});
+    return navigation.navigateForward(this.core);
   }
+
   refresh(): void {
-    this.sendInput("refresh", {});
+    return navigation.refresh(this.core);
   }
 
   mouseMove(x: number, y: number, dragging: boolean): void {
-    if (dragging) {
-      // 60Hz cap; intermediate positions in the window are dropped, the next
-      // allowed send uses the freshest coordinates.
-      const now = Date.now();
-      if (now - this.lastMouseSendTime < MOUSE_BATCH_INTERVAL_MS) return;
-      this.sendInput("mousemove", { x, y, dragging: true });
-      this.lastMouseSendTime = now;
-      return;
-    }
-    this.mouseEventQueue.push({ x, y, dragging });
-    if (this.mouseEventQueue.length > 3) this.mouseEventQueue.shift();
-    if (this.mouseBatchTimer === null) this.startMouseBatching();
+    return inputs.mouseMove(this.core, x, y, dragging);
   }
 
-  private startMouseBatching(): void {
-    this.mouseBatchTimer = setInterval(() => {
-      if (this.mouseEventQueue.length === 0) return;
-      const now = Date.now();
-      if (now - this.lastMouseSendTime < MOUSE_BATCH_INTERVAL_MS) return;
-      const latest = this.mouseEventQueue[this.mouseEventQueue.length - 1]!;
-      this.sendInput("mousemove", {
-        x: latest.x,
-        y: latest.y,
-        dragging: latest.dragging,
-      });
-      this.lastMouseSendTime = now;
-      this.mouseEventQueue = [];
-    }, MOUSE_BATCH_INTERVAL_MS);
+  // button defaults to "left", modifiers to 0, clickCount to 1 - see
+  // docs/protocol.md's mousedown/mouseup rows for the three real gaps this
+  // closes: right-click never reached the remote page at all before
+  // `button` existed, Ctrl/Shift/Alt+click never reached it either before
+  // `modifiers` did (silently breaking Shift+click multi-select, Ctrl/Cmd+
+  // click, and Alt-drag-to-duplicate), and a real double-click never
+  // produced a genuine multi-click DOM event before `clickCount` did.
+  // modifiers is the same Alt=1/Ctrl=2/Meta=4/Shift=8 bitmask as
+  // dispatchKeyEvent/scroll; clickCount should be the browser's own native
+  // click-run counter (DOM MouseEvent.detail).
+  mouseDown(x: number, y: number, button: MouseButton = "left", modifiers = 0, clickCount = 1): void {
+    return inputs.mouseDown(this.core, x, y, button, modifiers, clickCount);
   }
 
-  mouseDown(x: number, y: number): void {
-    this.sendInput("mousedown", { x, y });
+  mouseUp(x: number, y: number, button: MouseButton = "left", modifiers = 0, clickCount = 1): void {
+    return inputs.mouseUp(this.core, x, y, button, modifiers, clickCount);
   }
-  mouseUp(x: number, y: number): void {
-    this.sendInput("mouseup", { x, y });
+
+  // deltaX/modifiers default to 0 - see docs/protocol.md's scroll row for
+  // the real gap this closes (a page's own `wheel`-event-driven pan/zoom,
+  // e.g. a canvas design tool, never received scroll input through Glass
+  // at all before this dispatched a real wheel event). modifiers is the
+  // same Alt=1/Ctrl=2/Meta=4/Shift=8 bitmask as dispatchKeyEvent.
+  scroll(deltaY: number, deltaX = 0, modifiers = 0): void {
+    return inputs.scroll(this.core, deltaY, deltaX, modifiers);
   }
-  scroll(deltaY: number): void {
-    this.sendInput("scroll", { deltaY });
-  }
+
   setViewport(width: number, height: number): void {
-    this.sendInput("set_viewport", { width, height });
+    return inputs.setViewport(this.core, width, height);
   }
+
   copyText(): void {
-    this.sendInput("copy_text", {});
+    return inputs.copyText(this.core);
   }
+
   pasteText(text: string): void {
-    this.sendInput("paste_text", { text });
+    return inputs.pasteText(this.core, text);
+  }
+
+  // Builds the retrieval URL for a completed download announced by a
+  // "downloadReady" event - see that event's own doc comment for the
+  // prompt-then-save flow this is meant to be used in. Session id is parsed
+  // out of signalingUrl rather than relying on the options.sessionId field,
+  // which is optional and unrelated (used only for the DELETE-on-close
+  // call) - signalingUrl always has the real one, since the WS connection
+  // couldn't exist without it. Reuses signalingUrl's own ?token= query
+  // param, if present, as the retrieval credential - the same session-scoped
+  // token that already authorizes this client's signaling/stats routes (see
+  // backend's sessionTokenAuthorizes), so a deployment with GLASS_API_TOKEN
+  // set doesn't need this SDK to also carry that runtime-wide secret just to
+  // let the operator save a file.
+  downloadUrl(guid: string): string {
+    return fileTransfer.downloadUrl(this.core, guid);
+  }
+
+  // Uploads the operator's already-picked local file(s) in response to a
+  // "fileChooserOpened" event - see that event's own doc comment for the
+  // full flow. Rejects if the backend rejects the request (session
+  // gone, no pending prompt - it already timed out or was already
+  // answered, size limits) so the caller can surface a real failure
+  // instead of assuming success. There's no download-side equivalent of
+  // this method (downloadUrl() only builds a URL, letting a real <a
+  // download> anchor be the actual save trigger) because there is no
+  // similar browser-native mechanism to hand a POST body off to - the
+  // fetch here IS the transport, not just a link the operator clicks.
+  async uploadFiles(files: FileList | File[]): Promise<void> {
+    return fileTransfer.uploadFiles(this.core, files);
   }
 
   dispatchKeyEvent(keyEvent: KeyEvent): void {
-    const modifiers =
-      (keyEvent.altKey ? 1 : 0) |
-      (keyEvent.ctrlKey ? 2 : 0) |
-      (keyEvent.metaKey ? 4 : 0) |
-      (keyEvent.shiftKey ? 8 : 0);
-    this.sendInput(keyEvent.type, {
-      key: keyEvent.key,
-      code: keyEvent.code,
-      modifiers,
-    });
+    return inputs.dispatchKeyEvent(this.core, keyEvent);
   }
 
-  dispatchTouch(type: TouchDispatchType, points: TouchPoint[]): void {
-    this.sendInput(type, { points });
+  // gestureId is required on every call (see TouchInputCallbacks.onTouchPoints
+  // in viewer/touchInput.ts) - the backend needs it on touchstart/touchmove/
+  // touchend/touchcancel alike to gate touchmove against whichever gesture is
+  // actually active. moveCount is
+  // diagnostic-only, set only on "touchend".
+  //
+  // "touchmove" alone travels over the unreliable fast channel - see
+  // sendInputFast's doc comment. Every other touch type stays on the
+  // reliable channel like all other input, since CDP's touch state machine
+  // needs start/end to arrive in order and not be silently dropped.
+  dispatchTouch(
+    type: TouchDispatchType,
+    points: TouchPoint[],
+    gestureId: number,
+    moveCount?: number
+  ): void {
+    return inputs.dispatchTouch(this.core, type, points, gestureId, moveCount);
   }
 
   isConnected(): boolean {
-    return this.peerConnected && this.dataChannel?.readyState === "open";
+    return transport.isConnected(this.core);
   }
 
   // The current video stream, if a track has arrived. Lets a viewer that mounts
   // after "videoTrack" already fired still bind the video (see currentStream).
   getVideoStream(): MediaStream | null {
-    return this.currentStream;
-  }
-
-  // --- Stats ---
-
-  private startStatsPollingIfEnabled(): void {
-    if (this.statsIntervalMs <= 0 || this.statsTimer !== null) return;
-    this.statsTimer = setInterval(async () => {
-      const stats = await this.getStats();
-      if (stats) this.emit("stats", stats);
-    }, this.statsIntervalMs);
+    return transport.getVideoStream(this.core);
   }
 
   // One-shot transport/quality snapshot from RTCPeerConnection.getStats().
   // Returns null if no peer connection exists.
   async getStats(): Promise<GlassStats | null> {
-    const pc = this.pc;
-    if (!pc) return null;
-    let candidatePair: any = null;
-    let inboundVideo: any = null;
-    try {
-      const report = await pc.getStats();
-      report.forEach((stat: any) => {
-        if (
-          stat.type === "candidate-pair" &&
-          stat.state === "succeeded" &&
-          (stat.nominated ?? true)
-        ) {
-          candidatePair = stat;
-        } else if (stat.type === "inbound-rtp" && stat.kind === "video") {
-          inboundVideo = stat;
-        }
-      });
-    } catch {
-      return null;
-    }
-
-    const now = Date.now();
-    let throughputKbps: number | null = null;
-    if (candidatePair && typeof candidatePair.bytesReceived === "number") {
-      if (this.lastStatsSample) {
-        const dtSec = (now - this.lastStatsSample.time) / 1000;
-        const deltaBytes =
-          candidatePair.bytesReceived - this.lastStatsSample.bytesReceived;
-        throughputKbps = dtSec > 0 ? (deltaBytes * 8) / 1000 / dtSec : null;
-      }
-      this.lastStatsSample = {
-        time: now,
-        bytesReceived: candidatePair.bytesReceived,
-      };
-    }
-
-    let jitterBufferMs: number | null = null;
-    if (
-      inboundVideo &&
-      typeof inboundVideo.jitterBufferDelay === "number" &&
-      typeof inboundVideo.jitterBufferEmittedCount === "number"
-    ) {
-      if (this.lastJitterSample) {
-        const deltaDelaySec =
-          inboundVideo.jitterBufferDelay - this.lastJitterSample.delaySec;
-        const deltaEmitted =
-          inboundVideo.jitterBufferEmittedCount -
-          this.lastJitterSample.emittedCount;
-        if (deltaEmitted > 0) {
-          jitterBufferMs = (deltaDelaySec / deltaEmitted) * 1000;
-        }
-      }
-      this.lastJitterSample = {
-        delaySec: inboundVideo.jitterBufferDelay,
-        emittedCount: inboundVideo.jitterBufferEmittedCount,
-      };
-    }
-
-    return {
-      rttMs:
-        candidatePair && typeof candidatePair.currentRoundTripTime === "number"
-          ? candidatePair.currentRoundTripTime * 1000
-          : null,
-      throughputKbps,
-      availableOutgoingBitrateKbps:
-        candidatePair &&
-        typeof candidatePair.availableOutgoingBitrate === "number"
-          ? candidatePair.availableOutgoingBitrate / 1000
-          : null,
-      jitterBufferMs,
-      framesDecoded: inboundVideo?.framesDecoded ?? null,
-      framesDropped: inboundVideo?.framesDropped ?? null,
-      dataChannelBufferedAmount: this.dataChannel?.bufferedAmount ?? null,
-    };
+    return statsTrace.getStats(this.core);
   }
 
   // --- Cleanup ---
-
   // Permanently closes the client: stops reconnection, tears down the peer
   // connection and signaling socket, and (best-effort) deletes the session.
   // After this, no further events fire. Safe to call more than once.
   disconnect(): void {
-    if (this.userClosed) return;
-    this.userClosed = true;
-    if (this.unloadHandler && typeof window !== "undefined") {
-      window.removeEventListener("pagehide", this.unloadHandler);
-      this.unloadHandler = null;
-    }
-    for (const t of this.pendingTimeouts) clearTimeout(t);
-    this.pendingTimeouts.clear();
-    this.teardownInternals();
-    if (this.ws) {
-      try {
-        this.ws.close(1000, "client disconnecting");
-      } catch {
-        // ignore
-      }
-      this.detachWs();
-    }
-    if (this.sessionId && this.deleteOnClose) {
-      deleteGlassSession(this.sessionId, this.sessionBaseUrl, this.apiToken);
-    }
-    this.emit("closed", "client disconnected");
+    lifecycle.disconnect(this.core);
     this.removeAllListeners();
-  }
-
-  // Tears down the PC/DC and detaches the WS handlers WITHOUT ending the
-  // client - used between reconnect attempts. Does not clear userClosed.
-  private teardownInternals(): void {
-    if (this.mouseBatchTimer !== null) {
-      clearInterval(this.mouseBatchTimer);
-      this.mouseBatchTimer = null;
-    }
-    this.mouseEventQueue = [];
-    if (this.statsTimer !== null) {
-      clearInterval(this.statsTimer);
-      this.statsTimer = null;
-    }
-    this.lastStatsSample = null;
-    this.lastJitterSample = null;
-    // The stream belongs to the peer connection we're tearing down; drop it so
-    // a viewer mounting mid-reconnect doesn't bind a dead track (a fresh
-    // ontrack will replace it when the reconnect completes).
-    this.currentStream = null;
-
-    if (this.dataChannel) {
-      try {
-        if (
-          this.dataChannel.readyState === "open" ||
-          this.dataChannel.readyState === "connecting"
-        ) {
-          this.dataChannel.close();
-        }
-      } catch {
-        // ignore
-      }
-      this.dataChannel.onmessage = null;
-      this.dataChannel = null;
-    }
-    if (this.pc) {
-      try {
-        if (this.pc.connectionState !== "closed") this.pc.close();
-      } catch {
-        // ignore
-      }
-      this.pc.ontrack = null;
-      this.pc.ondatachannel = null;
-      this.pc.onicecandidate = null;
-      this.pc.onconnectionstatechange = null;
-      this.pc = null;
-    }
-    // Detach the WS handlers so a reconnect's fresh socket owns the callbacks,
-    // but only close it here if we're not doing a full teardown in disconnect
-    // (which closes it explicitly). Between attempts, establish() opens a new
-    // socket, so close the old one now.
-    if (this.ws && !this.userClosed) {
-      const old = this.ws;
-      this.detachWs();
-      try {
-        old.close();
-      } catch {
-        // ignore
-      }
-    }
-    this.peerConnected = false;
-  }
-
-  private detachWs(): void {
-    if (!this.ws) return;
-    this.ws.onopen = null;
-    this.ws.onmessage = null;
-    this.ws.onerror = null;
-    this.ws.onclose = null;
-    this.ws = null;
-  }
-
-  private timeout(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
-    const t = setTimeout(() => {
-      this.pendingTimeouts.delete(t);
-      fn();
-    }, ms);
-    this.pendingTimeouts.add(t);
-    return t;
-  }
-
-  private clearTimeoutTracked(t: ReturnType<typeof setTimeout>): void {
-    clearTimeout(t);
-    this.pendingTimeouts.delete(t);
   }
 }
 
@@ -979,14 +690,4 @@ export function createGlassClient(options: GlassClientOptions): GlassClient {
   return new GlassClient(options);
 }
 
-// Derives the http(s) origin from a ws(s):// signaling URL, for the session
-// DELETE call. Falls back to same-origin ("") if it can't be parsed.
-function originOf(signalingUrl: string): string {
-  try {
-    const u = new URL(signalingUrl);
-    const httpProto = u.protocol === "wss:" ? "https:" : "http:";
-    return `${httpProto}//${u.host}`;
-  } catch {
-    return "";
-  }
-}
+

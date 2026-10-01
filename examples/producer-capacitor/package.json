@@ -1,0 +1,26 @@
+{
+  "name": "glass-producer-capacitor-example",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "cap:sync": "npm run build && npx cap sync android"
+  },
+  "dependencies": {
+    "@glass/client": "*",
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/core": "^6.2.0",
+    "preact": "^10.27.2",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0",
+    "@preact/preset-vite": "^2.10.2",
+    "@types/qrcode": "^1.5.6",
+    "typescript": "~5.8.3",
+    "vite": "^7.1.7"
+  }
+}
