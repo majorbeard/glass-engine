@@ -31,8 +31,23 @@ a reconnect grace window. You build your product on the HTTP API and
 
 The engine itself (the Go server) is closed-source. It ships only as the
 `ghcr.io/majorbeard/glass` Docker image (linux/amd64 and linux/arm64), which
-contains everything it needs. This repository holds the public
-pieces: the client SDK, a reference viewer, the installer and these docs.
+contains everything it needs or downloads it from its publisher at start.
+This repository holds the public pieces: the client SDK, the example apps
+and these docs.
+
+## Performance
+
+Measured on real machines and real links; each figure's version, hardware,
+page and method are in [docs/performance.md](docs/performance.md).
+
+| | |
+|---|---|
+| **40,000 sessions** on one 8-vCPU machine | no errors; 25,000 held for an hour under constant churn, no leak |
+| **3 to 5 millicores** per 30 fps stream | the engine's own cost, linear from 50 to 800 streams |
+| **WebGL at 43 fps, 1280x720** on a GPU | against 10 fps at 640x360 in software, CPU full |
+| **19% of the CPU instead of 31.5%** | eight sessions encoded on the GPU (NVENC) |
+| **159 to 188 ms** click to picture | cloud machine to a PC on home 4G, median; within about 30 ms of Chrome's own WebRTC sender |
+| **Sound within -61 to +30 ms** of its picture | a phone on cellular |
 
 ## Status
 
@@ -156,6 +171,33 @@ their publishers when it starts:
   then downloads nothing from Cisco and encodes VP8. See
   [docs/configuration.md](docs/configuration.md#encoding).
 
+## Built on
+
+Glass stands on open-source work. Thank you to everyone behind these
+projects.
+
+| Project | What Glass uses it for | Licence |
+|---|---|---|
+| [Go](https://go.dev) and its standard library | the engine | BSD-3-Clause |
+| [Pion](https://github.com/pion) (webrtc, ice, interceptor, rtp, rtcp, stun, transport) | WebRTC: peers, ICE, RTP and RTCP; Glass carries a patched copy of `interceptor` for its congestion control | MIT |
+| [WebRTC](https://webrtc.googlesource.com/src/) | the reference for congestion control and pacing; some of Glass's patched code is derived from it | BSD-3-Clause |
+| [Rod](https://github.com/go-rod/rod) and [gson](https://github.com/ysmood/gson) | driving Chrome over the DevTools protocol | MIT |
+| [Gorilla WebSocket](https://github.com/gorilla/websocket) | signaling | BSD-2-Clause |
+| [google/uuid](https://github.com/google/uuid), [golang.org/x/sys](https://github.com/golang/sys) | IDs, system calls | BSD-3-Clause |
+| [Chromium](https://www.chromium.org) / [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) | the hosted browser (downloaded from Google at start) | BSD-3-Clause and its components; Google's terms for Chrome for Testing |
+| [OpenH264](https://www.openh264.org) | H.264 encoding (the library is downloaded from Cisco at start) | BSD-2-Clause; Cisco's binary licence |
+| [libvpx](https://chromium.googlesource.com/webm/libvpx) | VP8 encoding | BSD-3-Clause |
+| [Opus](https://opus-codec.org) | audio encoding and decoding | BSD-3-Clause |
+| [libjpeg-turbo](https://libjpeg-turbo.org) | decoding the browser's captured frames | IJG, BSD-3-Clause, zlib |
+| [NVIDIA Video Codec SDK](https://developer.nvidia.com/video-codec-sdk) headers, via [nv-codec-headers](https://github.com/FFmpeg/nv-codec-headers) | GPU encoding (NVENC) | MIT |
+| [PulseAudio](https://www.freedesktop.org/wiki/Software/PulseAudio/) | capturing the browser's sound | LGPL-2.1-or-later |
+| [tini](https://github.com/krallin/tini) | the container's init process | MIT |
+| [Debian](https://www.debian.org) | the image's base and system libraries | each package's own |
+| [Preact](https://preactjs.com) and [Vite](https://vitejs.dev) | the reference viewer | MIT |
+
+The image carries each one's licence text; `/usr/share/doc/glass/THIRD_PARTY_NOTICES`
+says where.
+
 ## Direction
 
 What is being built next. None of it exists yet, and there are no dates.
@@ -183,6 +225,7 @@ What is being built next. None of it exists yet, and there are no dates.
 | [Protocol](docs/protocol.md) | Integrators | HTTP API, signaling and DataChannel messages |
 | [Architecture](docs/architecture.md) | Everyone | How media and input move through the engine |
 | [Deployment](docs/deployment.md) | Operators | Ports, NAT, TURN, TLS, auth, Docker |
+| [Performance](docs/performance.md) | Everyone | What Glass measured, on what, and how |
 | [Sizing](docs/sizing.md) | Operators | Capacity, memory, instance choice |
 | [Configuration](docs/configuration.md) | Operators | Every operator setting |
 
