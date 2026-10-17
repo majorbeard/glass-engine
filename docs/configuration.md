@@ -21,7 +21,8 @@ change between releases.
 | `GLASS_ADDR` | `:8080` | HTTP listen address. |
 | `GLASS_API_TOKEN` | unset | Bearer token for the HTTP API. Required unless Glass listens on loopback only. See [deployment.md](deployment.md#authentication). |
 | `GLASS_INSECURE_LOCAL_DEV` | `false` | Allow no token on a non-loopback address. Local Docker development only. |
-| `GLASS_LICENSE_KEY` | unset (Free) | Your license key. Checked at startup and periodically; if the license server is unreachable, a paid tier is kept for 7 days from its last successful check. `GET /v1/info` shows the tier in effect. |
+| `GLASS_LICENSE_KEY` | unset (Free) | Your license key. Checked at startup and periodically; an unreachable license server is retried for about 30 s at startup, and a paid tier is kept for 7 days from its last successful check. `GET /v1/info` shows the tier in effect. |
+| `GLASS_LICENSE_CACHE_PATH` | `~/.cache/glass/license-cache.json` | File that keeps the last validated tier (never the key) across restarts. On a persistent volume (the image's `glass-cache` volume covers the default) it also survives re-creating the container. |
 
 ## Capacity
 
@@ -64,7 +65,7 @@ change between releases.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GLASS_CHROME_BIN` | found on `PATH` (bundled in Docker) | Chrome or `chrome-headless-shell` binary. |
+| `GLASS_CHROME_BIN` | found on `PATH`; in Docker `/usr/local/bin/chrome-headless-shell` | Chrome or `chrome-headless-shell` binary. In Docker, the two image paths (`chrome-headless-shell`, `chrome-full`) are downloaded from Google at start; any other path is used as it is and nothing is downloaded. See [deployment.md](deployment.md#docker). |
 | `GLASS_EGRESS_FILTER` | `true` | Block browser connections to private networks. See [deployment.md](deployment.md#security-posture). |
 | `GLASS_AUDIO_MODE` | off | `on` streams browser audio. |
 | `GLASS_MIC_POOL_CHROME_BIN` | unset | Enables microphone-capable sessions. In Docker: `/usr/local/bin/chrome-full`. |
@@ -76,8 +77,12 @@ change between releases.
 | Variable | Default | Purpose |
 |---|---|---|
 | `GLASS_VP8_SHIM_MODE` | off | `on` encodes VP8 instead of H.264, for every session in the process. Relay producers and call peers must then send VP8. |
+| `GLASS_OPENH264_MODE` | on | `off` leaves out Cisco's OpenH264 (OpenH264 Video Codec provided by Cisco Systems, Inc.): nothing is downloaded from Cisco at start, and every session encodes VP8. Requires `GLASS_VP8_SHIM_MODE=on`; GPU encoding is then unused (it encodes H.264). |
 | `GLASS_NVENC_SHIM_MAX_SESSIONS` | `0` | Browser sessions encoded on an NVIDIA GPU. `0` disables GPU encoding. |
-| `GLASS_OPENH264_SHIM_BIN_PATH`, `GLASS_OPENH264_LIB_PATH` | set in Docker | The H.264 encoder. Required; there is no fallback. |
+| `GLASS_OPENH264_SHIM_BIN_PATH`, `GLASS_OPENH264_LIB_PATH` | set in Docker | The H.264 encoder. Required unless `GLASS_OPENH264_MODE=off`; there is no other fallback. |
+| `GLASS_CONTENT_HINT` | `detail` | What a browser session protects when bitrate or the encoder's CPU is short: `detail` keeps the size and lowers the frame rate (text, interfaces); `motion` keeps the frame rate and lowers the size (video, games). A session can set its own on creation (`contentHint`, see [protocol.md](protocol.md)). |
+| `GLASS_QUALITY_SCALER` | `false` | `true` also adapts the picture when the bitrate can't carry it; `GLASS_CONTENT_HINT` chooses how. |
+| `GLASS_QUALITY_SCALER_MIN_PERCENT` | `37` | Lowest resolution scale the quality scaler may choose, in percent. |
 
 ## Operations
 

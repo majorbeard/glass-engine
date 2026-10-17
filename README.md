@@ -49,12 +49,17 @@ docker run -d --name glass \
   -p 127.0.0.1:8080:8080 \
   -p 50000:50000/udp \
   --shm-size=1g \
+  -v glass-cache:/home/glass/.cache/glass \
   -e GLASS_INSECURE_LOCAL_DEV=true \
   -e GLASS_WEBRTC_NAT_1TO1_IPS=127.0.0.1 \
   ghcr.io/majorbeard/glass
 
 curl http://localhost:8080/healthz      # {"status":"ok"}
 ```
+
+The first start downloads Chrome from Google and the OpenH264 encoder from
+Cisco into the `glass-cache` volume (about 120 MB), so it takes a little
+longer; later starts reuse them.
 
 Then run the reference viewer from this repository:
 
@@ -132,6 +137,24 @@ The limit applies to each session type separately: a Pro instance can run 20
 browser sessions, 20 relay sessions and 20 calls at the same time. Watch-only
 viewers don't count against it. Glass also refuses new sessions when the host
 runs out of CPU headroom, whatever the tier. See [docs/sizing.md](docs/sizing.md).
+
+### Third-party software
+
+The image carries the notices of the open-source software it contains in
+`/usr/share/doc/glass/THIRD_PARTY_NOTICES`, which says where each one is.
+Two components are not in the image; each container downloads them from
+their publishers when it starts:
+
+- **Chrome:** Google's Chrome for Testing, from Google, under
+  [Google's terms](https://www.google.com/chrome/terms/). Its own notices come
+  with it. Its Widevine module is removed, so DRM-protected video does not
+  play in a hosted browser.
+- **OpenH264:** OpenH264 Video Codec provided by Cisco Systems, Inc., from
+  Cisco, under Cisco's binary licence (reproduced in the image at
+  `/usr/share/doc/glass/licenses/openh264/BINARY_LICENSE.txt`). To leave it
+  out, set `GLASS_OPENH264_MODE=off` with `GLASS_VP8_SHIM_MODE=on`; Glass
+  then downloads nothing from Cisco and encodes VP8. See
+  [docs/configuration.md](docs/configuration.md#encoding).
 
 ## Direction
 

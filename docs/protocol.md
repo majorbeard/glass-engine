@@ -44,7 +44,7 @@ which accept the per-session `?token=` from the URLs Glass returns.
 
 | Method | Path | Response |
 |---|---|---|
-| `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities}`. Optional body `{"audioInput": true}`. `503` at capacity. |
+| `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities, contentHint}`. Optional body fields: `"audioInput": true`; `"contentHint": "detail"` or `"motion"` (anything else is `400`). `503` at capacity. |
 | `GET` | `/v1/sessions/{id}` | `{id, state: "pending"\|"active"\|"closed", createdAt, connectedAt?}`, or `404`. |
 | `DELETE` | `/v1/sessions/{id}` | `204`, or `404`. |
 | `GET` | `/v1/sessions/{id}/signaling` | WebSocket upgrade. |
@@ -84,6 +84,10 @@ which accept the per-session `?token=` from the URLs Glass returns.
 - `sourceType`: `"browser"`, `"relay"` or `"call"`.
 - `videoCodec` (relay, call): `"h264"` or `"vp8"`. Producers and call peers
   must send it.
+- `contentHint` (browser): the hint in effect, `"detail"` or `"motion"`:
+  what the session protects when bitrate or CPU is short (the size, or the
+  frame rate). The request's own, or the runtime's default
+  (`GLASS_CONTENT_HINT`).
 
 ### WebSocket close codes
 
