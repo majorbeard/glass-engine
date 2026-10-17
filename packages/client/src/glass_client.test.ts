@@ -282,6 +282,18 @@ describe("disconnected grace", () => {
   });
 });
 
+describe("page unload", () => {
+  it("sends nothing, so the session is held for the same tab to reconnect", async () => {
+    const { client } = await connected({ sessionId: "s1", deleteSessionOnClose: true });
+    window.dispatchEvent(new Event("pagehide"));
+    window.dispatchEvent(new Event("beforeunload"));
+    await flush();
+    expect(fetch).not.toHaveBeenCalled();
+    client.disconnect();
+    expect(fetch).toHaveBeenCalledWith("http://glass.test/v1/sessions/s1", expect.objectContaining({ method: "DELETE" }));
+  });
+});
+
 describe("disconnect", () => {
   it("closes everything once, emits closed, then goes quiet", async () => {
     const { client, ws, pc } = await connected({ sessionId: "s1", deleteSessionOnClose: true });

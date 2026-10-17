@@ -38,13 +38,7 @@ export const DISCONNECTED_GRACE_MS = 4000;
 
 // authHeaders builds the Authorization header for a REST call, shared by
 // every call site that needs one (createGlassSession, deleteGlassSession,
-// GlassClient's page-unload beacon) - found by code review (reuse angle):
-// the same `if (apiToken) headers["Authorization"] = \`Bearer ${apiToken}\`;`
-// line was previously repeated verbatim at all three, which meant a future
-// change to the auth scheme (a different header name, an extra required
-// header) could easily be applied to two of the three and silently miss
-// the third - most plausibly the page-unload beacon, the least likely path
-// to be exercised during manual testing.
+// mintConnectionGrant), so a change to the auth scheme reaches them all.
 export function authHeaders(apiToken?: string): HeadersInit {
   return apiToken ? { Authorization: `Bearer ${apiToken}` } : {};
 }

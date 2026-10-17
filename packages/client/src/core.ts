@@ -125,7 +125,6 @@ export class ClientCore {
   _slotStates: Record<string, GlassSlotState> = {};
   // Coalescing state for locally withheld input; see drops.ts.
   localDrops = new Map<string, { reportedAt: number | null; pending: number }>();
-  unloadHandler: ((event: PageTransitionEvent) => void) | null = null;
   // Owns createEncodedStreams() against the current receiver - see
   // InternalGlassClientOptions.__internalEncodedStreamCheckEnabled. One per
   // receiver (a fresh receiver arrives on every reconnect's "ontrack"),

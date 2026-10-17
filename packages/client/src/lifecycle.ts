@@ -1,63 +1,12 @@
-// Connecting, retrying, the disconnected grace, the page-unload
-// delete, and teardown. See GlassClient (index.ts) for the public API.
+// Connecting, retrying, the disconnected grace, and teardown. See
+// GlassClient (index.ts) for the public API, including what a page unload
+// does to the session (nothing: it is held for a reconnect).
 
 import type { ClientCore } from "./core";
 import * as transport from "./transport";
 import * as mic from "./mic";
 import { CLOSE_SESSION_NOT_FOUND, deleteGlassSession } from "./index";
-import { DEFAULT_RECONNECT_DELAYS_MS, SESSION_NOT_FOUND_MESSAGE, SIGNALING_TIMEOUT_MS, PEER_TIMEOUT_MS, DISCONNECTED_GRACE_MS, authHeaders } from "./internal";
-
-// A deliberate page unload (reload, tab close, navigate away) closes the
-// signaling socket, which the backend can't tell apart from a network drop -
-// so it holds the session open for the whole reconnect grace before freeing
-// its pool slot. That's correct for a real drop, but wasteful for a reload:
-// the slot is blocked (and at small pool sizes, new sessions get 503) for up
-// to a minute. So on a real page discard we proactively DELETE the session.
-//
-// Guarded so it never fires on a backgrounding that the reconnect machinery
-// SHOULD handle: `event.persisted` means the page is going into the bfcache
-// (e.g. a mobile app-switch / screen lock - exactly the reconnect case), so
-// we skip the delete there and let the grace period do its job.
-export function installUnloadHandler(c: ClientCore): void {
-  if (typeof window === "undefined") return;
-  if (!c.sessionId || !c.deleteOnClose) return;
-  c.unloadHandler = (event: PageTransitionEvent) => {
-    if (event.persisted) return;
-    sendDeleteBeacon(c);
-  };
-  window.addEventListener("pagehide", c.unloadHandler);
-}
-
-export function sendDeleteBeacon(c: ClientCore): void {
-  if (!c.sessionId) return;
-  try {
-    // keepalive lets this request outlive the unloading page. DELETE (rather
-    // than navigator.sendBeacon, which is POST-only) matches the runtime's
-    // session API.
-    //
-    // connectionId (when known) routes this through the backend's
-    // per-connection close path instead of an unconditional session-wide
-    // delete - the runtime only actually tears the session down if this
-    // was its last connection, otherwise a no-op, same as an ordinary
-    // WebSocket close. Without it, this tab's own reload used to delete
-    // the whole shared session out from under every other connected
-    // viewer (shared sessions / owner-controlled handoff) - real, reported
-    // live 2026-09-01. Omitted (falls back to the old unconditional
-    // delete) only if pagehide fires before the first "offer" ever
-    // assigned _connectionId, which shouldn't happen in practice since
-    // deleteOnClose implies this tab already has a live connection.
-    const url = c._connectionId
-      ? `${c.sessionBaseUrl}/v1/sessions/${c.sessionId}?connectionId=${encodeURIComponent(c._connectionId)}`
-      : `${c.sessionBaseUrl}/v1/sessions/${c.sessionId}`;
-    void fetch(url, {
-      method: "DELETE",
-      keepalive: true,
-      headers: authHeaders(c.apiToken),
-    });
-  } catch {
-    // best-effort; the reconnect grace is the fallback
-  }
-}
+import { DEFAULT_RECONNECT_DELAYS_MS, SESSION_NOT_FOUND_MESSAGE, SIGNALING_TIMEOUT_MS, PEER_TIMEOUT_MS, DISCONNECTED_GRACE_MS } from "./internal";
 
 // See GlassClient.connect.
 export async function connect(c: ClientCore): Promise<void> {
@@ -302,10 +251,6 @@ export async function reconnectLoop(c: ClientCore): Promise<void> {
 export function disconnect(c: ClientCore): void {
   if (c.userClosed) return;
   c.userClosed = true;
-  if (c.unloadHandler && typeof window !== "undefined") {
-    window.removeEventListener("pagehide", c.unloadHandler);
-    c.unloadHandler = null;
-  }
   for (const t of c.pendingTimeouts) clearTimeout(t);
   c.pendingTimeouts.clear();
   teardownInternals(c);

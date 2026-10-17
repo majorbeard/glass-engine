@@ -10,6 +10,7 @@ import {
 import {
   API_TOKEN,
   AUDIO_INPUT,
+  CONTENT_HINT,
   DECODE_READBACK_ENABLED,
   ENCODED_STREAM_CHECK_ENABLED,
   GLASS_ADDR,
@@ -22,10 +23,41 @@ import {
 
 export type Notify = (toast: { message: string; type: "success" | "error" | "info" }) => void;
 
-// useGlassSession creates a session, builds the client, connects it, and
-// reflects the client's events as state. A fresh session is created (and
-// sessionEpoch bumped) when the server closes the old one outright; see the
-// "closed" handler below.
+// The tab's own session, kept across a reload. Glass holds a session for its
+// reconnect grace after the page using it unloads, and connecting to the same
+// signalingUrl within that time resumes it with its page as it was (see
+// GlassClient's comment on a session's lifetime in @glass/client).
+// sessionStorage is per tab, so another tab never picks it up.
+const KEPT_SESSION_KEY = "glass-viewer-session";
+
+function keptSession(): GlassSession | null {
+  try {
+    const kept = JSON.parse(sessionStorage.getItem(KEPT_SESSION_KEY) ?? "null");
+    return kept && typeof kept.id === "string" && typeof kept.signalingUrl === "string"
+      ? { id: kept.id, signalingUrl: kept.signalingUrl }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function keepSession(session: GlassSession | null): void {
+  try {
+    if (session) {
+      sessionStorage.setItem(KEPT_SESSION_KEY, JSON.stringify({ id: session.id, signalingUrl: session.signalingUrl }));
+    } else {
+      sessionStorage.removeItem(KEPT_SESSION_KEY);
+    }
+  } catch {
+    // No storage (a private window, say): a reload starts a new session.
+  }
+}
+
+// useGlassSession creates a session (or, after a reload, rejoins the tab's
+// own; see keptSession), builds the client, connects it, and reflects the
+// client's events as state. A fresh session is created (and sessionEpoch
+// bumped) when the server closes the old one outright; see the "closed"
+// handler below.
 export function useGlassSession(notify: Notify) {
   const [isActive, setIsActive] = useState(false);
   const [client, setClient] = useState<GlassClient | null>(null);
@@ -101,6 +133,17 @@ export function useGlassSession(notify: Notify) {
   useEffect(() => {
     let cancelled = false;
     let c: GlassClient | null = null;
+    // attachSessionId/attachSignalingUrl: test-only escape hatch, not a
+    // real product feature. Backend-simulated interaction tooling
+    // creates a session via the API
+    // directly so it can drive it via POST /v1/sessions/{id}/input, and
+    // needs a way for a human to actually watch that exact session rather
+    // than the viewer silently creating its own separate one - a runtime
+    // query param, not a build-time env var, since the session ID/URL
+    // differ on every validation run. Absent in every normal use of this
+    // viewer, which keeps creating its own session exactly as before.
+    const attachSessionId = new URLSearchParams(window.location.search).get("attachSessionId");
+    const attachSignalingUrl = new URLSearchParams(window.location.search).get("attachSignalingUrl");
 
     (async () => {
       // Typed as the full GlassSession rather than an inline {id, signalingUrl}
@@ -108,18 +151,6 @@ export function useGlassSession(notify: Notify) {
       // capabilities are visible to anyone reading this as the reference
       // consumer. createGlassSession already rejects a protocol major it
       // doesn't understand, so nothing here needs to check the version itself.
-      //
-      // attachSessionId/attachSignalingUrl: test-only escape hatch, not a
-      // real product feature. Backend-simulated interaction tooling
-      // creates a session via the API
-      // directly so it can drive it via POST /v1/sessions/{id}/input, and
-      // needs a way for a human to actually watch that exact session rather
-      // than the viewer silently creating its own separate one - a runtime
-      // query param, not a build-time env var, since the session ID/URL
-      // differ on every validation run. Absent in every normal use of this
-      // viewer, which keeps creating its own session exactly as before.
-      const attachSessionId = new URLSearchParams(window.location.search).get("attachSessionId");
-      const attachSignalingUrl = new URLSearchParams(window.location.search).get("attachSignalingUrl");
 
       // A non-zero sessionEpoch means this run was triggered by an
       // auto-retry after the previous session was closed out from under us
@@ -133,36 +164,41 @@ export function useGlassSession(notify: Notify) {
         setCanGoForward(false);
       }
 
+      // A reload of this tab rejoins the session it had, unless this run is
+      // the retry after that session was closed.
+      const kept = !attachSessionId && sessionEpoch === 0 ? keptSession() : null;
       let session: GlassSession;
       if (attachSessionId && attachSignalingUrl) {
         session = { id: attachSessionId, signalingUrl: attachSignalingUrl };
+      } else if (kept) {
+        session = kept;
       } else {
         try {
-          session = await createGlassSession(GLASS_ADDR, API_TOKEN, AUDIO_INPUT);
+          session = await createGlassSession(GLASS_ADDR, API_TOKEN, {
+            audioInput: AUDIO_INPUT,
+            contentHint: CONTENT_HINT,
+          });
         } catch (err: any) {
           if (!cancelled) setError(`Failed to create session: ${err.message}`);
           return;
         }
       }
+      // Only a session this run created is deleted here: a kept one may be
+      // what the next run rejoins.
       if (cancelled) {
-        if (!attachSessionId) deleteGlassSession(session.id, GLASS_ADDR, API_TOKEN);
+        if (!attachSessionId && !kept) deleteGlassSession(session.id, GLASS_ADDR, API_TOKEN);
         return;
       }
       setSessionId(session.id);
+      if (!attachSessionId) keepSession(session);
 
       c = createGlassClient({
         signalingUrl: session.signalingUrl,
         sessionId: session.id,
-        // deleteSessionOnClose defaults to true whenever sessionId is set
-        // (see @glass/client's installUnloadHandler) - correct for the
-        // session's own creator (this tab closing SHOULD free the pool slot
-        // immediately rather than waiting out the reconnect grace), but
-        // never correct for an attached viewer: that tab doesn't own
-        // this session, and closing it must not delete it out from under
-        // the primary connection or any other viewer still watching. Real,
-        // live-confirmed bug - every attached
-        // viewer defaulted to true here, so closing ANY watch-only tab
-        // killed the whole shared session for everyone.
+        // deleteSessionOnClose makes disconnect() delete the session: right
+        // for the session's own tab, never for an attached viewer, which
+        // does not own the session and must not end it for its owner or
+        // anyone else watching.
         deleteSessionOnClose: !attachSessionId,
         ...(ICE_SERVERS ? { iceServers: ICE_SERVERS } : {}),
         ...(ICE_TRANSPORT_POLICY
@@ -352,12 +388,14 @@ export function useGlassSession(notify: Notify) {
           setError("Connection lost and could not be restored. Please reload.");
           return;
         }
+        // The session is gone or out of reach: a reload must not try it again.
+        keepSession(null);
         if (autoRetryCountRef.current >= maxAutoRetries) {
           setError("Connection lost and could not be restored. Please reload.");
           return;
         }
         autoRetryCountRef.current += 1;
-        setError("Connection lost - starting a new session…");
+        setError(kept ? "Your previous session has ended - starting a new one…" : "Connection lost - starting a new session…");
         setSessionEpoch((e) => e + 1);
       });
 
@@ -371,7 +409,12 @@ export function useGlassSession(notify: Notify) {
 
     return () => {
       cancelled = true;
-      c?.disconnect();
+      // disconnect() deletes the tab's own session, so it is no longer kept.
+      // A page unload never reaches here: the session is held for a reload.
+      if (c) {
+        c.disconnect();
+        if (!attachSessionId) keepSession(null);
+      }
       setClient(null);
       setIsConnected(false);
     };

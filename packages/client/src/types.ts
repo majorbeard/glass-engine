@@ -94,10 +94,28 @@ export interface GlassInputDrop {
   seq?: number;
 }
 
+// What a session should protect when the bitrate cannot carry the picture.
+// "detail" keeps the picture's size and lowers the frame rate: text,
+// interfaces, anything read. "motion" keeps the frame rate and lowers the
+// size: video, games, anything watched. The names are the web standard's
+// (the MediaStreamTrack content hint).
+export type GlassContentHint = "detail" | "motion";
+
+// Options for createGlassSession. Both are optional.
+export interface GlassCreateSessionOptions {
+  // Requests the mic-capable browser pool. See createGlassSession.
+  audioInput?: boolean;
+  // Absent, the session uses the runtime's own default.
+  contentHint?: GlassContentHint;
+}
+
 // Returned by createGlassSession / the backend's POST /v1/sessions.
 export interface GlassSession {
   id: string;
   signalingUrl: string;
+  // The content hint the session is running with. Absent from runtimes that
+  // predate it and from sources that have none.
+  contentHint?: GlassContentHint;
   // Major version of the public wire contract. Absent from runtimes predating
   // the handshake, which are treated as version 1. See createGlassSession.
   protocolVersion?: number;

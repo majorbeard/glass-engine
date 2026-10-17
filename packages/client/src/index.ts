@@ -33,6 +33,8 @@ import type {
   GlassInputDropCode,
   GlassRosterEntry,
   GlassSlotState,
+  GlassContentHint,
+  GlassCreateSessionOptions,
   GlassSession,
   GlassStats,
   InteractiveElement,
@@ -64,6 +66,8 @@ export type {
   GlassInputDropCode,
   GlassRosterEntry,
   GlassSlotState,
+  GlassContentHint,
+  GlassCreateSessionOptions,
   GlassSession,
   GlassStats,
   InteractiveElement,
@@ -105,15 +109,16 @@ export interface GlassClientOptions {
   // If > 0, emit a "stats" event this often (ms). Off by default; getStats()
   // is always available for one-shot snapshots regardless.
   statsIntervalMs?: number;
-  // DELETE the session (best-effort) when the client is closed for good.
-  // Defaults to true when sessionId is provided.
+  // DELETE the session (best-effort) when disconnect() is called. Defaults to
+  // true when sessionId is provided. A page unload sends nothing and the
+  // session is held for a reconnect; see GlassClient for its lifetime.
   deleteSessionOnClose?: boolean;
   // Base URL (origin) for the session DELETE call. Defaults to the origin
   // derived from signalingUrl.
   sessionBaseUrl?: string;
   // GLASS_API_TOKEN, only needed if this session was created against a
   // runtime that has it set - used solely for this client's own DELETE
-  // calls (sendDeleteBeacon, the final close in disconnect()); the
+  // call (the final close in disconnect()); the
   // signaling WebSocket needs no separate handling since the runtime
   // already embeds the token in signalingUrl when it hands that back from
   // POST /v1/sessions. See createGlassSession's doc comment for the trust
@@ -270,17 +275,28 @@ export const SUPPORTED_PROTOCOL_VERSION = 1;
 // actually started with GLASS_MIC_POOL_CHROME_BIN configured - otherwise
 // the flag is accepted and the session uses the default pool, not an
 // error.
+//
+// The third argument is either that flag alone, as it has always been, or
+// an options object, which can also carry the session's content hint (see
+// GlassContentHint). The runtime refuses a hint it does not know.
 export async function createGlassSession(
   baseUrl = "",
   apiToken?: string,
-  audioInput = false
+  options: boolean | GlassCreateSessionOptions = false
 ): Promise<GlassSession> {
+  const { audioInput = false, contentHint } =
+    typeof options === "boolean" ? { audioInput: options } : options;
+  // No body at all when nothing is asked for, as before.
+  const body: Record<string, unknown> = {};
+  if (audioInput) body.audioInput = true;
+  if (contentHint) body.contentHint = contentHint;
+  const hasBody = Object.keys(body).length > 0;
   const res = await fetch(`${baseUrl}/v1/sessions`, {
     method: "POST",
-    headers: audioInput
+    headers: hasBody
       ? { ...authHeaders(apiToken), "Content-Type": "application/json" }
       : authHeaders(apiToken),
-    body: audioInput ? JSON.stringify({ audioInput: true }) : undefined,
+    body: hasBody ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
     let detail = "";
@@ -312,8 +328,9 @@ export async function createGlassSession(
 }
 
 // Best-effort session close via DELETE {baseUrl}/v1/sessions/{id}. The backend
-// also closes a session when its signaling socket drops, so failures are
-// non-fatal. See createGlassSession's doc comment for apiToken's caveats.
+// also closes a session once its last connection has been gone for the
+// reconnect grace, so failures are non-fatal. See createGlassSession's doc
+// comment for apiToken's caveats.
 export function deleteGlassSession(
   id: string,
   baseUrl = "",
@@ -368,6 +385,26 @@ export async function mintConnectionGrant(
   return res.json();
 }
 
+// A session's lifetime, as a client sees it:
+//
+// - A session lives until disconnect() is called (which also DELETEs it when
+//   deleteSessionOnClose is on), DELETE /v1/sessions/{id} is sent, or its
+//   last connection has been gone for the runtime's reconnect grace
+//   (GLASS_RECONNECT_GRACE_SECONDS, 60 s by default).
+// - Leaving the page - a reload, a closed tab, navigating away - does NOT end
+//   the session. The browser closes the signaling socket, Glass cannot tell
+//   that from a network drop, and holds the session for the reconnect grace.
+//   While held, its remote page is kept as it was and hidden, so it costs
+//   little CPU, but it still counts against the runtime's session capacity.
+// - Connecting to the same signalingUrl within the grace resumes that
+//   session, its page as it was. This is how a reloaded tab gets back to its
+//   session: keep the session's id and signalingUrl (in sessionStorage, say,
+//   which is per tab) and connect with them on load; create a new session
+//   only if that fails. After the grace the session is gone, and connecting
+//   fails with "session not found".
+// - To end a session at once (the user signs out, the app is done with it),
+//   call disconnect(); a page that is about to unload cannot reliably send
+//   anything, so do it while the page is still in use.
 export class GlassClient extends Emitter<GlassClientEventMap> {
   private readonly core: ClientCore;
 
@@ -375,7 +412,6 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
     super();
     this.core = new ClientCore(options, ((event: keyof GlassClientEventMap, ...args: unknown[]) =>
       (this.emit as (e: keyof GlassClientEventMap, ...a: unknown[]) => void)(event, ...args)) as Emit);
-    lifecycle.installUnloadHandler(this.core);
   }
 
   // Connect to the session. Resolves once the peer connection is established
