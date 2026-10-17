@@ -13,6 +13,7 @@ docker run -d --name glass \
   -p 127.0.0.1:8080:8080 \
   -p 50000:50000/udp \
   --shm-size=1g \
+  -v glass-cache:/home/glass/.cache/glass \
   -e GLASS_INSECURE_LOCAL_DEV=true \
   -e GLASS_WEBRTC_NAT_1TO1_IPS=127.0.0.1 \
   ghcr.io/majorbeard/glass
@@ -23,6 +24,10 @@ What the flags do:
 - `-p 127.0.0.1:8080:8080`: the HTTP API, reachable only from this machine.
 - `-p 50000:50000/udp`: WebRTC media. Without it, connections hang.
 - `--shm-size=1g`: shared memory for Chrome.
+- `-v glass-cache:...`: keeps what the container downloads at its first
+  start, Chrome from Google (about 120 MB) and the OpenH264 encoder from
+  Cisco, so later containers don't download them again. `docker logs glass`
+  shows the downloads.
 - `GLASS_INSECURE_LOCAL_DEV=true`: run without an API token. This is safe only
   because of the `127.0.0.1` binding above.
 - `GLASS_WEBRTC_NAT_1TO1_IPS=127.0.0.1`: tells Glass that clients reach it on
@@ -95,6 +100,7 @@ docker rm -f glass
 export GLASS_API_TOKEN=$(openssl rand -hex 32)
 docker run -d --name glass \
   -p 8080:8080 -p 50000:50000/udp --shm-size=1g \
+  -v glass-cache:/home/glass/.cache/glass \
   -e GLASS_API_TOKEN \
   -e GLASS_WEBRTC_NAT_1TO1_IPS=127.0.0.1 \
   ghcr.io/majorbeard/glass

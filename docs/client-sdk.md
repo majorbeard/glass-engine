@@ -22,10 +22,19 @@ backend instead, so the API token never reaches a browser. The helpers are
 for development and for backends written in TypeScript.
 
 ```ts
-createGlassSession(baseUrl?, apiToken?, audioInput?): Promise<GlassSession>
+createGlassSession(baseUrl?, apiToken?, options?): Promise<GlassSession>
 deleteGlassSession(id, baseUrl?, apiToken?): void
 mintConnectionGrant(sessionId, capabilities, baseUrl?, apiToken?): Promise<GlassConnectionGrant>
 ```
+
+`createGlassSession`'s third argument is either `true` (the
+microphone-capable browser, as before) or an options object,
+`GlassCreateSessionOptions`: `{ audioInput?: boolean, contentHint?: "detail" | "motion" }`.
+`contentHint` (`GlassContentHint`) chooses what the session protects when
+bitrate or CPU is short: `"detail"` keeps the size and lowers the frame rate
+(text, interfaces), `"motion"` keeps the frame rate and lowers the size
+(video, games). Absent, the runtime's default (`GLASS_CONTENT_HINT`) applies;
+the returned `GlassSession` carries the hint in effect.
 
 `createGlassSession` refuses a server whose `protocolVersion` is newer than
 `SUPPORTED_PROTOCOL_VERSION`, rather than connecting and failing in confusing
@@ -74,6 +83,27 @@ await client.connect();
 | `closed(reason)` | Final: the session ended, doesn't exist (`4404`), or retries ran out. |
 | `error(message)` | A non-fatal error from Glass (for example, the encoder failed). |
 | `stats(stats)` | RTT, throughput, jitter buffer, decoded and dropped frames. |
+
+### A session's lifetime
+
+- A session lives until `disconnect()` is called (which also deletes it when
+  `deleteSessionOnClose` is on), `DELETE /v1/sessions/{id}` is sent, or its
+  last connection has been gone for the reconnect grace
+  (`GLASS_RECONNECT_GRACE_SECONDS`, 60 s by default).
+- **Leaving the page does not end the session.** A reload, a closed tab or
+  navigating away closes the connection the same way a network drop does, so
+  Glass holds the session for the grace. While it is held, its remote page is
+  kept as it was and hidden, so it costs little CPU, but it still counts
+  against the session limit.
+- Connecting to the same `signalingUrl` within the grace resumes the session,
+  page and all. That is how a reloaded tab gets back to its session: keep the
+  session's `id` and `signalingUrl` (in `sessionStorage`, which is per tab),
+  connect with them on load, and create a new session only if that fails.
+  After the grace, connecting fails with `closed` (`4404`, session not found).
+  The reference viewer does exactly this.
+- To end a session at once (the user signs out, the app is done with it),
+  call `disconnect()` while the page is still in use; a page that is
+  unloading can't reliably send anything.
 
 ### Control and sharing
 
@@ -199,5 +229,8 @@ built on the SDK: address bar, loading and error states, downloads, uploads
 and microphone prompts. By default it creates a browser session; to watch an
 existing session (a relay stream, say), open it with
 `?attachSessionId=<id>&attachSignalingUrl=<url-encoded signalingUrl>`.
-Configure it with `VITE_GLASS_ADDR` and, for local testing only,
+A reload rejoins the tab's own session (see
+[A session's lifetime](#a-sessions-lifetime)). `?contentHint=detail` or
+`?contentHint=motion` (or `VITE_GLASS_CONTENT_HINT`) creates its session with
+that hint. Configure it with `VITE_GLASS_ADDR` and, for local testing only,
 `VITE_GLASS_API_TOKEN`.

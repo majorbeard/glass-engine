@@ -35,7 +35,14 @@ session limit. A session that nobody connects to within 30 s is closed so it
 can't hold a browser.
 
 Send `{"audioInput": true}` as the body to get a browser that can receive the
-viewer's microphone (see [Microphone](#microphone)).
+viewer's microphone (see [Microphone](#microphone)), and `"contentHint":
+"detail"` or `"motion"` to choose what the session protects when bitrate or
+CPU is short: the size (text, interfaces) or the frame rate (video, games).
+
+A session outlives its viewer's page: a reload or a closed tab holds it for
+the reconnect grace (60 s by default) with its page hidden, and the same
+`signalingUrl` resumes it. See
+[client-sdk.md](../client-sdk.md#a-sessions-lifetime).
 
 ## Connecting a viewer
 
@@ -188,6 +195,8 @@ scripts are doing without DevTools access.
   Glass runs on a residential connection.
 - **GPU-heavy pages.** Without a GPU, Chrome renders WebGL in software, which
   costs CPU and can be slow on 3D-heavy pages.
+- **DRM-protected video** (streaming services that use Widevine) doesn't
+  play: the browser's Widevine module is removed.
 - **Dragging files from the viewer's desktop into the page** isn't supported.
   Use the upload flow above.
 - **A right- or middle-button drag** arrives at the page as a left-button

@@ -11,9 +11,10 @@ Running Glass anywhere other than your own laptop. The short version:
 ## Docker
 
 The image `ghcr.io/majorbeard/glass` (linux/amd64 and linux/arm64) contains
-everything: the engine, Chrome, and the video and audio encoders. It runs as
-an unprivileged user with an init process that reaps Chrome's child
-processes.
+the engine, the video and audio encoders, and the system libraries Chrome
+needs. Chrome itself and Cisco's OpenH264 library are downloaded by each
+container at start (below). It runs as an unprivileged user with an init
+process that reaps Chrome's child processes.
 
 ```sh
 docker run -d --name glass \
@@ -21,6 +22,7 @@ docker run -d --name glass \
   --shm-size=2g \
   -p 8080:8080 \
   -p 50000:50000/udp \
+  -v glass-cache:/home/glass/.cache/glass \
   --env-file /etc/glass/env \
   ghcr.io/majorbeard/glass:<version>
 ```
@@ -43,13 +45,47 @@ services:
     ports:
       - "8080:8080"
       - "50000:50000/udp"
+    volumes:
+      - glass-cache:/home/glass/.cache/glass
     env_file: /etc/glass/env
+volumes:
+  glass-cache:
 ```
 
-- **Outbound access at startup.** On each container start, the image downloads
-  Cisco's OpenH264 library directly from Cisco (`ciscobinary.openh264.org`),
-  as Cisco's licensing of that binary requires, and verifies its checksum. The
-  host needs outbound HTTP to that address when the container starts.
+- **Downloads at start.** A container downloads what the image does not
+  ship, directly from the publisher, into `/home/glass/.cache/glass`:
+  - Google's Chrome for Testing, at the version the image pins, from
+    `storage.googleapis.com`, under
+    [Google's terms](https://www.google.com/chrome/terms/): the headless
+    browser (about 120 MB), and the full browser (about 190 MB) only when
+    `GLASS_CHROME_BIN` or `GLASS_MIC_POOL_CHROME_BIN` names
+    `/usr/local/bin/chrome-full`. The full browser's Widevine module is
+    removed, so DRM-protected video does not play.
+  - Cisco's OpenH264 library from `ciscobinary.openh264.org`, as Cisco's
+    licensing of that binary requires (not with `GLASS_OPENH264_MODE=off`).
+
+  Every download is checked against checksums the image carries, and every
+  start checks the cached Chrome file by file against the image's record of
+  it; anything that differs is downloaded again. With the `glass-cache`
+  volume a host downloads each version once (the first start takes about
+  half a minute longer on a fast link); without it, every new container
+  downloads again. A host whose network comes up late is retried for about
+  six minutes before the container gives up.
+- **No internet at start.** Fill the cache volume on a host that can reach
+  Google and Cisco, then use that volume (or a copy of it) on the host that
+  can't:
+
+  ```sh
+  docker run --rm -v glass-cache:/home/glass/.cache/glass ghcr.io/majorbeard/glass:<version> download
+  ```
+
+  `download` fetches both Chrome builds and OpenH264, then exits. Or set
+  `GLASS_CHROME_BIN` to a Chrome you provide; nothing is downloaded for it.
+- **License check at startup.** If the license server can't be reached when
+  the container starts, Glass retries for about 30 s, then keeps the tier it
+  last validated (up to 7 days old) from `GLASS_LICENSE_CACHE_PATH`, which by
+  default is in the same cache folder. The `glass-cache` volume therefore
+  also carries a paid tier across re-creating the container during an outage.
 - **Pin a version** in production rather than `latest`.
 - **`--shm-size` matters.** Docker's default 64 MB of shared memory is far too
   little for Chrome: video-heavy pages crash the browser a few seconds in.
@@ -59,7 +95,11 @@ services:
   default), closing sessions and browsers cleanly.
 - **Health checks.** `/healthz` is liveness; `/readyz` is readiness (it
   returns `503` until a browser answers). The image's own health check uses
-  `/readyz`.
+  `/readyz`, and counts failures only after a 15-minute start period, to
+  allow for a first start's downloads on a slow link; it reports healthy as
+  soon as a check passes.
+- **Third-party notices** are in the image at
+  `/usr/share/doc/glass/THIRD_PARTY_NOTICES`, which says where each one is.
 - **Upgrading.** Pull the new tag and recreate the container with the same
   environment. Recreate, don't restart, after changing environment variables.
 
