@@ -43,9 +43,15 @@ interface GlassInputDrop {
     local: boolean;
     seq?: number;
 }
+type GlassContentHint = "detail" | "motion";
+interface GlassCreateSessionOptions {
+    audioInput?: boolean;
+    contentHint?: GlassContentHint;
+}
 interface GlassSession {
     id: string;
     signalingUrl: string;
+    contentHint?: GlassContentHint;
     protocolVersion?: number;
     sourceType?: string;
     capabilities?: GlassCapabilities;
@@ -263,7 +269,7 @@ type GlassClientEventMap = {
  */
 declare const CLOSE_SESSION_NOT_FOUND = 4404;
 declare const SUPPORTED_PROTOCOL_VERSION = 1;
-declare function createGlassSession(baseUrl?: string, apiToken?: string, audioInput?: boolean): Promise<GlassSession>;
+declare function createGlassSession(baseUrl?: string, apiToken?: string, options?: boolean | GlassCreateSessionOptions): Promise<GlassSession>;
 declare function deleteGlassSession(id: string, baseUrl?: string, apiToken?: string): void;
 declare function mintConnectionGrant(sessionId: string, capabilities: Partial<GlassConnectionCapabilities>, baseUrl?: string, apiToken?: string): Promise<GlassConnectionGrant>;
 declare class GlassClient extends Emitter<GlassClientEventMap> {
@@ -320,6 +326,8 @@ export {
     type GlassClientOptions,
     type GlassConnectionCapabilities,
     type GlassConnectionGrant,
+    type GlassContentHint,
+    type GlassCreateSessionOptions,
     type GlassInputDrop,
     type GlassInputDropCode,
     GlassProducer,

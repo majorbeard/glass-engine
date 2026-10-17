@@ -59,6 +59,21 @@ export const API_TOKEN = import.meta.env.VITE_GLASS_API_TOKEN as string | undefi
 // end-to-end, not a real product setting.
 export const AUDIO_INPUT = import.meta.env.VITE_GLASS_AUDIO_INPUT === "true";
 
+// The content hint a new session is created with: "detail" (text and
+// interfaces: keep the size, lower the frame rate when bitrate is short) or
+// "motion" (video and games: keep the frame rate, lower the size). Taken
+// from the page's own ?contentHint= so two tabs can be compared, then from
+// the build; absent, the runtime's default applies.
+function readContentHint(): "detail" | "motion" | undefined {
+  const fromUrl =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("contentHint")
+      : null;
+  const value = fromUrl || (import.meta.env.VITE_GLASS_CONTENT_HINT as string | undefined);
+  return value === "detail" || value === "motion" ? value : undefined;
+}
+export const CONTENT_HINT = readContentHint();
+
 // Dev-testing-only knobs for @glass/client's internal, undocumented trace
 // diagnostics (see index.ts's InternalGlassClientOptions/
 // traceReportIntervalMs/pixelTraceEnabled doc comments - deliberately not
