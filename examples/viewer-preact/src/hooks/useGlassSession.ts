@@ -10,6 +10,7 @@ import {
 import {
   API_TOKEN,
   AUDIO_INPUT,
+  CODEC,
   CONTENT_HINT,
   DECODE_READBACK_ENABLED,
   ENCODED_STREAM_CHECK_ENABLED,
@@ -177,6 +178,7 @@ export function useGlassSession(notify: Notify) {
           session = await createGlassSession(GLASS_ADDR, API_TOKEN, {
             audioInput: AUDIO_INPUT,
             contentHint: CONTENT_HINT,
+            codec: CODEC,
           });
         } catch (err: any) {
           if (!cancelled) setError(`Failed to create session: ${err.message}`);

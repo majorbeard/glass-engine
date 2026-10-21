@@ -44,6 +44,12 @@ describe("createGlassSession options", () => {
     expect(postedBody(fetchMock)).toEqual({ audioInput: true, contentHint: "detail" });
   });
 
+  it("posts the codec", async () => {
+    const fetchMock = stubFetch();
+    await createGlassSession("http://host", undefined, { codec: "vp8", contentHint: "detail" });
+    expect(postedBody(fetchMock)).toEqual({ codec: "vp8", contentHint: "detail" });
+  });
+
   it("posts no body for an options object that asks for nothing", async () => {
     const fetchMock = stubFetch();
     await createGlassSession("http://host", undefined, {});

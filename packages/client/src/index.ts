@@ -35,6 +35,7 @@ import type {
   GlassSlotState,
   GlassContentHint,
   GlassCreateSessionOptions,
+  GlassVideoCodec,
   GlassSession,
   GlassStats,
   InteractiveElement,
@@ -68,6 +69,7 @@ export type {
   GlassSlotState,
   GlassContentHint,
   GlassCreateSessionOptions,
+  GlassVideoCodec,
   GlassSession,
   GlassStats,
   InteractiveElement,
@@ -278,18 +280,20 @@ export const SUPPORTED_PROTOCOL_VERSION = 1;
 //
 // The third argument is either that flag alone, as it has always been, or
 // an options object, which can also carry the session's content hint (see
-// GlassContentHint). The runtime refuses a hint it does not know.
+// GlassContentHint) and video codec (see GlassVideoCodec). The runtime
+// refuses a hint it does not know, and a codec it cannot serve.
 export async function createGlassSession(
   baseUrl = "",
   apiToken?: string,
   options: boolean | GlassCreateSessionOptions = false
 ): Promise<GlassSession> {
-  const { audioInput = false, contentHint } =
+  const { audioInput = false, contentHint, codec } =
     typeof options === "boolean" ? { audioInput: options } : options;
   // No body at all when nothing is asked for, as before.
   const body: Record<string, unknown> = {};
   if (audioInput) body.audioInput = true;
   if (contentHint) body.contentHint = contentHint;
+  if (codec) body.codec = codec;
   const hasBody = Object.keys(body).length > 0;
   const res = await fetch(`${baseUrl}/v1/sessions`, {
     method: "POST",

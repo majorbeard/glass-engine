@@ -101,12 +101,22 @@ export interface GlassInputDrop {
 // (the MediaStreamTrack content hint).
 export type GlassContentHint = "detail" | "motion";
 
-// Options for createGlassSession. Both are optional.
+// The video codec a session is encoded with. Which ones a runtime can
+// serve, and its default, are in GET /v1/info's "codecs".
+// AV1 has the sharpest picture at low bitrates and costs the most CPU to
+// encode; not every viewer can decode it (Safari only with AV1 hardware).
+export type GlassVideoCodec = "h264" | "vp8" | "av1";
+
+// Options for createGlassSession. All are optional.
 export interface GlassCreateSessionOptions {
   // Requests the mic-capable browser pool. See createGlassSession.
   audioInput?: boolean;
   // Absent, the session uses the runtime's own default.
   contentHint?: GlassContentHint;
+  // Absent, the session uses the runtime's default codec. A codec the
+  // runtime cannot serve is refused (the session is not created), never
+  // replaced by another.
+  codec?: GlassVideoCodec;
 }
 
 // Returned by createGlassSession / the backend's POST /v1/sessions.
@@ -116,6 +126,9 @@ export interface GlassSession {
   // The content hint the session is running with. Absent from runtimes that
   // predate it and from sources that have none.
   contentHint?: GlassContentHint;
+  // The video codec the session is encoded with. Absent from runtimes that
+  // predate per-session codecs and from sources that do not encode video.
+  codec?: GlassVideoCodec;
   // Major version of the public wire contract. Absent from runtimes predating
   // the handshake, which are treated as version 1. See createGlassSession.
   protocolVersion?: number;
