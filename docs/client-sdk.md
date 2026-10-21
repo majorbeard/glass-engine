@@ -29,12 +29,20 @@ mintConnectionGrant(sessionId, capabilities, baseUrl?, apiToken?): Promise<Glass
 
 `createGlassSession`'s third argument is either `true` (the
 microphone-capable browser, as before) or an options object,
-`GlassCreateSessionOptions`: `{ audioInput?: boolean, contentHint?: "detail" | "motion" }`.
+`GlassCreateSessionOptions`: `{ audioInput?: boolean, contentHint?: "detail" | "motion", codec?: "h264" | "vp8" | "av1" }`.
 `contentHint` (`GlassContentHint`) chooses what the session protects when
 bitrate or CPU is short: `"detail"` keeps the size and lowers the frame rate
 (text, interfaces), `"motion"` keeps the frame rate and lowers the size
 (video, games). Absent, the runtime's default (`GLASS_CONTENT_HINT`) applies;
 the returned `GlassSession` carries the hint in effect.
+
+`codec` (`GlassVideoCodec`) is the session's video codec, fixed for its life.
+Absent, the runtime's default applies. A codec the runtime cannot serve is
+refused: the promise rejects with the runtime's reason, and no session is
+created. `GET /v1/info`'s `codecs` lists what it serves; the returned
+`GlassSession` carries the codec in `codec`. AV1 has the sharpest picture at
+low bitrates; check that the viewer can decode it before asking (Safari only
+can on devices with AV1 hardware).
 
 `createGlassSession` refuses a server whose `protocolVersion` is newer than
 `SUPPORTED_PROTOCOL_VERSION`, rather than connecting and failing in confusing
@@ -232,5 +240,7 @@ existing session (a relay stream, say), open it with
 A reload rejoins the tab's own session (see
 [A session's lifetime](#a-sessions-lifetime)). `?contentHint=detail` or
 `?contentHint=motion` (or `VITE_GLASS_CONTENT_HINT`) creates its session with
-that hint. Configure it with `VITE_GLASS_ADDR` and, for local testing only,
+that hint, and `?codec=h264`, `vp8` or `av1` (or `VITE_GLASS_CODEC`) with
+that codec; a reload keeps the session's codec, so open a new tab to switch.
+Configure it with `VITE_GLASS_ADDR` and, for local testing only,
 `VITE_GLASS_API_TOKEN`.

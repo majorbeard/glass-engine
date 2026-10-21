@@ -167,8 +167,9 @@ their publishers when it starts:
 - **OpenH264:** OpenH264 Video Codec provided by Cisco Systems, Inc., from
   Cisco, under Cisco's binary licence (reproduced in the image at
   `/usr/share/doc/glass/licenses/openh264/BINARY_LICENSE.txt`). To leave it
-  out, set `GLASS_OPENH264_MODE=off` with `GLASS_VP8_SHIM_MODE=on`; Glass
-  then downloads nothing from Cisco and encodes VP8. See
+  out, set `GLASS_OPENH264_MODE=off` with `GLASS_VP8_SHIM_MODE=on` or
+  `GLASS_AV1_SHIM_MODE=on`; Glass then downloads nothing from Cisco and
+  encodes VP8 or AV1. See
   [docs/configuration.md](docs/configuration.md#encoding).
 
 ## Built on
@@ -187,6 +188,7 @@ projects.
 | [Chromium](https://www.chromium.org) / [Chrome for Testing](https://googlechromelabs.github.io/chrome-for-testing/) | the hosted browser (downloaded from Google at start) | BSD-3-Clause and its components; Google's terms for Chrome for Testing |
 | [OpenH264](https://www.openh264.org) | H.264 encoding (the library is downloaded from Cisco at start) | BSD-2-Clause; Cisco's binary licence |
 | [libvpx](https://chromium.googlesource.com/webm/libvpx) | VP8 encoding | BSD-3-Clause |
+| [SVT-AV1](https://gitlab.com/AOMediaCodec/SVT-AV1) | AV1 encoding | BSD-3-Clause-Clear; Alliance for Open Media Patent License 1.0 |
 | [Opus](https://opus-codec.org) | audio encoding and decoding | BSD-3-Clause |
 | [libjpeg-turbo](https://libjpeg-turbo.org) | decoding the browser's captured frames | IJG, BSD-3-Clause, zlib |
 | [NVIDIA Video Codec SDK](https://developer.nvidia.com/video-codec-sdk) headers, via [nv-codec-headers](https://github.com/FFmpeg/nv-codec-headers) | GPU encoding (NVENC) | MIT |
