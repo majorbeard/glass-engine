@@ -44,14 +44,17 @@ interface GlassInputDrop {
     seq?: number;
 }
 type GlassContentHint = "detail" | "motion";
+type GlassVideoCodec = "h264" | "vp8" | "av1";
 interface GlassCreateSessionOptions {
     audioInput?: boolean;
     contentHint?: GlassContentHint;
+    codec?: GlassVideoCodec;
 }
 interface GlassSession {
     id: string;
     signalingUrl: string;
     contentHint?: GlassContentHint;
+    codec?: GlassVideoCodec;
     protocolVersion?: number;
     sourceType?: string;
     capabilities?: GlassCapabilities;
@@ -338,6 +341,7 @@ export {
     type GlassSession,
     type GlassSlotState,
     type GlassStats,
+    type GlassVideoCodec,
     type InputLatencySample,
     type InputLatencyStats,
     type InputLatencySummary,

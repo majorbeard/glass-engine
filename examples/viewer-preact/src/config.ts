@@ -1,3 +1,5 @@
+import type { GlassVideoCodec } from "@glass/client";
+
 // The example's build-time configuration (Vite env vars).
 
 // This example runs standalone (`npm run dev`), a genuinely different origin
@@ -73,6 +75,20 @@ function readContentHint(): "detail" | "motion" | undefined {
   return value === "detail" || value === "motion" ? value : undefined;
 }
 export const CONTENT_HINT = readContentHint();
+
+// The video codec a new session is created with: "h264", "vp8" or "av1".
+// Taken from the page's own ?codec= so two tabs can be compared, then from
+// the build; absent, the runtime's default applies. The runtime refuses a
+// codec it cannot serve, and the viewer shows that error.
+function readCodec(): GlassVideoCodec | undefined {
+  const fromUrl =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("codec")
+      : null;
+  const value = fromUrl || (import.meta.env.VITE_GLASS_CODEC as string | undefined);
+  return value === "h264" || value === "vp8" || value === "av1" ? value : undefined;
+}
+export const CODEC = readCodec();
 
 // Dev-testing-only knobs for @glass/client's internal, undocumented trace
 // diagnostics (see index.ts's InternalGlassClientOptions/
