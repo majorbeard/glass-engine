@@ -58,7 +58,8 @@ change between releases.
 | `GLASS_TURN_URLS` | unset | Comma-separated TURN/TURNS URLs. |
 | `GLASS_TURN_USERNAME`, `GLASS_TURN_CREDENTIAL` | unset | TURN credentials. |
 | `GLASS_CORS_ORIGINS` | unset | Extra browser origins allowed, exact match, comma-separated. Loopback and private-network origins are always allowed. |
-| `GLASS_TRUSTED_PROXIES` | loopback | IPs or CIDRs of reverse proxies whose `X-Forwarded-For` is trusted. |
+| `GLASS_TRUSTED_PROXIES` | loopback | IPs or CIDRs of reverse proxies whose `X-Forwarded-For` and `X-Forwarded-Host` are trusted. |
+| `GLASS_PUBLIC_URL` | the request's own host | The address viewers reach Glass at, such as `https://glass.example.com`: the host and scheme of the signaling URLs Glass hands out. Set it behind a proxy that rewrites `Host`. See [deployment.md](deployment.md#the-address-viewers-are-given). |
 | `GLASS_WEBRTC_UDP_PORT_MIN`, `_MAX` | unset | Deprecated per-connection port range; used only when set without `GLASS_WEBRTC_UDP_PORT`. |
 
 ## Hosted browser
@@ -76,10 +77,13 @@ change between releases.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GLASS_VP8_SHIM_MODE` | off | `on` encodes VP8 instead of H.264, for every session in the process. Relay producers and call peers must then send VP8. |
-| `GLASS_OPENH264_MODE` | on | `off` leaves out Cisco's OpenH264 (OpenH264 Video Codec provided by Cisco Systems, Inc.): nothing is downloaded from Cisco at start, and every session encodes VP8. Requires `GLASS_VP8_SHIM_MODE=on`; GPU encoding is then unused (it encodes H.264). |
+| `GLASS_DEFAULT_CODEC` | `vp8` with `GLASS_VP8_SHIM_MODE=on`, else `h264` | The video codec of a browser session whose request names none: `h264`, `vp8` or `av1`. It must be available, or Glass does not start. A session can ask for its own (`codec`, see [protocol.md](protocol.md)); `GET /v1/info` lists what this host can serve. |
+| `GLASS_VP8_SHIM_MODE` | off | `on` makes VP8 available to browser sessions, and the default codec when `GLASS_DEFAULT_CODEC` is not set. Relay producers and call peers send the default codec. |
+| `GLASS_AV1_SHIM_MODE` | off | `on` makes AV1 available to browser sessions: the sharpest picture at low bitrates, scrolled text above all, for about the CPU of H.264 on a modern host. Not every viewer decodes AV1 (Safari only with AV1 hardware). |
+| `GLASS_OPENH264_MODE` | on | `off` leaves out Cisco's OpenH264 (OpenH264 Video Codec provided by Cisco Systems, Inc.): nothing is downloaded from Cisco at start, and H.264 is not available. Another codec must be (`GLASS_VP8_SHIM_MODE=on` or `GLASS_AV1_SHIM_MODE=on`); GPU encoding is then unused (it encodes H.264). |
 | `GLASS_NVENC_SHIM_MAX_SESSIONS` | `0` | Browser sessions encoded on an NVIDIA GPU. `0` disables GPU encoding. |
 | `GLASS_OPENH264_SHIM_BIN_PATH`, `GLASS_OPENH264_LIB_PATH` | set in Docker | The H.264 encoder. Required unless `GLASS_OPENH264_MODE=off`; there is no other fallback. |
+| `GLASS_VP8_SHIM_BIN_PATH`, `GLASS_AV1_SHIM_BIN_PATH` | set in Docker | The VP8 and AV1 encoders. |
 | `GLASS_CONTENT_HINT` | `detail` | What a browser session protects when bitrate or the encoder's CPU is short: `detail` keeps the size and lowers the frame rate (text, interfaces); `motion` keeps the frame rate and lowers the size (video, games). A session can set its own on creation (`contentHint`, see [protocol.md](protocol.md)). |
 | `GLASS_QUALITY_SCALER` | `false` | `true` also adapts the picture when the bitrate can't carry it; `GLASS_CONTENT_HINT` chooses how. |
 | `GLASS_QUALITY_SCALER_MIN_PERCENT` | `37` | Lowest resolution scale the quality scaler may choose, in percent. |

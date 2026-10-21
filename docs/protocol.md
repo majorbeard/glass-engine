@@ -38,14 +38,14 @@ which accept the per-session `?token=` from the URLs Glass returns.
 |---|---|---|
 | `GET` | `/healthz` | `200 {"status":"ok"}` whenever the process is up. |
 | `GET` | `/readyz` | `200` when at least one pooled browser answers, else `503`. Body: `{"status","browsers":{…},"diskFreeMB":{…},"diskLow"}`. Disk fields are informational. |
-| `GET` | `/v1/info` | `{"sessions":{"active","relayActive","callActive","capacity"},"capacity":{"licensedMax","configuredCap","effectiveCeiling","hardCapEnabled","currentCpuPercent",…},"license":{"tier","sessionLimit"},"protocolVersion","uptimeSeconds"}`. `license.tier` is the tier actually in effect; `capacity.effectiveCeiling` is how many sessions can be admitted right now. |
+| `GET` | `/v1/info` | `{"sessions":{"active","relayActive","callActive","capacity"},"capacity":{"licensedMax","configuredCap","effectiveCeiling","hardCapEnabled","currentCpuPercent",…},"license":{"tier","sessionLimit"},"protocolVersion","uptimeSeconds","codecs":{"available","default"}}`. `codecs` lists the video codecs a browser session may ask for, and the one it gets without asking. `license.tier` is the tier actually in effect; `capacity.effectiveCeiling` is how many sessions can be admitted right now. |
 
 ### Browser sessions
 
 | Method | Path | Response |
 |---|---|---|
-| `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities, contentHint}`. Optional body fields: `"audioInput": true`; `"contentHint": "detail"` or `"motion"` (anything else is `400`). `503` at capacity. |
-| `GET` | `/v1/sessions/{id}` | `{id, state: "pending"\|"active"\|"closed", createdAt, connectedAt?}`, or `404`. |
+| `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities, contentHint, codec}`. Optional body fields: `"audioInput": true`; `"contentHint": "detail"` or `"motion"` (anything else is `400`); `"codec": "h264"`, `"vp8"` or `"av1"` (one this host cannot serve is `400` with the reason, never served as another codec). `503` at capacity. |
+| `GET` | `/v1/sessions/{id}` | `{id, state: "pending"\|"active"\|"closed", createdAt, connectedAt?, codec?}`, or `404`. |
 | `DELETE` | `/v1/sessions/{id}` | `204`, or `404`. |
 | `GET` | `/v1/sessions/{id}/signaling` | WebSocket upgrade. |
 | `POST` | `/v1/sessions/{id}/connections` | Mint a grant. Body: any of `consumesMedia`, `producesMedia`, `producesInput` (booleans). `201 {signalingUrl, connectionCapabilities}`. `consumesInput` is reserved: `400`. |
@@ -82,12 +82,17 @@ which accept the per-session `?token=` from the URLs Glass returns.
   `inputActions` (the exact input `type`s the source accepts). Unknown keys are
   additions, not errors.
 - `sourceType`: `"browser"`, `"relay"` or `"call"`.
-- `videoCodec` (relay, call): `"h264"` or `"vp8"`. Producers and call peers
-  must send it.
+- `videoCodec` (relay, call): `"h264"` or `"vp8"`, the host's default
+  codec. Producers and call peers must send it.
 - `contentHint` (browser): the hint in effect, `"detail"` or `"motion"`:
   what the session protects when bitrate or CPU is short (the size, or the
   frame rate). The request's own, or the runtime's default
   (`GLASS_CONTENT_HINT`).
+- `codec` (browser): the session's video codec, `"h264"`, `"vp8"` or
+  `"av1"`, fixed for its life: the request's own, or the runtime's default
+  (`GLASS_DEFAULT_CODEC`). The runtime cannot know what the viewer decodes:
+  a client that asks for AV1 checks first (Safari decodes AV1 only on
+  devices with AV1 hardware).
 
 ### WebSocket close codes
 

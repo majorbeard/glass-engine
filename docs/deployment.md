@@ -249,6 +249,24 @@ Setting it replaces the default. If every client seems to share one rate
 limit, this is usually what's missing; Glass logs a warning naming the
 untrusted peer.
 
+### The address viewers are given
+
+Creating a session returns a `signalingUrl` for the viewer to connect to.
+Glass builds it from, in order:
+
+1. `GLASS_PUBLIC_URL`, when set, for example
+   `GLASS_PUBLIC_URL=https://glass.example.com`. Only its scheme and host
+   are used (`https` gives `wss://`): clients reach the whole API at that
+   origin.
+2. `X-Forwarded-Host`, when the request came through a trusted proxy (above).
+3. The request's own `Host`.
+
+A proxy that keeps the original `Host`, as Caddy's `reverse_proxy` does,
+needs neither. Set `GLASS_PUBLIC_URL` behind a proxy that rewrites `Host` to
+its own upstream address, such as a hosting provider's built-in HTTPS
+proxy. The sign that you need it: sessions are created, but viewers never
+connect, and the `signalingUrl` names an internal address.
+
 ## Allowing your frontend (CORS)
 
 Glass accepts browser requests and WebSockets from loopback and private-network

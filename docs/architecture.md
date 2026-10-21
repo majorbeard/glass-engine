@@ -41,7 +41,7 @@ smooths bursts onto the network.
 ## Hosted browser
 
 ```text
-Chrome (headless) ──screen frames──► encoder process ──H.264/VP8──► shared video track ──► viewers
+Chrome (headless) ──screen frames──► encoder process ──H.264/VP8/AV1──► shared video track ──► viewers
        ▲                                                                   │
        └──── input events ◄── validation ◄── DataChannel ◄─────────────────┘
 ```
@@ -51,7 +51,8 @@ Chrome (headless) ──screen frames──► encoder process ──H.264/VP8�
   sends periodic keyframes so a joining or recovering viewer still gets a
   picture.
 - **Encode.** Frames go to an encoder that runs as a separate process:
-  OpenH264 by default, VP8 when enabled, NVIDIA NVENC when a GPU is configured.
+  OpenH264 by default; VP8 and AV1 (SVT-AV1) when enabled, chosen per session;
+  NVIDIA NVENC for H.264 when a GPU is configured.
   Keeping encoders out of process means an encoder crash restarts only that
   encoder, with backoff, while the session stays up.
 - **Fan-out.** One encode per session, shared by every viewer. Quality
