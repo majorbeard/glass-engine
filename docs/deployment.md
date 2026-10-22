@@ -56,11 +56,16 @@ volumes:
   ship, directly from the publisher, into `/home/glass/.cache/glass`:
   - Google's Chrome for Testing, at the version the image pins, from
     `storage.googleapis.com`, under
-    [Google's terms](https://www.google.com/chrome/terms/): the headless
-    browser (about 120 MB), and the full browser (about 190 MB) only when
-    `GLASS_CHROME_BIN` or `GLASS_MIC_POOL_CHROME_BIN` names
-    `/usr/local/bin/chrome-full`. The full browser's Widevine module is
+    [Google's terms](https://www.google.com/chrome/terms/): the full
+    browser (about 190 MB), which every capture method but the screencast
+    draws with, and the headless browser (about 120 MB) only with
+    `GLASS_CAPTURE=screencast`. The full browser's Widevine module is
     removed, so DRM-protected video does not play.
+  - On an NVIDIA GPU host, NVIDIA's X driver modules for the host's own
+    driver version, for the `nvidia` capture method: taken from the
+    driver's installer on NVIDIA's download site (about 380 MB, once per
+    driver version; `GLASS_NVIDIA_XORG_FETCH=off` to mount your own instead). If
+    they can't be had, Glass uses its other capture methods.
   - Cisco's OpenH264 library from `ciscobinary.openh264.org`, as Cisco's
     licensing of that binary requires (not with `GLASS_OPENH264_MODE=off`).
 
@@ -102,6 +107,21 @@ volumes:
   `/usr/share/doc/glass/THIRD_PARTY_NOTICES`, which says where each one is.
 - **Upgrading.** Pull the new tag and recreate the container with the same
   environment. Recreate, don't restart, after changing environment variables.
+
+### GPU hosts
+
+On a host with an NVIDIA GPU, give the container the GPU and NVIDIA's
+capture and encoding libraries:
+
+```sh
+docker run -d --name glass --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all   --restart unless-stopped --shm-size=2g -p 8080:8080 -p 50000:50000/udp   -v glass-cache:/home/glass/.cache/glass --env-file /etc/glass/env   ghcr.io/majorbeard/glass:<version>
+```
+
+Nothing else is needed: with `GLASS_CAPTURE` unset, Glass picks the `nvidia`
+capture method, Chrome draws on the GPU, and the GPU encodes every session.
+`glass doctor` (`docker exec glass docker-entrypoint.sh doctor`) shows the
+method chosen and why any above it was refused. See
+[sources/browser.md](sources/browser.md#how-the-picture-is-captured).
 
 ## Authentication
 

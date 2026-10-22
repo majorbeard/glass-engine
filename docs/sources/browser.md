@@ -1,12 +1,38 @@
 # Hosted browser
 
-Glass runs a headless Chrome per session, streams its screen and audio to
-viewers, and dispatches their input as real browser input events. Pages behave
+Glass runs a Chrome per session, streams its screen and audio to viewers, and
+delivers their input as real input. Pages behave
 as they would on a local machine: `wheel` events are real wheel events, touch
 is real touch, a double-click is a real double-click.
 
 Read [concepts.md](../concepts.md) first; this page covers only what is
 specific to browser sessions.
+
+## How the picture is captured
+
+Each session's Chrome draws on an X display of its own, and its encoder reads
+the page off that display. `GLASS_CAPTURE` picks how (`auto`, the default,
+takes the first that works on the host, checked at start):
+
+| Method | Host | Chrome draws | Encoded by |
+|---|---|---|---|
+| `nvidia` | NVIDIA GPU | on the GPU, through NVIDIA's X driver; the frame stays in GPU memory | NVENC |
+| `display-gpu` | NVIDIA GPU where `nvidia` can't run | on the GPU | NVENC |
+| `display` | any Linux host | in software | OpenH264, VP8 or AV1 |
+| `screencast` | anywhere | in software, captured through Chrome's DevTools protocol | OpenH264, VP8 or AV1 |
+
+`glass doctor` and the start log show which method `auto` chose and why each
+one above it wasn't usable. A session falls back to the screencast by itself
+if its display can't start, or if its viewport outgrows the display
+(`GLASS_DISPLAY_MAX_VIEWPORT`, 2560x1440 by default; 2560x1600 at most with
+`nvidia`). Set `GLASS_CAPTURE=screencast` to keep the screencast for every
+session: it uses less memory per session (see [sizing.md](../sizing.md)) and
+the headless browser.
+
+Compared with the screencast, a display captures a frame in a few
+milliseconds instead of tens, at about half the CPU, and its input is the
+display's own (below). Measurements are in
+[performance.md](../performance.md#the-display-capture).
 
 ## Creating a session
 
@@ -97,9 +123,15 @@ viewer can raise the on-screen keyboard when the user taps one.
 | Input | Notes |
 |---|---|
 | Mouse | Left, right and middle buttons; modifier keys; double and triple click. |
-| Wheel | Horizontal and vertical, with modifiers, at the cursor position. |
-| Keyboard | `key`, `code` and modifiers, as the viewer's browser reports them. |
+| Wheel | Horizontal and vertical, with modifiers, at the cursor position. On a display, in whole wheel steps, as a mouse wheel sends them. |
+| Keyboard | `key`, `code` and modifiers, as the viewer's browser reports them. On a display, a character is typed as the viewer typed it, whatever its keyboard layout. |
 | Touch | Up to 5 touch points, as real touch events. |
+
+On a display the mouse, wheel and keyboard are the display's own input
+devices, so the page can't tell them from a local user's: Chrome scrolls a
+wheel step itself without waiting for the page, and modifier combinations
+such as Shift+wheel behave as they do locally. Touch, and all input on the
+screencast, go through Chrome's input events.
 | Gamepad | Mapped to keyboard and mouse input by the viewer (`gamepadMapping` option). |
 
 Input is accepted only from a connection that holds `producesInput`
@@ -137,7 +169,8 @@ When a page downloads a file, Glass saves it on the server and emits
 `downloadReady(filename, guid)`. Nothing lands on the viewer's device unless
 your app acts on it: show a prompt, and on the user's click open
 `client.downloadUrl(guid)`. A download nobody collects is deleted after
-10 minutes. At most 5 downloads per session can be in progress at once.
+10 minutes. At most 5 downloads per session can be in progress at once. A
+PDF is downloaded too, not opened in Chrome's PDF viewer.
 
 ## Uploads
 
@@ -199,5 +232,12 @@ scripts are doing without DevTools access.
   play: the browser's Widevine module is removed.
 - **Dragging files from the viewer's desktop into the page** isn't supported.
   Use the upload flow above.
-- **A right- or middle-button drag** arrives at the page as a left-button
-  drag between the correct press and release events.
+- **A right- or middle-button drag** on the screencast arrives at the page
+  as a left-button drag between the correct press and release events. On a
+  display it arrives as it was made.
+- **AltGr characters from Windows viewers** (such as `@` on a German
+  keyboard) aren't typed on a display: Windows reports AltGr as Ctrl+Alt,
+  so the key arrives as a shortcut.
+- **On a phone, a text field inside an iframe from another site** (an
+  embedded payment form, say) doesn't keep the on-screen keyboard up: Glass
+  can't see that the field has focus.

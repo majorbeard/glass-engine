@@ -41,15 +41,20 @@ smooths bursts onto the network.
 ## Hosted browser
 
 ```text
-Chrome (headless) ──screen frames──► encoder process ──H.264/VP8/AV1──► shared video track ──► viewers
+Chrome on its own display ──screen──► encoder process ──H.264/VP8/AV1──► shared video track ──► viewers
        ▲                                                                   │
        └──── input events ◄── validation ◄── DataChannel ◄─────────────────┘
 ```
 
-- **Capture.** Chrome paints; Glass receives each changed frame from Chrome's
-  DevTools protocol. A page that isn't changing produces no frames; Glass
-  sends periodic keyframes so a joining or recovering viewer still gets a
-  picture.
+- **Capture.** Each session's Chrome draws on an X display of its own, and
+  the encoder process reads the page straight off that display when it
+  changes. On an NVIDIA GPU host Chrome draws on the GPU and the frame
+  stays in GPU memory from capture to encode. A page that isn't changing
+  produces no frames (one that repaints the same pixels counts as not
+  changing); Glass sends periodic keyframes so a joining or recovering
+  viewer still gets a picture. Where a display can't run, Glass captures
+  through Chrome's DevTools protocol instead (the screencast), as it did
+  before; see [sources/browser.md](sources/browser.md#how-the-picture-is-captured).
 - **Encode.** Frames go to an encoder that runs as a separate process:
   OpenH264 by default; VP8 and AV1 (SVT-AV1) when enabled, chosen per session;
   NVIDIA NVENC for H.264 when a GPU is configured.
@@ -60,7 +65,10 @@ Chrome (headless) ──screen frames──► encoder process ──H.264/VP8/A
   CPU pressure Glass captures fewer frames and lowers resolution before it
   refuses work.
 - **Input.** DataChannel messages are checked (ranges, types, rights) and
-  dispatched to Chrome as real input events: mouse, wheel, keyboard and touch.
+  delivered as real input: on a display, the mouse, wheel and keyboard as the
+  display's own input devices, so Chrome handles them exactly as local
+  input (scrolling included); touch, and everything on the screencast,
+  through Chrome's input events.
 - **Audio** (optional). Each browser plays into its own virtual sound device;
   Glass encodes it to Opus and shares it with every viewer.
 - **Isolation.** Browsers come from a pool and are reused, but each session

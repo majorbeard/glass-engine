@@ -66,7 +66,9 @@ change between releases.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GLASS_CHROME_BIN` | found on `PATH`; in Docker `/usr/local/bin/chrome-headless-shell` | Chrome or `chrome-headless-shell` binary. In Docker, the two image paths (`chrome-headless-shell`, `chrome-full`) are downloaded from Google at start; any other path is used as it is and nothing is downloaded. See [deployment.md](deployment.md#docker). |
+| `GLASS_CAPTURE` | `auto` | How a session's picture is captured: `auto` (the first method that works on this host, checked at start), `nvidia`, `display-gpu`, `display` or `screencast`. See [sources/browser.md](sources/browser.md#how-the-picture-is-captured). |
+| `GLASS_DISPLAY_MAX_VIEWPORT` | `2560x1440` | The largest viewport a session's display holds (`WxH`); a larger one falls back to the screencast. Each display is made this size. |
+| `GLASS_CHROME_BIN` | found on `PATH`; in Docker `/usr/local/bin/chrome-headless-shell` | Chrome or `chrome-headless-shell` binary. In Docker, the two image paths (`chrome-headless-shell`, `chrome-full`) are downloaded from Google at start; any other path is used as it is and nothing is downloaded. Every capture method but `screencast` needs the full browser, so in Docker the headless shell is replaced by `chrome-full` for them. See [deployment.md](deployment.md#docker). |
 | `GLASS_EGRESS_FILTER` | `true` | Block browser connections to private networks. See [deployment.md](deployment.md#security-posture). |
 | `GLASS_AUDIO_MODE` | off | `on` streams browser audio. |
 | `GLASS_MIC_POOL_CHROME_BIN` | unset | Enables microphone-capable sessions. In Docker: `/usr/local/bin/chrome-full`. |
@@ -81,7 +83,7 @@ change between releases.
 | `GLASS_VP8_SHIM_MODE` | off | `on` makes VP8 available to browser sessions, and the default codec when `GLASS_DEFAULT_CODEC` is not set. Relay producers and call peers send the default codec. |
 | `GLASS_AV1_SHIM_MODE` | off | `on` makes AV1 available to browser sessions: the sharpest picture at low bitrates, scrolled text above all, for about the CPU of H.264 on a modern host. Not every viewer decodes AV1 (Safari only with AV1 hardware). |
 | `GLASS_OPENH264_MODE` | on | `off` leaves out Cisco's OpenH264 (OpenH264 Video Codec provided by Cisco Systems, Inc.): nothing is downloaded from Cisco at start, and H.264 is not available. Another codec must be (`GLASS_VP8_SHIM_MODE=on` or `GLASS_AV1_SHIM_MODE=on`); GPU encoding is then unused (it encodes H.264). |
-| `GLASS_NVENC_SHIM_MAX_SESSIONS` | `0` | Browser sessions encoded on an NVIDIA GPU. `0` disables GPU encoding. |
+| `GLASS_NVENC_SHIM_MAX_SESSIONS` | every session with `nvidia` or `display-gpu`, else `0` | Browser sessions encoded on an NVIDIA GPU. The GPU capture methods encode on the GPU by themselves; with `screencast`, set it to encode there (`0` keeps encoding on the CPU). |
 | `GLASS_OPENH264_SHIM_BIN_PATH`, `GLASS_OPENH264_LIB_PATH` | set in Docker | The H.264 encoder. Required unless `GLASS_OPENH264_MODE=off`; there is no other fallback. |
 | `GLASS_VP8_SHIM_BIN_PATH`, `GLASS_AV1_SHIM_BIN_PATH` | set in Docker | The VP8 and AV1 encoders. |
 | `GLASS_CONTENT_HINT` | `detail` | What a browser session protects when bitrate or the encoder's CPU is short: `detail` keeps the size and lowers the frame rate (text, interfaces); `motion` keeps the frame rate and lowers the size (video, games). A session can set its own on creation (`contentHint`, see [protocol.md](protocol.md)). |

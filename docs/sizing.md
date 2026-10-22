@@ -16,6 +16,7 @@ news site, the CPU split was **Chrome 81%, encoder 15%, the Glass engine 4%**.
 | Resource | Budget per busy session |
 |---|---|
 | CPU | Varies with the page. A single session on a heavy page can use most of a core for Chrome, plus 0.3–0.8 of a core for the encoder. Static or idle pages use very little: a page that stops painting stops costing CPU. |
+| Memory | About 500 MB a session on an animated page with a display (the full Chrome and its display), about 300 MB with `GLASS_CAPTURE=screencast` (the headless browser). Measured as proportional set size, which counts shared pages once. |
 | Shared memory (`--shm-size`) | About 200 MB. Chrome keeps scratch files there. |
 | Disk | Downloads and uploads are buffered on disk (up to 500 MB per file) and removed when the session ends. |
 
@@ -25,10 +26,13 @@ news site, the CPU split was **Chrome 81%, encoder 15%, the Glass engine 4%**.
 - **Avoid burstable instances** (AWS T-series and equivalents). Sustained
   encoding drains CPU credits, and the instance throttles mid-session.
 - **Size for your heaviest page,** not your average one.
-- **GPU encoding.** On an NVIDIA GPU host, the image's NVENC encoder moves
-  encoding off the CPU: run with `--gpus all -e NVIDIA_DRIVER_CAPABILITIES=all`
-  and set `GLASS_NVENC_SHIM_MAX_SESSIONS`. Chrome's own rendering stays on the
-  CPU unless Chrome itself has GPU access.
+- **Memory or CPU.** A display costs about 200 MB more a session than the
+  screencast, and about half the CPU for capture and encoding. On a host
+  short of memory, `GLASS_CAPTURE=screencast` trades the one for the other.
+- **NVIDIA GPU hosts.** Run with `--gpus all -e NVIDIA_DRIVER_CAPABILITIES=all`
+  ([deployment.md](deployment.md#gpu-hosts)): Chrome draws on the GPU and the
+  GPU encodes, so a session's own CPU is mostly Chrome's page work (scripts,
+  layout). WebGL pages gain the most.
 
 ## Relay streams and calls
 

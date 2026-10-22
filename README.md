@@ -8,7 +8,7 @@ A source can be:
 
 | Source | What it is | Create it with |
 |---|---|---|
-| **Hosted browser** | A headless Chrome that Glass runs for you. Viewers see it and drive it: mouse, keyboard, touch, scroll, navigation, clipboard, files, audio and microphone. | `POST /v1/sessions` |
+| **Hosted browser** | A Chrome that Glass runs for you, on a display of its own. Viewers see it and drive it: mouse, keyboard, touch, scroll, navigation, clipboard, files, audio and microphone. | `POST /v1/sessions` |
 | **Relay producer** | Anything that can send WebRTC video: a phone camera, a desktop capture, a hardware encoder, your own app. Glass forwards its stream to viewers without decoding it. One session can hold several producers. | `POST /v1/relay-sessions` |
 | **Two-party call** | Two peers, each sending and receiving video and audio through Glass. | `POST /v1/calls` |
 
