@@ -62,6 +62,28 @@ describe("MobileKeyboardController", () => {
     expect(document.activeElement).toBe(input);
   });
 
+  it("a repeated false (a cursor change before the page focuses the field) does not dismiss", () => {
+    const { controller, input } = setup(true);
+    controller.setEditableFocused(false);
+    controller.handleTap(null);
+    vi.advanceTimersByTime(30);
+    controller.setEditableFocused(false);
+    expect(document.activeElement).toBe(input);
+    vi.advanceTimersByTime(200);
+    controller.setEditableFocused(true);
+    vi.advanceTimersByTime(1000);
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("a repeated false still leaves an unconfirmed tap to the confirm timer", () => {
+    const { controller, input } = setup(true);
+    controller.handleTap(null);
+    controller.setEditableFocused(false);
+    expect(document.activeElement).toBe(input);
+    vi.advanceTimersByTime(600);
+    expect(document.activeElement).not.toBe(input);
+  });
+
   it("setEditableFocused(false) blurs immediately regardless of timer state", () => {
     const { controller, input } = setup(true);
     controller.handleTap(null);

@@ -256,13 +256,19 @@ export class MobileKeyboardController {
   }
 
   // Feed the backend's latest editableFocused (from the client "state" event).
+  // Only a change from true to false dismisses the keyboard. A state update
+  // also carries cursor changes, and a tap on a field changes the cursor
+  // before the page has focused the field, so a false that merely repeats
+  // the earlier false arrives while a real edit is starting. The confirm
+  // timer already dismisses a tap that never focuses anything.
   setEditableFocused(value: boolean): void {
+    const wasFocused = this.editableFocused;
     this.editableFocused = value;
     if (!this.input) return;
     if (value) {
       // Confirmed - keep the keyboard up.
       this.clearConfirmTimer();
-    } else if (document.activeElement === this.input) {
+    } else if (wasFocused && document.activeElement === this.input) {
       // Remote editable lost focus - dismiss.
       this.input.blur();
     }
