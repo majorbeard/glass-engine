@@ -115,6 +115,8 @@ jitter keeps the browser's audio buffer at 60 to 170 ms.
 
 ## Hosted browsers on a GPU
 
+These figures are from the screencast, before the display capture below.
+
 **Where:** RunPod, NVIDIA A40 pods with a 7.65-CPU quota, the Docker image
 (v0.1.73, 2026-10-16), Chrome rendering through Vulkan on the GPU, which
 the engine picks on its own when the host has a GPU. Viewers: real Chrome
@@ -150,6 +152,49 @@ TURN; 45-second holds. CPU from the engine's own per-process accounting.
 home 4G and cellular, driving three.js's WebGL examples, one session each:
 60 fps by eye, a crisp picture; the pod at about 6.1 of its 7.65 cores,
 with both pictures at 70% of their size.
+
+## The display capture
+
+Since v0.1.85 each session's Chrome draws on a display of its own by default
+([sources/browser.md](sources/browser.md#how-the-picture-is-captured)).
+
+**One moving page, display against screencast** (a desktop PC, Linux under
+WSL2, one session on an animated test page, OpenH264, 2026-10-18):
+
+| | Screencast | Display |
+|---|---|---|
+| Glass, encoder and Chrome | 2.93 cores at 50 fps | **1.39 cores at 63 fps** |
+| Input to the next frame, in the engine | 26.8 ms | **3.9 ms** |
+
+**Input to the screen, on a page that is not animating** (the same PC, a
+viewer with 20 ms added on the way to it and 10 ms back, 2026-10-22; median):
+
+| | Screencast | Display |
+|---|---|---|
+| A key | 87 ms | **69 ms** |
+| A wheel step | 150 ms | **71 ms** |
+
+**AWS c6g.xlarge** (arm64, 4 vCPU, v0.1.82, 2026-10-22), a person on a laptop
+and a phone over home 4G, on news sites and Figma: input to its first frame
+in the engine **18 ms for a key, 20 ms for a wheel step, 17 ms for a click**
+(median).
+
+**NVIDIA A40 on RunPod**, Chrome drawing on the GPU with NVENC encoding
+(v0.1.78, 2026-10-20): **four WebGL streams at 60 fps at once**, Glass and
+the encoder 0.16 cores a session, Chrome about 0.9 cores per WebGL page.
+A RunPod GPU pod, one session each (v0.1.83, 2026-10-22), all at 60 fps on
+NVENC:
+
+| Page | Bitrate | Glass / encoder |
+|---|---|---|
+| Still page | 2 kbit/s | 0.03 / 0.02 cores |
+| A page repainting the same picture every frame | 20 kbit/s | 0.06 / 0.07 |
+| 2D animation (testufo) | 1.7 Mbit/s | 0.08 / 0.06 |
+| WebGL aquarium | 4.4 Mbit/s | 0.09 / 0.07 |
+
+**Memory:** about 200 MB more a session than the screencast's headless
+browser (about 500 MB against 300 on an animated page, proportional set
+size). See [sizing.md](sizing.md).
 
 ## Start
 
