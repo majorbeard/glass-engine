@@ -182,7 +182,7 @@ in the engine **18 ms for a key, 20 ms for a wheel step, 17 ms for a click**
 **NVIDIA A40 on RunPod**, Chrome drawing on the GPU with NVENC encoding
 (v0.1.78, 2026-10-20): **four WebGL streams at 60 fps at once**, Glass and
 the encoder 0.16 cores a session, Chrome about 0.9 cores per WebGL page.
-A RunPod GPU pod, one session each (v0.1.83, 2026-10-22), all at 60 fps on
+The same pod type, one session each (v0.1.83, 2026-10-22), all at 60 fps on
 NVENC:
 
 | Page | Bitrate | Glass / encoder |
