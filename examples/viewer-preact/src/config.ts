@@ -1,4 +1,4 @@
-import type { GlassVideoCodec } from "@glass/client";
+import type { GlassInputMode, GlassVideoCodec } from "@glass/client";
 
 // The example's build-time configuration (Vite env vars).
 
@@ -89,6 +89,20 @@ function readCodec(): GlassVideoCodec | undefined {
   return value === "h264" || value === "vp8" || value === "av1" ? value : undefined;
 }
 export const CODEC = readCodec();
+
+// How several viewers with control share a new session's page: "floor" (one
+// at a time, the default) or "free" (everyone at once: absolute chaos with more
+// than one active person). Taken from the page's own ?inputMode=, then from the
+// build; absent, the runtime's default applies.
+function readInputMode(): GlassInputMode | undefined {
+  const fromUrl =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("inputMode")
+      : null;
+  const value = fromUrl || (import.meta.env.VITE_GLASS_INPUT_MODE as string | undefined);
+  return value === "floor" || value === "free" ? value : undefined;
+}
+export const INPUT_MODE = readInputMode();
 
 // Dev-testing-only knobs for @glass/client's internal, undocumented trace
 // diagnostics (see index.ts's InternalGlassClientOptions/

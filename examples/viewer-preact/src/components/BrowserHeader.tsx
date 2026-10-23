@@ -32,6 +32,8 @@ interface BrowserHeaderProps {
   // @glass/client's requestInput()/releaseInput() - only the owner's
   // grantInput()/revokeInput() (below) ever change it.
   producesInput: boolean;
+  // Another viewer is driving the page right now (one controller at a time).
+  otherHasFloor: boolean;
   onShareWatchOnlyLink: () => void;
   // Owner-controlled handoff (docs/protocol.md's "Owner-controlled
   // handoff" section) - see @glass/client's isOwner()/connections()/
@@ -197,6 +199,7 @@ export function BrowserHeader({
   canGoBack,
   canGoForward,
   producesInput,
+  otherHasFloor,
   onShareWatchOnlyLink,
   isOwner,
   connections,
@@ -409,6 +412,15 @@ export function BrowserHeader({
             {isOwner ? "Owner" : producesInput ? "In control" : "Watch-only"}
           </span>
         </div>
+        {otherHasFloor && (
+          <div
+            title="Another viewer is in control. Your input reaches the page once they pause."
+            class="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold bg-amber-100 text-amber-800"
+          >
+            <div class="w-2 h-2 rounded-full bg-amber-500" />
+            <span class="hidden sm:block">Another viewer is in control</span>
+          </div>
+        )}
         {/* Owner-controlled handoff (docs/protocol.md's "Owner-controlled
             handoff" section) - only the session owner ever sees this. */}
         {isOwner && (

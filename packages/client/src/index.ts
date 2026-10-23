@@ -36,6 +36,7 @@ import type {
   GlassContentHint,
   GlassCreateSessionOptions,
   GlassVideoCodec,
+  GlassInputMode,
   GlassSession,
   GlassStats,
   InteractiveElement,
@@ -70,6 +71,7 @@ export type {
   GlassContentHint,
   GlassCreateSessionOptions,
   GlassVideoCodec,
+  GlassInputMode,
   GlassSession,
   GlassStats,
   InteractiveElement,
@@ -211,6 +213,13 @@ export type GlassClientEventMap = {
   // comment - Glass never queues, prompts, or auto-preempts on its own).
   // Only ever fires for a connection that currently produces input.
   inputRequested: [connectionId: string];
+  // Input mode "floor" only: who has the page now. connectionId is the
+  // connection whose input reaches the page, or null when no one has it;
+  // isSelf is true when it is this client. Fires once on connect and again
+  // whenever it changes. The controller stays named after going idle, until
+  // someone else takes the page or the controller leaves. floorHolder()
+  // already reflects it.
+  floorChanged: [connectionId: string | null, isSelf: boolean];
   // Owner-only roster (docs/protocol.md's Control handoff section) - fires
   // whenever the known set of other connections changes: someone joined,
   // left, or had their producesInput granted/revoked. Never fires for a
@@ -287,13 +296,14 @@ export async function createGlassSession(
   apiToken?: string,
   options: boolean | GlassCreateSessionOptions = false
 ): Promise<GlassSession> {
-  const { audioInput = false, contentHint, codec } =
+  const { audioInput = false, contentHint, codec, inputMode } =
     typeof options === "boolean" ? { audioInput: options } : options;
   // No body at all when nothing is asked for, as before.
   const body: Record<string, unknown> = {};
   if (audioInput) body.audioInput = true;
   if (contentHint) body.contentHint = contentHint;
   if (codec) body.codec = codec;
+  if (inputMode) body.inputMode = inputMode;
   const hasBody = Object.keys(body).length > 0;
   const res = await fetch(`${baseUrl}/v1/sessions`, {
     method: "POST",
@@ -525,6 +535,12 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
   // current via "capabilitiesChanged".
   producesInput(): boolean {
     return handoff.producesInput(this.core);
+  }
+
+  // Input mode "floor" only: the connection whose input reaches the page,
+  // or null when no one has it (see the "floorChanged" event).
+  floorHolder(): string | null {
+    return this.core._floorHolder;
   }
 
   // Whether THIS connection is the session owner - the offer's isOwner

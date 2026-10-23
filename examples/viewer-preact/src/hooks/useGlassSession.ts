@@ -12,6 +12,7 @@ import {
   AUDIO_INPUT,
   CODEC,
   CONTENT_HINT,
+  INPUT_MODE,
   DECODE_READBACK_ENABLED,
   ENCODED_STREAM_CHECK_ENABLED,
   GLASS_ADDR,
@@ -110,6 +111,10 @@ export function useGlassSession(notify: Notify) {
   // still mint a grant for the right session.
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [producesInput, setProducesInput] = useState(false);
+  // Several viewers may hold control at once; in the session's default input
+  // mode only one of them drives the page at a time. True while that is
+  // someone else (the "floorChanged" event).
+  const [otherHasFloor, setOtherHasFloor] = useState(false);
   // Owner-controlled handoff (docs/protocol.md's "Owner-controlled
   // handoff" section) - see client.on("rosterChanged") wiring below.
   const [isOwner, setIsOwner] = useState(false);
@@ -179,6 +184,7 @@ export function useGlassSession(notify: Notify) {
             audioInput: AUDIO_INPUT,
             contentHint: CONTENT_HINT,
             codec: CODEC,
+            inputMode: INPUT_MODE,
           });
         } catch (err: any) {
           if (!cancelled) setError(`Failed to create session: ${err.message}`);
@@ -246,6 +252,11 @@ export function useGlassSession(notify: Notify) {
         // fires after that, so reading them here is safe.
         setProducesInput(c!.producesInput());
         setIsOwner(c!.isOwner());
+        const holder = c!.floorHolder();
+        setOtherHasFloor(holder !== null && holder !== c!.connectionId());
+      });
+      c.on("floorChanged", (holder, isSelf) => {
+        if (!cancelled) setOtherHasFloor(holder !== null && !isSelf);
       });
       c.on("disconnected", () => {
         if (!cancelled) setIsConnected(false);
@@ -285,6 +296,11 @@ export function useGlassSession(notify: Notify) {
         if (cancelled) return;
         if (drop.code === "owner_only") {
           notify({ message: "Only the session owner can navigate", type: "info" });
+        } else if (
+          drop.code === "floor_taken" &&
+          ["mousedown", "keydown", "touchstart"].includes(drop.eventType)
+        ) {
+          notify({ message: "Another viewer is in control right now", type: "info" });
         } else if (
           drop.code === "not_authorized" &&
           ["mousedown", "keydown", "touchstart"].includes(drop.eventType)
@@ -452,6 +468,7 @@ export function useGlassSession(notify: Notify) {
     canGoForward,
     sessionId,
     producesInput,
+    otherHasFloor,
     isOwner,
     connections,
     sourceStalled,
