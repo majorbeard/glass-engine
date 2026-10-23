@@ -140,7 +140,9 @@ Two rules hold in both modes:
   disconnects, gives up control or is revoked, Glass releases what it was
   holding down, and nothing anyone else holds.
 
-Navigation stays the owner's in both modes.
+Navigation stays the owner's in both modes. Input your backend sends with
+`POST /v1/sessions/{id}/input` is not arbitrated: it reaches the page in either
+mode and takes the page from no one.
 
 `@glass/client` exposes all of this as `requestInput()`, `releaseInput()`,
 `grantInput()`, `revokeInput()`, `isOwner()`, `connections()`, `floorHolder()`
