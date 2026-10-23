@@ -133,6 +133,9 @@ export interface GlassCreateSessionOptions {
   codec?: GlassVideoCodec;
   // Absent, "floor". See GlassInputMode.
   inputMode?: GlassInputMode;
+  // Allows page inspection on the session: its structure through the API's
+  // /page routes, for your backend with the API token. Off by default.
+  inspect?: boolean;
 }
 
 // Returned by createGlassSession / the backend's POST /v1/sessions.
@@ -148,6 +151,9 @@ export interface GlassSession {
   // How several input holders share the page. Absent from runtimes that
   // predate it.
   inputMode?: GlassInputMode;
+  // Whether page inspection is allowed on the session. Absent from runtimes
+  // that predate it.
+  inspect?: boolean;
   // Major version of the public wire contract. Absent from runtimes predating
   // the handshake, which are treated as version 1. See createGlassSession.
   protocolVersion?: number;
