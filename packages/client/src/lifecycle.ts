@@ -64,6 +64,7 @@ export function establish(c: ClientCore): Promise<void> {
   // id, current producesInput) or joins as a genuinely new one.
   c._connectionId = null;
   c._producesInput = false;
+  c._floorHolder = null;
   c._isOwner = false;
   // Cleared, not carried over - a fresh "roster" snapshot always follows
   // the next offer for an owner connection (see HandleSessionSignaling's

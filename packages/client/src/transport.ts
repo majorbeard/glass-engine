@@ -363,6 +363,12 @@ export async function handleSignal(c: ClientCore, signal: any): Promise<void> {
       case "input_requested":
         c.emit("inputRequested", String(signal.connectionId ?? ""));
         break;
+      case "input_floor": {
+        const holder = typeof signal.connectionId === "string" && signal.connectionId !== "" ? signal.connectionId : null;
+        c._floorHolder = holder;
+        c.emit("floorChanged", holder, holder !== null && holder === c._connectionId);
+        break;
+      }
       case "new_tab_request":
         if (typeof signal.url === "string") {
           c.emit("newTabRequested", signal.url);

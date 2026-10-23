@@ -331,6 +331,7 @@ export function App() {
               canGoBack={session.canGoBack}
               canGoForward={session.canGoForward}
               producesInput={session.producesInput}
+              otherHasFloor={session.otherHasFloor}
               onShareWatchOnlyLink={handleShareWatchOnlyLink}
               isOwner={session.isOwner}
               connections={session.connections}

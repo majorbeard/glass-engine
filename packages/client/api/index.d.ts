@@ -35,7 +35,7 @@ interface GlassRosterEntry {
     isOwner: boolean;
 }
 type GlassSlotState = "empty" | "live" | "stalled";
-type GlassInputDropCode = "rate_limited" | "not_authorized" | "owner_only" | "unsupported" | "invalid";
+type GlassInputDropCode = "rate_limited" | "not_authorized" | "owner_only" | "unsupported" | "invalid" | "floor_taken";
 interface GlassInputDrop {
     code: GlassInputDropCode | (string & {});
     eventType: string;
@@ -45,16 +45,19 @@ interface GlassInputDrop {
 }
 type GlassContentHint = "detail" | "motion";
 type GlassVideoCodec = "h264" | "vp8" | "av1";
+type GlassInputMode = "floor" | "free";
 interface GlassCreateSessionOptions {
     audioInput?: boolean;
     contentHint?: GlassContentHint;
     codec?: GlassVideoCodec;
+    inputMode?: GlassInputMode;
 }
 interface GlassSession {
     id: string;
     signalingUrl: string;
     contentHint?: GlassContentHint;
     codec?: GlassVideoCodec;
+    inputMode?: GlassInputMode;
     protocolVersion?: number;
     sourceType?: string;
     capabilities?: GlassCapabilities;
@@ -259,6 +262,7 @@ type GlassClientEventMap = {
         isSelf: boolean
     ];
     inputRequested: [connectionId: string];
+    floorChanged: [connectionId: string | null, isSelf: boolean];
     rosterChanged: [connections: GlassRosterEntry[]];
     slotStateChanged: [slots: Record<string, GlassSlotState>];
     inputDropped: [drop: GlassInputDrop];
@@ -291,6 +295,7 @@ declare class GlassClient extends Emitter<GlassClientEventMap> {
     releaseInput(): void;
     connectionId(): string | null;
     producesInput(): boolean;
+    floorHolder(): string | null;
     isOwner(): boolean;
     connections(): GlassRosterEntry[];
     notePresentedFrame(rtpTimestamp: number, expectedDisplayTime: number): void;
@@ -333,6 +338,7 @@ export {
     type GlassCreateSessionOptions,
     type GlassInputDrop,
     type GlassInputDropCode,
+    type GlassInputMode,
     GlassProducer,
     type GlassProducerEvents,
     type GlassProducerOptions,

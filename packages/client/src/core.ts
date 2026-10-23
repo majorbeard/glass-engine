@@ -103,6 +103,9 @@ export class ClientCore {
   // only in the brief window before the first offer has ever arrived.
   _connectionId: string | null = null;
   _producesInput = false;
+  // Who has the page in input mode "floor", from input_floor; null when no
+  // one has it, and always null in mode "free". Reset with _connectionId.
+  _floorHolder: string | null = null;
   // Whether THIS connection authenticated with the session's own unscoped
   // credential rather than a minted, capability-scoped grant - see
   // the offer's isOwner field (docs/protocol.md) for what this

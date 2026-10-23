@@ -79,7 +79,9 @@ export type GlassInputDropCode =
   | "not_authorized"
   | "owner_only"
   | "unsupported"
-  | "invalid";
+  | "invalid"
+  // Another connection has the page (input mode "floor"), or sets its size.
+  | "floor_taken";
 
 // One "inputDropped" report. local is true when this client withheld the
 // input itself (it has no control, or isn't the owner) and false when Glass
@@ -107,6 +109,18 @@ export type GlassContentHint = "detail" | "motion";
 // encode; not every viewer can decode it (Safari only with AV1 hardware).
 export type GlassVideoCodec = "h264" | "vp8" | "av1";
 
+// How several connections holding input share one browser session's page.
+// "floor" (the default): one controller at a time. Whoever sends input first
+// has the page until they have been idle (100 ms after the pointer or touch,
+// 1 s after a key or the wheel) and hold nothing down; everyone else's input
+// is dropped meanwhile ("inputDropped" with code "floor_taken"), and every
+// connection is told who has it ("floorChanged").
+// "free": everyone's input goes to the page at once. ABSOLUTE CHAOS with more
+// than one active person: the one pointer jumps between users, one user's
+// drag is moved by another's pointer, and keys land in whichever field was
+// focused last. Use it only where that is acceptable.
+export type GlassInputMode = "floor" | "free";
+
 // Options for createGlassSession. All are optional.
 export interface GlassCreateSessionOptions {
   // Requests the mic-capable browser pool. See createGlassSession.
@@ -117,6 +131,8 @@ export interface GlassCreateSessionOptions {
   // runtime cannot serve is refused (the session is not created), never
   // replaced by another.
   codec?: GlassVideoCodec;
+  // Absent, "floor". See GlassInputMode.
+  inputMode?: GlassInputMode;
 }
 
 // Returned by createGlassSession / the backend's POST /v1/sessions.
@@ -129,6 +145,9 @@ export interface GlassSession {
   // The video codec the session is encoded with. Absent from runtimes that
   // predate per-session codecs and from sources that do not encode video.
   codec?: GlassVideoCodec;
+  // How several input holders share the page. Absent from runtimes that
+  // predate it.
+  inputMode?: GlassInputMode;
   // Major version of the public wire contract. Absent from runtimes predating
   // the handshake, which are treated as version 1. See createGlassSession.
   protocolVersion?: number;
