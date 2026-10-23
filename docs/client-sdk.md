@@ -29,7 +29,7 @@ mintConnectionGrant(sessionId, capabilities, baseUrl?, apiToken?): Promise<Glass
 
 `createGlassSession`'s third argument is either `true` (the
 microphone-capable browser, as before) or an options object,
-`GlassCreateSessionOptions`: `{ audioInput?: boolean, contentHint?: "detail" | "motion", codec?: "h264" | "vp8" | "av1", inputMode?: "floor" | "free" }`.
+`GlassCreateSessionOptions`: `{ audioInput?: boolean, contentHint?: "detail" | "motion", codec?: "h264" | "vp8" | "av1", inputMode?: "floor" | "free", inspect?: boolean }`.
 `contentHint` (`GlassContentHint`) chooses what the session protects when
 bitrate or CPU is short: `"detail"` keeps the size and lowers the frame rate
 (text, interfaces), `"motion"` keeps the frame rate and lowers the size
@@ -48,6 +48,9 @@ can on devices with AV1 hardware).
 share the page: `"floor"` (the default) gives it to one at a time, `"free"`
 to everyone at once, which is chaos with more than one active person. See
 [concepts.md](concepts.md#several-people-in-control).
+
+`inspect: true` allows page inspection on the session, for your backend with
+the API token; see [page-inspection.md](page-inspection.md).
 
 `createGlassSession` refuses a server whose `protocolVersion` is newer than
 `SUPPORTED_PROTOCOL_VERSION`, rather than connecting and failing in confusing
