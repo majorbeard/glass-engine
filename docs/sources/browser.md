@@ -209,6 +209,13 @@ The page's own `console.log`, `warn`, `error` and uncaught exceptions arrive as
 the `consoleMessage(level, text)` event: useful for showing what a site's
 scripts are doing without DevTools access.
 
+## Page inspection
+
+Your backend can read the page's structure (its controls, names, positions,
+focus), act on it with real input, and watch its events through the API, on
+a session created with `"inspect": true`. See
+[page-inspection.md](../page-inspection.md).
+
 ## Security
 
 - **Egress filter (on by default).** Every browser connects to the network

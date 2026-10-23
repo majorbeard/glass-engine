@@ -221,6 +221,7 @@ What is being built next. None of it exists yet, and there are no dates.
 | [Getting started](docs/getting-started.md) | Everyone | First working setup for each source |
 | [Concepts](docs/concepts.md) | Integrators | Sessions, connections, capabilities, control handoff, reconnects |
 | [Hosted browser](docs/sources/browser.md) | Integrators | Navigation, viewport, clipboard, files, audio, microphone |
+| [Page inspection](docs/page-inspection.md) | Integrators | Reading a hosted page's structure, acting on it with real input, watching its events |
 | [Relay producers](docs/sources/producers.md) | Integrators | The producer contract, stream slots, `GlassProducer` |
 | [Calls](docs/sources/calls.md) | Integrators | Two-party calling |
 | [Client SDK](docs/client-sdk.md) | Integrators | `GlassClient`, `GlassProducer`, the viewer layer |
