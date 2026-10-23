@@ -49,7 +49,7 @@ which accept the per-session `?token=` from the URLs Glass returns.
 | `DELETE` | `/v1/sessions/{id}` | `204`, or `404`. |
 | `GET` | `/v1/sessions/{id}/signaling` | WebSocket upgrade. |
 | `POST` | `/v1/sessions/{id}/connections` | Mint a grant. Body: any of `consumesMedia`, `producesMedia`, `producesInput` (booleans). `201 {signalingUrl, connectionCapabilities}`. `consumesInput` is reserved: `400`. |
-| `POST` | `/v1/sessions/{id}/input` | Server-side input: `{"type", "data"}` as in the DataChannel input table. `202`; `400` for an unknown or invalid event; `429` when rate limited. |
+| `POST` | `/v1/sessions/{id}/input` | Server-side input: `{"type", "data"}` as in the DataChannel input table. Not subject to the session's input mode. `202`; `400` for an unknown or invalid event; `429` when rate limited. |
 | `GET` | `/v1/sessions/{id}/downloads/{guid}` | A finished download (see `DownloadReady`). |
 | `POST` | `/v1/sessions/{id}/upload` | `multipart/form-data` answer to `FileChooserOpened`. |
 | `GET` | `/v1/sessions/{id}/stats/stream` | Server-Sent Events: frame, transport and resource statistics, for operators. |
