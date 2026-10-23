@@ -108,9 +108,44 @@ The owner can also:
 A viewer that holds control uses a seat from the license's session limit, the
 same as a session does. Watch-only viewers use none.
 
+## Several people in control
+
+Any number of connections can hold control of one hosted-browser session. The
+page they share has one pointer, one keyboard focus and one set of held keys,
+so the session's **input mode** decides whose input reaches it. Choose it when
+you create the session (`inputMode`); a session with one controller behaves
+the same in both.
+
+- **`floor` (the default): one controller at a time.** The first connection to
+  send input has the page. It keeps it while it holds anything down (a key, a
+  mouse button, a finger) and until it pauses: 100 ms after a pointer or touch
+  event, 1 s after a key or wheel event, so no one can take over between two
+  keystrokes. Meanwhile everyone else's input is dropped and reported to them
+  (`floor_taken`), and every connection is told who has the page
+  (`input_floor`), so your app can show "Ana is in control". The page frees at
+  once when its controller disconnects, gives up control or has it revoked.
+- **`free`: everyone at once.** Every controller's input reaches the page as it
+  arrives. **With more than one active person this is chaos:** the one pointer
+  jumps between them, one person's drag is moved by another's pointer, and keys
+  land in whichever field was focused last. Use it only where that is the point
+  (a demo, a party game).
+
+Two rules hold in both modes:
+
+- **One connection sets the page size**: the owner's while it holds control,
+  otherwise the controller connected longest. Another controller's window size
+  is ignored. When that connection leaves or loses control, the page takes the
+  next one's size.
+- **Held keys and buttons are released per connection.** When a connection
+  disconnects, gives up control or is revoked, Glass releases what it was
+  holding down, and nothing anyone else holds.
+
+Navigation stays the owner's in both modes.
+
 `@glass/client` exposes all of this as `requestInput()`, `releaseInput()`,
-`grantInput()`, `revokeInput()`, `isOwner()`, `connections()` and the
-`capabilitiesChanged`, `inputRequested` and `rosterChanged` events. Glass
+`grantInput()`, `revokeInput()`, `isOwner()`, `connections()`, `floorHolder()`
+and the `capabilitiesChanged`, `inputRequested`, `rosterChanged` and
+`floorChanged` events. Glass
 provides the mechanism; the policy (who should get control, and when) belongs
 to your app.
 

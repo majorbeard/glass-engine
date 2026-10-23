@@ -135,7 +135,9 @@ screencast, go through Chrome's input events.
 | Gamepad | Mapped to keyboard and mouse input by the viewer (`gamepadMapping` option). |
 
 Input is accepted only from a connection that holds `producesInput`
-([concepts.md](../concepts.md#owner-and-control-handoff)). Input
+([concepts.md](../concepts.md#owner-and-control-handoff)). With several
+connections in control, the session's input mode decides whose input reaches
+the page ([concepts.md](../concepts.md#several-people-in-control)). Input
 Glass can't accept (no control, navigation from a non-owner, too fast,
 out-of-range coordinates, too many touch points) is dropped and reported to
 the sender; the SDK fires `inputDropped`

@@ -47,6 +47,8 @@ change between releases.
 | `GLASS_RELAY_PENDING_TTL_SECONDS` | `600` | The same, for relay and call sessions. |
 | `GLASS_RELAY_STALL_THRESHOLD_MS` | `2000` | A relay producer silent this long is `stalled`, then disconnected (close code 4001). |
 | `GLASS_RELAY_FIRST_MEDIA_GRACE_MS` | `10000` | How long a new producer may take to send its first media. |
+| `GLASS_INPUT_FLOOR_IDLE_MS` | `100` | Input mode `floor`: how long the controller keeps the page after a pointer or touch event. See [concepts.md](concepts.md#several-people-in-control). |
+| `GLASS_INPUT_FLOOR_KEY_IDLE_MS` | `1000` | The same after a key or wheel event. |
 
 ## Network
 

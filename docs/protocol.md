@@ -44,8 +44,8 @@ which accept the per-session `?token=` from the URLs Glass returns.
 
 | Method | Path | Response |
 |---|---|---|
-| `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities, contentHint, codec}`. Optional body fields: `"audioInput": true`; `"contentHint": "detail"` or `"motion"` (anything else is `400`); `"codec": "h264"`, `"vp8"` or `"av1"` (one this host cannot serve is `400` with the reason, never served as another codec). `503` at capacity. |
-| `GET` | `/v1/sessions/{id}` | `{id, state: "pending"\|"active"\|"closed", createdAt, connectedAt?, codec?}`, or `404`. |
+| `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities, contentHint, codec}`. Optional body fields: `"audioInput": true`; `"contentHint": "detail"` or `"motion"` (anything else is `400`); `"codec": "h264"`, `"vp8"` or `"av1"` (one this host cannot serve is `400` with the reason, never served as another codec); `"inputMode": "floor"` (the default) or `"free"` (anything else is `400`; see [concepts.md](concepts.md#several-people-in-control)). The response also carries `inputMode`. `503` at capacity. |
+| `GET` | `/v1/sessions/{id}` | `{id, state: "pending"\|"active"\|"closed", createdAt, connectedAt?, codec?, inputMode?}`, or `404`. |
 | `DELETE` | `/v1/sessions/{id}` | `204`, or `404`. |
 | `GET` | `/v1/sessions/{id}/signaling` | WebSocket upgrade. |
 | `POST` | `/v1/sessions/{id}/connections` | Mint a grant. Body: any of `consumesMedia`, `producesMedia`, `producesInput` (booleans). `201 {signalingUrl, connectionCapabilities}`. `consumesInput` is reserved: `400`. |
@@ -124,6 +124,7 @@ the client answers.
 | `ice-candidate` | `candidate` | Trickled ICE. Never sent before `offer`. |
 | `capabilities_changed` | `connectionId`, `producesInput` | Someone's control changed. Sent to every connection, including the one it concerns. |
 | `input_requested` | `connectionId` | Sent to the control holder when a request can't be granted outright. |
+| `input_floor` | `connectionId` (or `null`) | Browser only, input mode `floor`: whose input reaches the page. Once after `offer`, then to every connection on each change. Names the controller until someone else takes the page, even after it pauses; `null` once it leaves. |
 | `roster` | `connections: [{connectionId, producesInput, isOwner}]` | Owner only, once after `offer`: everyone else already connected. |
 | `connection_joined` | `connectionId`, `producesInput`, `isOwner` | Owner only. Not sent when a connection resumes. |
 | `connection_left` | `connectionId` | Owner only. |
@@ -217,6 +218,7 @@ reliable DataChannel:
 | `rate_limited` | The connection is sending this event type too fast. | Send less. |
 | `not_authorized` | The connection has no `producesInput`. | Request control, or use a grant that has it. |
 | `owner_only` | Only the session owner may do this (navigation). | Nothing; ask the owner. |
+| `floor_taken` | Input mode `floor`: another connection has the page, or this connection's window doesn't set the page size. | Wait for them to pause (`input_floor` says who). |
 | `unsupported` | The source doesn't accept this event type, or accepts no input. | Don't retry. Check `capabilities.inputActions`. |
 | `invalid` | The message was malformed or failed validation (out-of-range coordinates, too many touch points). | Fix the sender. |
 
