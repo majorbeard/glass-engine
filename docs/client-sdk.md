@@ -29,7 +29,7 @@ mintConnectionGrant(sessionId, capabilities, baseUrl?, apiToken?): Promise<Glass
 
 `createGlassSession`'s third argument is either `true` (the
 microphone-capable browser, as before) or an options object,
-`GlassCreateSessionOptions`: `{ audioInput?: boolean, contentHint?: "detail" | "motion", codec?: "h264" | "vp8" | "av1" }`.
+`GlassCreateSessionOptions`: `{ audioInput?: boolean, contentHint?: "detail" | "motion", codec?: "h264" | "vp8" | "av1", inputMode?: "floor" | "free" }`.
 `contentHint` (`GlassContentHint`) chooses what the session protects when
 bitrate or CPU is short: `"detail"` keeps the size and lowers the frame rate
 (text, interfaces), `"motion"` keeps the frame rate and lowers the size
@@ -43,6 +43,11 @@ created. `GET /v1/info`'s `codecs` lists what it serves; the returned
 `GlassSession` carries the codec in `codec`. AV1 has the sharpest picture at
 low bitrates; check that the viewer can decode it before asking (Safari only
 can on devices with AV1 hardware).
+
+`inputMode` (`GlassInputMode`) decides how several connections with control
+share the page: `"floor"` (the default) gives it to one at a time, `"free"`
+to everyone at once, which is chaos with more than one active person. See
+[concepts.md](concepts.md#several-people-in-control).
 
 `createGlassSession` refuses a server whose `protocolVersion` is newer than
 `SUPPORTED_PROTOCOL_VERSION`, rather than connecting and failing in confusing
@@ -125,6 +130,8 @@ await client.connect();
 | `capabilitiesChanged(id, producesInput, isSelf)` | Someone's control changed. |
 | `inputRequested(id)` | Someone asked for control you hold. |
 | `rosterChanged(connections)` | Owner only. |
+| `floorHolder()` | Input mode `floor`: the connection whose input reaches the page, or `null`. |
+| `floorChanged(id, isSelf)` | Who has the page changed (`id` is `null` when no one has it). |
 
 See [concepts.md](concepts.md#owner-and-control-handoff).
 
@@ -135,7 +142,7 @@ Glass reports a drop:
 
 ```ts
 client.on("inputDropped", (drop) => {
-  // drop.code: "not_authorized" | "owner_only" | "rate_limited" | "unsupported" | "invalid"
+  // drop.code: "not_authorized" | "owner_only" | "floor_taken" | "rate_limited" | "unsupported" | "invalid"
   // drop.eventType: e.g. "mousedown" ("" when Glass doesn't know the type)
   // drop.count: drops since the previous report for this code and type
   // drop.local: true if this client withheld it, false if Glass dropped it
@@ -242,5 +249,8 @@ A reload rejoins the tab's own session (see
 `?contentHint=motion` (or `VITE_GLASS_CONTENT_HINT`) creates its session with
 that hint, and `?codec=h264`, `vp8` or `av1` (or `VITE_GLASS_CODEC`) with
 that codec; a reload keeps the session's codec, so open a new tab to switch.
+`?inputMode=free` (or `VITE_GLASS_INPUT_MODE`) creates its session in input
+mode `free`. While another viewer has the page, the header shows "Another
+viewer is in control", and a dropped click or key says so.
 Configure it with `VITE_GLASS_ADDR` and, for local testing only,
 `VITE_GLASS_API_TOKEN`.
