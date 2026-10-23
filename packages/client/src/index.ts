@@ -296,7 +296,7 @@ export async function createGlassSession(
   apiToken?: string,
   options: boolean | GlassCreateSessionOptions = false
 ): Promise<GlassSession> {
-  const { audioInput = false, contentHint, codec, inputMode } =
+  const { audioInput = false, contentHint, codec, inputMode, inspect } =
     typeof options === "boolean" ? { audioInput: options } : options;
   // No body at all when nothing is asked for, as before.
   const body: Record<string, unknown> = {};
@@ -304,6 +304,7 @@ export async function createGlassSession(
   if (contentHint) body.contentHint = contentHint;
   if (codec) body.codec = codec;
   if (inputMode) body.inputMode = inputMode;
+  if (inspect) body.inspect = true;
   const hasBody = Object.keys(body).length > 0;
   const res = await fetch(`${baseUrl}/v1/sessions`, {
     method: "POST",

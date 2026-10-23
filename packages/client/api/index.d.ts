@@ -51,6 +51,7 @@ interface GlassCreateSessionOptions {
     contentHint?: GlassContentHint;
     codec?: GlassVideoCodec;
     inputMode?: GlassInputMode;
+    inspect?: boolean;
 }
 interface GlassSession {
     id: string;
@@ -58,6 +59,7 @@ interface GlassSession {
     contentHint?: GlassContentHint;
     codec?: GlassVideoCodec;
     inputMode?: GlassInputMode;
+    inspect?: boolean;
     protocolVersion?: number;
     sourceType?: string;
     capabilities?: GlassCapabilities;
