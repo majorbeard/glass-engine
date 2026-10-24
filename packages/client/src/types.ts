@@ -121,6 +121,20 @@ export type GlassVideoCodec = "h264" | "vp8" | "av1";
 // focused last. Use it only where that is acceptable.
 export type GlassInputMode = "floor" | "free";
 
+// The page's JavaScript dialog (alert, confirm, prompt, or a leave-page
+// question). The page's own scripts wait until it is answered.
+// inPicture is true when the dialog is drawn in the streamed picture (the
+// browser's own dialog, which ordinary input can also answer); when false
+// the viewer sees only the page, and the app has to show the dialog itself
+// to let anyone answer it. message is the page's own text.
+export interface GlassDialog {
+  open: boolean;
+  type?: "alert" | "confirm" | "prompt" | "beforeunload" | (string & {});
+  message?: string;
+  defaultPrompt?: string;
+  inPicture: boolean;
+}
+
 // Options for createGlassSession. All are optional.
 export interface GlassCreateSessionOptions {
   // Requests the mic-capable browser pool. See createGlassSession.

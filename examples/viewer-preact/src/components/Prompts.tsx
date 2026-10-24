@@ -1,8 +1,11 @@
 import type { Ref } from "preact";
+import { useEffect, useState } from "preact/hooks";
+import type { GlassDialog } from "@glass/client";
 
 // The prompts stacked at the bottom right: a blocked new-tab URL, pending
 // downloads, a file-upload request and a mic-access request. Each stacks
-// above the ones before it (76 px apart).
+// above the ones before it (76 px apart). The page's own dialogs are shown
+// apart from them, over the page (DialogPrompt).
 
 type Download = { filename: string; guid: string; url: string };
 
@@ -199,6 +202,63 @@ export function MicPrompt({ origin, micError, micGranting, offset, onAllow, onDe
       )}
     </div>
   </div>
+</div>
+  );
+}
+
+type DialogPromptProps = {
+  dialog: GlassDialog;
+  otherHasFloor: boolean;
+  onAnswer: (accept: boolean, text?: string) => void;
+};
+
+// The page's own alert, confirm or prompt, shown when the stream does not
+// already picture it. Like the browser's, it sits over the page, which
+// waits until someone answers. Answering is input: in the default input
+// mode, only whoever is driving the page can.
+export function DialogPrompt({ dialog, otherHasFloor, onAnswer }: DialogPromptProps) {
+  const [text, setText] = useState(dialog.defaultPrompt ?? "");
+  // A new dialog starts from its own default.
+  useEffect(() => setText(dialog.defaultPrompt ?? ""), [dialog]);
+  const isPrompt = dialog.type === "prompt";
+  const canCancel = dialog.type !== "alert";
+  // Browsers show their own text when a page asks before it is left; the
+  // page's message is empty.
+  const isLeave = dialog.type === "beforeunload";
+  const message = isLeave && !dialog.message ? "Changes you made may not be saved." : dialog.message;
+  return (
+<div class="fixed inset-x-0 top-20 z-50 flex justify-center px-4 animate-fade-in">
+  <form
+    class="w-full max-w-md px-5 py-4 rounded-lg border-2 border-black shadow-lg bg-white text-gray-900"
+    onSubmit={(e) => {
+      e.preventDefault();
+      onAnswer(true, isPrompt ? text : undefined);
+    }}
+  >
+    <p class="text-xs font-bold uppercase tracking-wide opacity-60">
+      {isLeave ? "Leave this page?" : "The page says"}
+    </p>
+    <p class="mt-2 text-sm whitespace-pre-wrap break-words max-h-60 overflow-auto">{message}</p>
+    {isPrompt && (
+      <input
+        class="mt-3 w-full px-2 py-1 rounded border-2 border-black font-mono text-sm"
+        value={text}
+        onInput={(e) => setText((e.target as HTMLInputElement).value)}
+        autoFocus
+      />
+    )}
+    {otherHasFloor && <p class="mt-3 text-xs text-amber-700 font-semibold">Another viewer is in control.</p>}
+    <div class="mt-4 flex justify-end gap-3">
+      {canCancel && (
+        <button type="button" onClick={() => onAnswer(false)} class="px-3 py-1 rounded border-2 border-black font-semibold hover:bg-gray-100">
+          Cancel
+        </button>
+      )}
+      <button type="submit" autoFocus={!isPrompt} class="px-3 py-1 rounded border-2 border-black bg-black text-white font-semibold hover:opacity-90">
+        {isLeave ? "Leave" : "OK"}
+      </button>
+    </div>
+  </form>
 </div>
   );
 }

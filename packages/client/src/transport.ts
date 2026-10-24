@@ -7,7 +7,7 @@ import * as lifecycle from "./lifecycle";
 import * as handoff from "./handoff";
 import * as mic from "./mic";
 import * as statsTrace from "./stats_trace";
-import type { ElementState, GlassRosterEntry, GlassSlotState, InteractiveElement, NavigationState } from "./types";
+import type { ElementState, GlassDialog, GlassRosterEntry, GlassSlotState, InteractiveElement, NavigationState } from "./types";
 import { EncodedStreamChecker } from "./encoded_stream_check";
 
 // Binary DataChannel message types pushed from the engine. Must match
@@ -29,6 +29,8 @@ const enum MessageType {
   FileChooserClosed = 0x0e,
   MicAccessRequested = 0x0f,
   InputDropped = 0x10,
+  // The page's JavaScript dialog opened or closed.
+  Dialog = 0x11,
   Error = 0xff,
 }
 
@@ -275,6 +277,14 @@ export function handleBinaryMessage(c: ClientCore, data: ArrayBuffer): void {
       case MessageType.InputDropped:
         if (data.byteLength > offset) {
           drops.onServerDrop(c, JSON.parse(decoder.decode(new Uint8Array(view.buffer, offset))));
+        }
+        break;
+      case MessageType.Dialog:
+        if (data.byteLength > offset) {
+          const parsed: GlassDialog = JSON.parse(decoder.decode(new Uint8Array(view.buffer, offset)));
+          const d: GlassDialog = { ...parsed, open: !!parsed.open, inPicture: !!parsed.inPicture };
+          c._dialog = d.open ? d : null;
+          c.emit("dialog", d);
         }
         break;
       case MessageType.Error:
