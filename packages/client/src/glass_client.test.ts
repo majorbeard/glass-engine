@@ -107,6 +107,20 @@ describe("DataChannel messages", () => {
     client.disconnect();
   });
 
+  it("keeps the open dialog, then clears it when it closes", async () => {
+    const { client, reliable } = await connected();
+    const got = vi.fn();
+    client.on("dialog", got);
+    reliable.receive(0x11, { open: true, type: "prompt", message: "name?", defaultPrompt: "x", inPicture: false });
+    expect(got).toHaveBeenCalledWith({ open: true, type: "prompt", message: "name?", defaultPrompt: "x", inPicture: false });
+    expect(client.dialog()?.message).toBe("name?");
+    client.answerDialog(true, "glass");
+    expect(reliable.sent[reliable.sent.length - 1]).toMatchObject({ type: "dialog_answer", data: { accept: true, text: "glass" } });
+    reliable.receive(0x11, { open: false, inPicture: false });
+    expect(client.dialog()).toBeNull();
+    client.disconnect();
+  });
+
   it("ignores a malformed body without tearing anything down", async () => {
     const { client, reliable } = await connected();
     reliable.receiveRaw(new Uint8Array([0x06, 0x7b, 0x7b]));

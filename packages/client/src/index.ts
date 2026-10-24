@@ -37,6 +37,7 @@ import type {
   GlassCreateSessionOptions,
   GlassVideoCodec,
   GlassInputMode,
+  GlassDialog,
   GlassSession,
   GlassStats,
   InteractiveElement,
@@ -72,6 +73,7 @@ export type {
   GlassCreateSessionOptions,
   GlassVideoCodec,
   GlassInputMode,
+  GlassDialog,
   GlassSession,
   GlassStats,
   InteractiveElement,
@@ -220,6 +222,11 @@ export type GlassClientEventMap = {
   // someone else takes the page or the controller leaves. floorHolder()
   // already reflects it.
   floorChanged: [connectionId: string | null, isSelf: boolean];
+  // The page's JavaScript dialog opened (dialog.open) or closed, by any
+  // answer. Fires on connect too when one is already open. See GlassDialog
+  // for inPicture; answer it with answerDialog(). dialog() already reflects
+  // it.
+  dialog: [dialog: GlassDialog];
   // Owner-only roster (docs/protocol.md's Control handoff section) - fires
   // whenever the known set of other connections changes: someone joined,
   // left, or had their producesInput granted/revoked. Never fires for a
@@ -542,6 +549,19 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
   // or null when no one has it (see the "floorChanged" event).
   floorHolder(): string | null {
     return this.core._floorHolder;
+  }
+
+  // The page's open JavaScript dialog, or null (see the "dialog" event).
+  dialog(): GlassDialog | null {
+    return this.core._dialog;
+  }
+
+  // Answers the page's open JavaScript dialog, as its OK (accept true) or
+  // Cancel button; text is a prompt's answer. Input like any other: in
+  // input mode "floor" it needs the floor, and is dropped ("inputDropped")
+  // without it.
+  answerDialog(accept: boolean, text?: string): void {
+    return inputs.answerDialog(this.core, accept, text);
   }
 
   // Whether THIS connection is the session owner - the offer's isOwner

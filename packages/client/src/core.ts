@@ -4,7 +4,7 @@
 
 import type { GlassClientOptions, GlassClientEventMap } from "./index";
 import { DEFAULT_RECONNECT_DELAYS_MS, DEFAULT_MAX_RECONNECT_ATTEMPTS, originOf } from "./internal";
-import type { GlassRosterEntry, GlassSlotState } from "./types";
+import type { GlassDialog, GlassRosterEntry, GlassSlotState } from "./types";
 import { InputLatencyTracker } from "./input_latency";
 import type { ReceiverCounters } from "./input_latency";
 import { EncodedStreamChecker } from "./encoded_stream_check";
@@ -106,6 +106,9 @@ export class ClientCore {
   // Who has the page in input mode "floor", from input_floor; null when no
   // one has it, and always null in mode "free". Reset with _connectionId.
   _floorHolder: string | null = null;
+  // The page's dialog, from the dialog message; null when none is open.
+  // Reset with _connectionId: a reconnect is sent the open one again.
+  _dialog: GlassDialog | null = null;
   // Whether THIS connection authenticated with the session's own unscoped
   // credential rather than a minted, capability-scoped grant - see
   // the offer's isOwner field (docs/protocol.md) for what this

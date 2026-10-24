@@ -7,7 +7,7 @@ import { BrowserHeader } from "./components/BrowserHeader";
 import { CustomLoader } from "./components/CustomLoader";
 import { ErrorScreen } from "./components/ErrorScreen";
 import { WelcomeView } from "./components/WelcomeView";
-import { DownloadPrompts, HijackedUrlPrompt, MicPrompt, UploadPrompt } from "./components/Prompts";
+import { DialogPrompt, DownloadPrompts, HijackedUrlPrompt, MicPrompt, UploadPrompt } from "./components/Prompts";
 import { API_TOKEN, GLASS_ADDR } from "./config";
 import { useGlassSession } from "./hooks/useGlassSession";
 import { useNavigation } from "./hooks/useNavigation";
@@ -419,6 +419,13 @@ export function App() {
         />
       )}
 
+      {session.pageDialog && (
+        <DialogPrompt
+          dialog={session.pageDialog}
+          otherHasFloor={session.otherHasFloor}
+          onAnswer={(accept, text) => client?.answerDialog(accept, text)}
+        />
+      )}
       {hijackedUrl && (
         <HijackedUrlPrompt url={hijackedUrl} onOpen={handleHijackedUrlClick} onDismiss={() => setHijackedUrl(null)} />
       )}
