@@ -55,7 +55,8 @@ which accept the per-session `?token=` from the URLs Glass returns.
 | `GET` | `/v1/sessions/{id}/page/at?x&y` | The node at a viewport point and its ancestors. |
 | `GET` | `/v1/sessions/{id}/page/node?ref` | Where a node is now: quads, bounds, `inViewport`. |
 | `POST` | `/v1/sessions/{id}/page/scroll` | `{"ref"}`: scroll it into view. |
-| `GET` | `/v1/sessions/{id}/page/state` | URL, title, viewport, scroll position, focused node. |
+| `GET` | `/v1/sessions/{id}/page/state` | URL, title, viewport, scroll position, focused node. `409` (`dialog_open`) while a JavaScript dialog is open. |
+| `POST` | `/v1/sessions/{id}/page/dialog` | Answers the page's open JavaScript dialog: `{"accept", "text"?, "floor"?, "wait"?}`. `200`; `409` (`no_dialog`) when none is open. |
 | `GET` | `/v1/sessions/{id}/page/events?kinds` | Server-Sent Events: the page's state as counters, on each change. |
 | `GET` | `/v1/sessions/{id}/downloads/{guid}` | A finished download (see `DownloadReady`). |
 | `POST` | `/v1/sessions/{id}/upload` | `multipart/form-data` answer to `FileChooserOpened`. |
@@ -181,6 +182,7 @@ page's CSS pixels.
 | `set_viewport` | `width`, `height` | |
 | `copy_text` | none | Answered with `ClipboardText`. |
 | `paste_text` | `text` | |
+| `dialog_answer` | `accept`, `text?` | Answers the page's open JavaScript dialog (`Dialog`, `0x11`) as OK (`accept: true`) or Cancel; `text` is a prompt's answer. Ordinary input: it needs `producesInput` and goes through the input mode's floor. Ignored when no dialog is open. |
 
 `modifiers` is a bitmask: Alt = 1, Ctrl = 2, Meta = 4, Shift = 8. Interaction
 messages may carry `s`, a per-connection sequence number used for latency
@@ -210,6 +212,7 @@ Binary. The first byte is the message type; most carry JSON after it.
 | `0x0E` | `FileChooserClosed` | `{}` | The file picker expired or was replaced. |
 | `0x0F` | `MicAccessRequested` | `{origin}` | Answer with `mic_granted` or `mic_denied` within 60 s; silence denies. |
 | `0x10` | `InputDropped` | `{code, eventType, count, s?}` | Glass discarded this connection's input. See [Dropped input](#dropped-input). |
+| `0x11` | `Dialog` | `{open, type?, message?, defaultPrompt?, inPicture}` | The page's JavaScript dialog (`alert`, `confirm`, `prompt`, `beforeunload`) opened or closed; also sent on joining while one is open. The page waits until it is answered with `dialog_answer`. `inPicture` is true when the dialog is drawn in the video (on a display, not the screencast), so a person can answer it with ordinary input; when false, show it yourself. |
 | `0xFF` | `Error` | `{error}` | The video encoder failed. |
 
 Types `0x01`–`0x1F` are control and state; `0xF0`–`0xFF` are errors and
