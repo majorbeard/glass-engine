@@ -4,6 +4,7 @@ import {
   createGlassSession,
   deleteGlassSession,
   type GlassClient,
+  type GlassDialog,
   type GlassRosterEntry,
   type GlassSession,
 } from "@glass/client";
@@ -115,6 +116,9 @@ export function useGlassSession(notify: Notify) {
   // mode only one of them drives the page at a time. True while that is
   // someone else (the "floorChanged" event).
   const [otherHasFloor, setOtherHasFloor] = useState(false);
+  // The page's open JavaScript dialog, when the stream does not picture it
+  // (the "dialog" event); null otherwise.
+  const [pageDialog, setPageDialog] = useState<GlassDialog | null>(null);
   // Owner-controlled handoff (docs/protocol.md's "Owner-controlled
   // handoff" section) - see client.on("rosterChanged") wiring below.
   const [isOwner, setIsOwner] = useState(false);
@@ -257,6 +261,9 @@ export function useGlassSession(notify: Notify) {
       });
       c.on("floorChanged", (holder, isSelf) => {
         if (!cancelled) setOtherHasFloor(holder !== null && !isSelf);
+      });
+      c.on("dialog", (d) => {
+        if (!cancelled) setPageDialog(d.open && !d.inPicture ? d : null);
       });
       c.on("disconnected", () => {
         if (!cancelled) setIsConnected(false);
@@ -469,6 +476,7 @@ export function useGlassSession(notify: Notify) {
     sessionId,
     producesInput,
     otherHasFloor,
+    pageDialog,
     isOwner,
     connections,
     sourceStalled,

@@ -96,6 +96,12 @@ export function pasteText(c: ClientCore, text: string): void {
   transport.sendInput(c, "paste_text", { text });
 }
 
+// See GlassClient.answerDialog.
+export function answerDialog(c: ClientCore, accept: boolean, text?: string): void {
+  if (!drops.allowed(c, "dialog_answer")) return;
+  transport.sendInput(c, "dialog_answer", text === undefined ? { accept } : { accept, text });
+}
+
 // See GlassClient.dispatchKeyEvent.
 export function dispatchKeyEvent(c: ClientCore, keyEvent: KeyEvent): void {
   const modifiers =

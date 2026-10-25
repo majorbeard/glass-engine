@@ -46,6 +46,13 @@ interface GlassInputDrop {
 type GlassContentHint = "detail" | "motion";
 type GlassVideoCodec = "h264" | "vp8" | "av1";
 type GlassInputMode = "floor" | "free";
+interface GlassDialog {
+    open: boolean;
+    type?: "alert" | "confirm" | "prompt" | "beforeunload" | (string & {});
+    message?: string;
+    defaultPrompt?: string;
+    inPicture: boolean;
+}
 interface GlassCreateSessionOptions {
     audioInput?: boolean;
     contentHint?: GlassContentHint;
@@ -265,6 +272,7 @@ type GlassClientEventMap = {
     ];
     inputRequested: [connectionId: string];
     floorChanged: [connectionId: string | null, isSelf: boolean];
+    dialog: [dialog: GlassDialog];
     rosterChanged: [connections: GlassRosterEntry[]];
     slotStateChanged: [slots: Record<string, GlassSlotState>];
     inputDropped: [drop: GlassInputDrop];
@@ -298,6 +306,8 @@ declare class GlassClient extends Emitter<GlassClientEventMap> {
     connectionId(): string | null;
     producesInput(): boolean;
     floorHolder(): string | null;
+    dialog(): GlassDialog | null;
+    answerDialog(accept: boolean, text?: string): void;
     isOwner(): boolean;
     connections(): GlassRosterEntry[];
     notePresentedFrame(rtpTimestamp: number, expectedDisplayTime: number): void;
@@ -338,6 +348,7 @@ export {
     type GlassConnectionGrant,
     type GlassContentHint,
     type GlassCreateSessionOptions,
+    type GlassDialog,
     type GlassInputDrop,
     type GlassInputDropCode,
     type GlassInputMode,
