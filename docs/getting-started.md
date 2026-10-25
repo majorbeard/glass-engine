@@ -124,7 +124,10 @@ is all a client needs. That is how a real application is built:
 
 The reference viewer can take a token for local testing
 (`VITE_GLASS_API_TOKEN`). A real frontend never should: anything in a
-frontend bundle is public.
+frontend bundle is public. The viewer enforces it: it refuses to build
+with a token for an engine that is not on your machine or private network,
+and pointed at any other engine it only opens the session links it is
+given.
 
 ## Next
 
