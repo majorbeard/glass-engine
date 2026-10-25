@@ -168,6 +168,7 @@ every 2 s per code and event type. See
 | `copyText()`, `pasteText(text)` | |
 | `downloadUrl(guid)`, `uploadFiles(files)` | |
 | `grantMicAccess()`, `denyMicAccess()` | |
+| `dialog()`, `answerDialog(accept, text?)` | The page's open JavaScript dialog, or `null`; answer it as OK or Cancel, with a prompt's text. Input: it needs control of the page. |
 
 | Event | |
 |---|---|
@@ -178,6 +179,7 @@ every 2 s per code and event type. See
 | `newTabRequested(url)` | The page tried to open a popup or tab. |
 | `downloadReady(filename, guid)`, `fileChooserOpened(multiple)`, `fileChooserClosed` | File transfer. |
 | `micAccessRequested(origin)` | The page wants the microphone. |
+| `dialog(dialog)` | The page's JavaScript dialog opened or closed: `{open, type?, message?, defaultPrompt?, inPicture}`. When `inPicture` is false the video shows only the page, so show the dialog yourself. |
 | `consoleMessage(level, text)` | The page's console output. |
 
 The feature behind each is described in [sources/browser.md](sources/browser.md).

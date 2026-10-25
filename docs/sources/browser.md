@@ -181,6 +181,17 @@ When the page opens a file picker (`<input type="file">`), Glass emits
 result to `client.uploadFiles(files)`. If nobody answers within 60 s, the
 remote picker is cancelled and `fileChooserClosed` fires.
 
+## Dialogs
+
+A page's `alert`, `confirm`, `prompt` or "leave this page?" dialog stops its
+scripts until someone answers. Every viewer gets the `dialog` event, with the
+page's text. On a display (every capture method but the screencast) Chrome
+draws the dialog in the video and ordinary input answers it. With the
+screencast the video shows only the page, so show the dialog in your app and answer with `client.answerDialog(accept, text?)`.
+The reference viewer does this. Your backend can answer through the API
+instead: see [page-inspection.md](../page-inspection.md#dialogs). Glass
+never answers a dialog on its own.
+
 ## Audio
 
 Start Glass with `GLASS_AUDIO_MODE=on` to stream the browser's sound. Each

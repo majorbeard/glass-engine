@@ -110,7 +110,7 @@ Each is one mechanical step.
 | `GET /page/at?x=&y=` | The node at that point of the viewport, then its ancestors up to the page's root, through frames: `{"x", "y", "path": [...]}`. |
 | `GET /page/node?ref=` | Where the node is now: `{"node", "quads", "bounds", "inViewport"}`. `quads` are its boxes, each `[x1, y1, x2, y2, x3, y3, x4, y4]`; an element that wraps across lines or is clipped has several. |
 | `POST /page/scroll {"ref"}` | Scrolls the node into view (and its frames into theirs), then answers as `/page/node`. |
-| `GET /page/state` | `{"url", "title", "viewport", "scrollX", "scrollY", "focus"}`; `focus` is the focused node, through frames. |
+| `GET /page/state` | `{"url", "title", "viewport", "scrollX", "scrollY", "focus"}`; `focus` is the focused node, through frames. While a JavaScript dialog is open it answers `409` with `"code": "dialog_open"` at once: the dialog blocks the page's script. |
 
 All are under `/v1/sessions/{id}`, with the same rules as the snapshot.
 
@@ -166,7 +166,7 @@ values, so a missed event or a reconnect loses nothing.
 | `network` | `inflight`, `started`, `finished` | the page's requests |
 | `structure` | `version` | changes to the page's DOM |
 | `focus` | `version` | focus moving |
-| `dialog` | `open`, `type`, `seq` | `alert`, `confirm`, `prompt` and leave-page dialogs |
+| `dialog` | `open`, `type`, `message`, `defaultPrompt`, `seq` | `alert`, `confirm`, `prompt` and leave-page (`beforeunload`) dialogs |
 | `popups` | `version` | new tabs the page asked for |
 | `floor` | `holder` | who is driving the page |
 
@@ -231,8 +231,27 @@ of them. `pixels` tells you when the picture itself has stopped changing.
 ### Dialogs
 
 `dialog.open` turns `true` when the page opens an `alert`, `confirm`, `prompt`
-or leave-page dialog, with its `type`. The page's scripts wait until it is
-answered. Answering one through the API is not available yet.
+or leave-page dialog, with its `type`, the page's `message` and, for a
+prompt, its `defaultPrompt`. The page's scripts wait until it is answered.
+Dialogs opened by the page's frames, cross-origin ones included, are reported
+the same way.
+
+```http
+POST /v1/sessions/{id}/page/dialog
+{"accept": true, "text": "an answer"}
+```
+
+`accept` is OK (`true`) or Cancel (`false`); `text` answers a prompt. `200`
+when answered, `409` with `"code": "no_dialog"` when none is open (someone
+else may have answered first). Like input, it can take the floor first:
+`"floor": true`, with `"wait"`, answers `409` `floor_taken` if a person is
+driving the page. On a display (every capture method but the screencast) a
+viewer sees Chrome's own dialog and may be answering it too.
+
+What to answer is your decision; Glass never answers on its own. A
+leave-page dialog has an empty `message` (browsers show their own text). It
+appears when the page leaves by itself, for a link or a script; when you
+navigate the session, Glass replaces the page without asking it.
 
 ## Limits
 
