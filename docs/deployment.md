@@ -3,10 +3,10 @@
 Running Glass anywhere other than your own laptop. The short version:
 
 1. Run the Docker image with an API token, a restart policy and enough
-   shared memory.
-2. Open TCP 8080 (or your TLS port) **and UDP 50000**.
-3. Put TLS in front if any HTTPS page will talk to Glass.
-4. Add TURN if viewers or producers are on mobile or corporate networks.
+   shared memory, its API bound to this host only.
+2. Put a TLS proxy in front, and open **TCP 443** (and 80, for the
+   certificate) **and UDP 50000**, nothing else (see [Ports](#ports)).
+3. Add TURN if viewers or producers are on mobile or corporate networks.
 
 ## Docker
 
@@ -20,7 +20,7 @@ process that reaps Chrome's child processes.
 docker run -d --name glass \
   --restart unless-stopped \
   --shm-size=2g \
-  -p 8080:8080 \
+  -p 127.0.0.1:8080:8080 \
   -p 50000:50000/udp \
   -v glass-cache:/home/glass/.cache/glass \
   --env-file /etc/glass/env \
@@ -43,7 +43,7 @@ services:
     restart: unless-stopped
     shm_size: "2gb"
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
       - "50000:50000/udp"
     volumes:
       - glass-cache:/home/glass/.cache/glass
@@ -114,7 +114,7 @@ On a host with an NVIDIA GPU, give the container the GPU and NVIDIA's
 capture and encoding libraries:
 
 ```sh
-docker run -d --name glass --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all   --restart unless-stopped --shm-size=2g -p 8080:8080 -p 50000:50000/udp   -v glass-cache:/home/glass/.cache/glass --env-file /etc/glass/env   ghcr.io/majorbeard/glass:<version>
+docker run -d --name glass --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all   --restart unless-stopped --shm-size=2g -p 127.0.0.1:8080:8080 -p 50000:50000/udp   -v glass-cache:/home/glass/.cache/glass --env-file /etc/glass/env   ghcr.io/majorbeard/glass:<version>
 ```
 
 Nothing else is needed: with `GLASS_CAPTURE` unset, Glass picks the `nvidia`
@@ -144,10 +144,20 @@ Glass returns ([concepts.md](concepts.md#tokens-in-urls)).
 
 ## Ports
 
+Open these to the internet, and nothing else:
+
 | Traffic | Port | |
 |---|---|---|
-| HTTP API and signaling | TCP 8080 (`GLASS_ADDR`) | Or 443 through a TLS proxy. |
+| HTTPS API and signaling | **TCP 443**, on the TLS proxy ([TLS](#tls)) | Plus TCP 80 if the proxy gets its certificate by HTTP (Caddy does). |
 | WebRTC media and data | **UDP 50000** (`GLASS_WEBRTC_UDP_PORT`) | Every peer connection shares this one port. |
+| TURN, if you run it on this host | UDP and TCP 3478, TCP 5349, UDP 49152–65535 | See [TURN](#turn). |
+
+Glass's own HTTP port (TCP 8080, `GLASS_ADDR`) stays on this host:
+`-p 127.0.0.1:8080:8080`, so only the proxy reaches it. Never open it to
+the internet: it is plain HTTP, and session links carry their token in the
+URL, so anyone on the path could read and reuse them. On a private network
+with no proxy, publish it to that network only (`-p <private-ip>:8080:8080`)
+and keep it off the internet in the firewall and the cloud security group.
 
 Opening only the TCP port is the most common mistake: signaling works, and
 the connection then hangs at ICE `checking` forever. Open UDP 50000 in
@@ -274,8 +284,10 @@ glass.example.com {
 }
 ```
 
-Open TCP 80 and 443. Media still goes directly to UDP 50000; the proxy only
-carries HTTP and signaling. Glass returns `wss://` URLs when the proxy sets
+Open TCP 80 and 443, and keep Glass's port 8080 on the host
+(`-p 127.0.0.1:8080:8080`, as above): the proxy is the only way in. Media
+still goes directly to UDP 50000; the proxy only carries HTTP and
+signaling. Glass returns `wss://` URLs when the proxy sets
 `X-Forwarded-Proto: https` (Caddy does).
 
 No domain? `203-0-113-10.nip.io` resolves to `203.0.113.10` and works with
@@ -285,10 +297,17 @@ Caddy's automatic certificates. Let's Encrypt refuses certificates for
 ### Proxies and client addresses
 
 Glass rate-limits per client address. Behind a proxy, it trusts
-`X-Forwarded-For` only from trusted proxies: loopback by default, which fits
-Caddy on the same host. For a proxy or load balancer on another machine, list
-the address Glass sees it connect from (inside a VPC, its **private** address
-or subnet):
+`X-Forwarded-For` only from trusted proxies: loopback by default. With Glass
+in Docker and Caddy on the host, Glass sees the proxy connect from Docker's
+bridge gateway, not loopback: trust that address (usually `172.17.0.1`;
+`docker network inspect bridge` shows it):
+
+```sh
+GLASS_TRUSTED_PROXIES=172.17.0.1
+```
+
+For a proxy or load balancer on another machine, list the address Glass sees
+it connect from (inside a VPC, its **private** address or subnet):
 
 ```sh
 GLASS_TRUSTED_PROXIES=127.0.0.1,::1,10.0.1.0/24
