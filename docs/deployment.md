@@ -208,6 +208,12 @@ GLASS_TURN_CREDENTIAL=<password>
 and pass the same servers to your clients (`iceServers` in `GlassClient`,
 `GlassProducer` and your call peers). Both ends of a connection may need it.
 
+A credential given to clients is public: anyone who has it can use your TURN
+server as a relay. So keep the relay out of your own network (the
+`denied-peer-ip` lines below), give TURN its own password (never reuse one),
+and change it if it is misused. Short-lived credentials that Glass issues
+per connection are planned; until then, this is the safe setup.
+
 **Self-hosting with [coturn](https://github.com/coturn/coturn)** is the usual
 choice. Install the distribution package (`apt-get install coturn`) and set
 `/etc/turnserver.conf`:
@@ -223,7 +229,30 @@ max-port=65535
 external-ip=<public-ip>/<private-ip>
 listening-ip=<private-ip>
 relay-ip=<private-ip>
+
+# Relay to the internet only, never into this host's own networks
+# (coturn relays to private and link-local addresses unless told not to):
+no-multicast-peers
+denied-peer-ip=0.0.0.0-0.255.255.255
+denied-peer-ip=10.0.0.0-10.255.255.255
+denied-peer-ip=100.64.0.0-100.127.255.255
+denied-peer-ip=127.0.0.0-127.255.255.255
+denied-peer-ip=169.254.0.0-169.254.255.255
+denied-peer-ip=172.16.0.0-172.31.255.255
+denied-peer-ip=192.0.0.0-192.0.0.255
+denied-peer-ip=192.168.0.0-192.168.255.255
+denied-peer-ip=198.18.0.0-198.19.255.255
+denied-peer-ip=::1
+denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+# Glass on the same private network, reached at its private address:
+# allow that one address (an allowed address wins over a denied range).
+# allowed-peer-ip=<glass-private-ip>
 ```
+
+`169.254.0.0/16` holds cloud metadata services
+(`169.254.169.254`): without these lines, anyone with the credential could
+relay to them, and to every other private address the TURN host can reach.
 
 Open UDP and TCP 3478, TCP 5349, and UDP 49152–65535. Without `external-ip`
 on a cloud host, allocation succeeds but relayed media never arrives.
