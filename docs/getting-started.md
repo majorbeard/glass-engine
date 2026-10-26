@@ -9,7 +9,9 @@ You need Docker and Node.js 18 or newer.
 ## 1. Start Glass
 
 ```sh
+docker run --rm ghcr.io/majorbeard/glass seccomp-profile > glass-seccomp.json
 docker run -d --name glass \
+  --security-opt seccomp=glass-seccomp.json \
   -p 127.0.0.1:8080:8080 \
   -p 50000:50000/udp \
   --shm-size=1g \
@@ -21,6 +23,9 @@ docker run -d --name glass \
 
 What the flags do:
 
+- `--security-opt seccomp=glass-seccomp.json`: the seccomp profile the first
+  command wrote from the image. Chrome's sandbox needs it; without it Glass
+  refuses to start. See [deployment.md](deployment.md#hardening).
 - `-p 127.0.0.1:8080:8080`: the HTTP API, reachable only from this machine.
 - `-p 50000:50000/udp`: WebRTC media. Without it, connections hang.
 - `--shm-size=1g`: shared memory for Chrome.
@@ -99,6 +104,7 @@ Anything beyond your own machine needs a token. Restart Glass with one:
 docker rm -f glass
 export GLASS_API_TOKEN=$(openssl rand -hex 32)
 docker run -d --name glass \
+  --security-opt seccomp=glass-seccomp.json \
   -p 8080:8080 -p 50000:50000/udp --shm-size=1g \
   -v glass-cache:/home/glass/.cache/glass \
   -e GLASS_API_TOKEN \
