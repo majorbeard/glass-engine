@@ -67,6 +67,8 @@ export interface GlassProducerOptions {
    */
   produceUrl?: string;
   /** ICE servers for this producer's own peer connection. Default: a public STUN server. */
+  // ICE servers. Without them the engine's are used (sent first on the
+  // produce connection), else a public STUN server.
   iceServers?: RTCIceServer[];
   /** Cap on the video sender's bitrate in kbps (default 1000; 0 = uncapped). Keep it below the uplink's capacity. */
   maxBitrateKbps?: number;
@@ -91,6 +93,8 @@ const CREATE_SESSION_TIMEOUT_MS = 10000;
 const DISCONNECT_GRACE_MS = 6000;
 /** How long one attempt, WebSocket handshake included, may take to reach "connected". */
 const CONNECT_TIMEOUT_MS = 20000;
+/** How long to wait for the engine's ICE servers before offering without them: an engine that sends them does so the moment the socket opens. */
+const ICE_CONFIG_WAIT_MS = 2000;
 const DEFAULT_RESUME_WINDOW_MS = 45000;
 const DEFAULT_MAX_BITRATE_KBPS = 1000;
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
@@ -117,6 +121,8 @@ class SessionGoneError extends Error {}
 
 /** WebSocket close code Glass sends for a session that doesn't exist (see CLOSE_SESSION_NOT_FOUND). */
 const CLOSE_SESSION_GONE = 4404;
+/** WebSocket close code Glass sends for an expired link (see CLOSE_LINK_EXPIRED). */
+const CLOSE_LINK_EXPIRED = 4401;
 
 interface Drop {
   fatal: boolean;
@@ -413,6 +419,8 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
       });
       let onConnected!: () => void;
       const connected = new Promise<void>((r) => (onConnected = r));
+      let gotIceConfig!: (servers: RTCIceServer[]) => void;
+      const iceConfig = new Promise<RTCIceServer[]>((r) => (gotIceConfig = r));
 
       pc.addEventListener("icecandidate", (e) => {
         if (e.candidate && socket.readyState === WebSocket.OPEN) {
@@ -434,13 +442,15 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
       });
 
       socket.addEventListener("message", (event) => {
-        let msg: { type: string; sdp?: string; candidate?: RTCIceCandidateInit; code?: string; message?: string };
+        let msg: { type: string; sdp?: string; candidate?: RTCIceCandidateInit; code?: string; message?: string; iceServers?: RTCIceServer[] };
         try {
           msg = JSON.parse(event.data);
         } catch {
           return;
         }
-        if (msg.type === "answer" && msg.sdp) {
+        if (msg.type === "ice_config") {
+          if (Array.isArray(msg.iceServers)) gotIceConfig(msg.iceServers);
+        } else if (msg.type === "answer" && msg.sdp) {
           void pc.setRemoteDescription({ type: "answer", sdp: withStartBitrate(msg.sdp, this.startBitrateKbps) });
         } else if (msg.type === "ice-candidate" && msg.candidate) {
           void pc.addIceCandidate(msg.candidate);
@@ -452,6 +462,7 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
       });
       socket.addEventListener("close", (e) => {
         if (e.code === CLOSE_SESSION_GONE) drop(false, "session not found or expired", true);
+        else if (e.code === CLOSE_LINK_EXPIRED) drop(true, "this link has expired");
         else drop(false, `signaling connection closed (code ${e.code})`);
       });
 
@@ -462,6 +473,13 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
       dropped.catch(() => undefined);
 
       await Promise.race([wsOpen, timeout, dropped]);
+      // The engine sends its ICE servers first; this side offers, and
+      // gathers, only after taking them. An engine too old to send them is
+      // waited for briefly, then the defaults stay.
+      if (!this.opts.iceServers) {
+        const servers = await Promise.race([iceConfig, new Promise<null>((r) => setTimeout(() => r(null), ICE_CONFIG_WAIT_MS))]);
+        if (servers) pc.setConfiguration({ ...pc.getConfiguration(), iceServers: servers });
+      }
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       socket.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));

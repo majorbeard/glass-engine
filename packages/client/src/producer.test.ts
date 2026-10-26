@@ -33,10 +33,12 @@ class FakeWebSocket {
     this.readyState = FakeWebSocket.CLOSED;
     this.fire("close", { code });
   }
-  // Test controls.
-  open() {
+  // Test controls. open() also sends what the engine sends first on every
+  // connection, its ICE servers; open(false) plays an engine too old to.
+  open(sendIceConfig = true) {
     this.readyState = FakeWebSocket.OPEN;
     this.fire("open");
+    if (sendIceConfig) this.serverMessage({ type: "ice_config", iceServers: ENGINE_ICE });
   }
   serverMessage(msg: object) {
     this.fire("message", { data: JSON.stringify(msg) });
@@ -48,6 +50,8 @@ class FakeWebSocket {
     this.fire("close", { code });
   }
 }
+
+const ENGINE_ICE = [{ urls: ["turn:turn.example:3478"], username: "1:abc", credential: "minted" }];
 
 class FakePeerConnection {
   static instances: FakePeerConnection[] = [];
@@ -69,7 +73,17 @@ class FakePeerConnection {
   async createOffer() {
     return { type: "offer", sdp: "v=0" };
   }
-  async setLocalDescription() {}
+  getConfiguration() {
+    return this.config;
+  }
+  setConfiguration(config: RTCConfiguration) {
+    if (this.offered) throw new Error("setConfiguration after the offer");
+    this.config = config;
+  }
+  offered = false;
+  async setLocalDescription() {
+    this.offered = true;
+  }
   async setRemoteDescription() {}
   async addIceCandidate() {}
   async getStats() {
@@ -143,6 +157,41 @@ function recordStates(p: GlassProducer) {
 }
 
 describe("GlassProducer", () => {
+  // The engine hands every produce connection its ICE servers first, TURN
+  // credential included; the producer takes them before it offers.
+  it("offers with the engine's ICE servers", async () => {
+    const p = new GlassProducer({ stream, produceUrl: "wss://glass/v1/relay-sessions/s9/produce?token=p" });
+    const started = p.start();
+    await connectAttempt(0);
+    await started;
+    expect(FakePeerConnection.instances[0]!.config.iceServers).toEqual(ENGINE_ICE);
+    p.stop();
+  });
+
+  it("keeps the application's own ICE servers", async () => {
+    const own = [{ urls: "turn:own.example:3478", username: "u", credential: "c" }];
+    const p = new GlassProducer({ stream, produceUrl: "wss://glass/v1/relay-sessions/s9/produce?token=p", iceServers: own });
+    const started = p.start();
+    await connectAttempt(0);
+    await started;
+    expect(FakePeerConnection.instances[0]!.config.iceServers).toEqual(own);
+    p.stop();
+  });
+
+  it("offers with its defaults against an engine that sends no ICE servers", async () => {
+    const p = new GlassProducer({ stream, produceUrl: "wss://glass/v1/relay-sessions/s9/produce?token=p" });
+    void p.start();
+    await vi.waitFor(() => expect(FakeWebSocket.instances[0]).toBeDefined());
+    const ws = FakeWebSocket.instances[0]!;
+    ws.open(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(ws.sent.some((m) => m.type === "offer")).toBe(false);
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(ws.sent.some((m) => m.type === "offer")).toBe(true);
+    expect(FakePeerConnection.instances[0]!.config.iceServers).not.toEqual(ENGINE_ICE);
+    p.stop();
+  });
+
   it("creates a session with the declared slots and produces into the chosen slot", async () => {
     const p = new GlassProducer({ stream, serverUrl: "https://glass", apiToken: "t", slots: ["main", "cam"], slot: "cam" });
     const sessions: any[] = [];
@@ -294,6 +343,20 @@ describe("GlassProducer", () => {
     FakeWebSocket.instances[0]!.serverClose(4404);
     await vi.waitFor(() => expect(p.state).toBe("error"));
     expect(states[states.length - 1]).toEqual(["error", "session not found or expired"]);
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
+  it("a producer ends in error, without retrying, when its link has expired (4401)", async () => {
+    const p = new GlassProducer({ stream, produceUrl: "wss://glass/v1/relay-sessions/x9/produce?token=p" });
+    const states = recordStates(p);
+    const started = p.start();
+    await connectAttempt(0);
+    await started;
+
+    FakeWebSocket.instances[0]!.serverClose(4401);
+    await vi.waitFor(() => expect(p.state).toBe("error"));
+    expect(states[states.length - 1]).toEqual(["error", "this link has expired"]);
     await vi.advanceTimersByTimeAsync(10000);
     expect(FakeWebSocket.instances).toHaveLength(1);
   });

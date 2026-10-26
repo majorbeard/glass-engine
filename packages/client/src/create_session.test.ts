@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createGlassSession } from "./index";
+import { createGlassSession, redeemGlassTicket } from "./index";
 
 // What createGlassSession posts for each form of its third argument.
 function stubFetch() {
@@ -54,5 +54,30 @@ describe("createGlassSession options", () => {
     const fetchMock = stubFetch();
     await createGlassSession("http://host", undefined, {});
     expect(postedBody(fetchMock)).toBeUndefined();
+  });
+});
+
+describe("linkExpiresIn and tickets", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("posts linkExpiresIn, 0 included", async () => {
+    const fetchMock = stubFetch();
+    await createGlassSession("http://host", undefined, { linkExpiresIn: 0 });
+    expect(postedBody(fetchMock)).toEqual({ linkExpiresIn: 0 });
+  });
+
+  it("redeems a ticket with no API token", async () => {
+    const fetchMock = stubFetch();
+    const session = await redeemGlassTicket("a.b.c", "http://host");
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, { headers: Record<string, string>; body: string }];
+    expect(url).toBe("http://host/v1/tickets");
+    expect(JSON.parse(init.body)).toEqual({ ticket: "a.b.c" });
+    expect(init.headers.Authorization).toBeUndefined();
+    expect(session.id).toBe("s1");
+  });
+
+  it("fails with the runtime's reason for a refused ticket", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 401, statusText: "Unauthorized", json: async () => ({ error: "ticket already used" }) })));
+    await expect(redeemGlassTicket("a.b.c", "http://host")).rejects.toThrow("Failed to redeem ticket (401): ticket already used");
   });
 });

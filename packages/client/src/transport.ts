@@ -37,7 +37,7 @@ const enum MessageType {
 export function initPeerConnection(c: ClientCore, onConnectedThisAttempt: () => void): void {
   if (c.pc) return;
   const pc = new RTCPeerConnection({
-    iceServers: c.iceServers,
+    iceServers: c.iceServersGiven ? c.iceServers : (c.serverIceServers ?? c.iceServers),
     ...(c.iceTransportPolicy
       ? { iceTransportPolicy: c.iceTransportPolicy }
       : {}),

@@ -51,6 +51,7 @@ export interface StartCallOptions {
   apiToken?: string;
   /** Required for mode "join": the full pasted peerAUrl/peerBUrl. */
   signalingUrl?: string;
+  /** A TURN server of your own. Without one, Glass's are used: it sends each connection its STUN and TURN servers first, with a short-lived TURN credential of its own. */
   turnServer?: { url: string; username: string; credential: string };
   onStateChange: (state: CallState, detail?: string) => void;
   onLocalStream: (stream: MediaStream) => void;
@@ -64,7 +65,11 @@ interface WSSignal {
   type: string;
   sdp?: string;
   candidate?: RTCIceCandidateInit;
+  iceServers?: RTCIceServer[];
 }
+
+/** How long to wait for Glass's ICE servers before offering without them: a Glass that sends them does so the moment the socket opens. */
+const ICE_CONFIG_WAIT_MS = 2000;
 
 function authHeaders(apiToken?: string): HeadersInit {
   return apiToken ? { Authorization: `Bearer ${apiToken}` } : {};
@@ -192,16 +197,21 @@ export function startCall(options: StartCallOptions): CallHandle {
       }
     });
 
+    let gotIceConfig!: (servers: RTCIceServer[]) => void;
+    const iceConfig = new Promise<RTCIceServer[]>((r) => (gotIceConfig = r));
     activeWs.addEventListener("message", (event) => {
       const msg: WSSignal = JSON.parse(event.data);
-      if (msg.type === "answer" && msg.sdp) {
+      if (msg.type === "ice_config") {
+        if (Array.isArray(msg.iceServers)) gotIceConfig(msg.iceServers);
+      } else if (msg.type === "answer" && msg.sdp) {
         void activePc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
       } else if (msg.type === "ice-candidate" && msg.candidate) {
         void activePc.addIceCandidate(msg.candidate);
       }
     });
-    activeWs.addEventListener("close", () => {
-      if (!stopped) onStateChange("error", "signaling connection closed");
+    activeWs.addEventListener("close", (e) => {
+      // 4401: Glass no longer admits this link; a new one is needed.
+      if (!stopped) onStateChange("error", e.code === 4401 ? "this call link has expired" : "signaling connection closed");
     });
 
     // See producer.ts's own doc comment - getUserMedia (all local) can
@@ -213,6 +223,12 @@ export function startCall(options: StartCallOptions): CallHandle {
       return;
     }
 
+    // Glass sends its ICE servers first; this side offers, and gathers,
+    // only after taking them (unless a TURN server of your own was given).
+    if (!turnServer?.url) {
+      const servers = await Promise.race([iceConfig, new Promise<null>((r) => setTimeout(() => r(null), ICE_CONFIG_WAIT_MS))]);
+      if (servers) activePc.setConfiguration({ ...activePc.getConfiguration(), iceServers: servers });
+    }
     const offer = await activePc.createOffer();
     await activePc.setLocalDescription(offer);
     activeWs.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));

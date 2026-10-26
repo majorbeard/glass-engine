@@ -56,9 +56,13 @@ export function startProducer(options: StartProducerOptions): ProducerHandle {
       if (stopped) return releaseCamera();
       options.onLocalStream(camera);
 
-      const iceServers: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
+      // A TURN server of the user's own, if they entered one; otherwise
+      // Glass's (sent first on the produce connection, with a short-lived
+      // TURN credential of its own).
       const turn = options.turnServer;
-      if (turn?.url) iceServers.push({ urls: turn.url, username: turn.username, credential: turn.credential });
+      const iceServers: RTCIceServer[] | undefined = turn?.url
+        ? [{ urls: "stun:stun.l.google.com:19302" }, { urls: turn.url, username: turn.username, credential: turn.credential }]
+        : undefined;
 
       producer = new GlassProducer({
         stream: camera,

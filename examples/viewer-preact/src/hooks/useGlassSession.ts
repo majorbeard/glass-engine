@@ -3,6 +3,8 @@ import {
   createGlassClient,
   createGlassSession,
   deleteGlassSession,
+  redeemGlassTicket,
+  LINK_EXPIRED_MESSAGE,
   type GlassClient,
   type GlassDialog,
   type GlassRosterEntry,
@@ -10,6 +12,7 @@ import {
 } from "@glass/client";
 import {
   API_TOKEN,
+  CAN_CREATE_SESSIONS,
   AUDIO_INPUT,
   CODEC,
   CONTENT_HINT,
@@ -17,7 +20,6 @@ import {
   DECODE_READBACK_ENABLED,
   ENCODED_STREAM_CHECK_ENABLED,
   GLASS_ADDR,
-  ICE_SERVERS,
   ICE_TRANSPORT_POLICY,
   JITTER_BUFFER_TARGET_MS,
   PIXEL_TRACE_ENABLED,
@@ -154,6 +156,10 @@ export function useGlassSession(notify: Notify) {
     // viewer, which keeps creating its own session exactly as before.
     const attachSessionId = new URLSearchParams(window.location.search).get("attachSessionId");
     const attachSignalingUrl = new URLSearchParams(window.location.search).get("attachSignalingUrl");
+    // ?ticket=: a session ticket your backend signed, redeemed once for a new
+    // session this tab then owns. It holds no API token, so it can neither
+    // delete the session nor create another when this one ends.
+    const ticket = new URLSearchParams(window.location.search).get("ticket");
 
     (async () => {
       // Typed as the full GlassSession rather than an inline {id, signalingUrl}
@@ -182,6 +188,20 @@ export function useGlassSession(notify: Notify) {
         session = { id: attachSessionId, signalingUrl: attachSignalingUrl };
       } else if (kept) {
         session = kept;
+      } else if (ticket && sessionEpoch === 0) {
+        try {
+          session = await redeemGlassTicket(ticket, GLASS_ADDR);
+        } catch (err: any) {
+          if (!cancelled) setError(`This link could not be opened: ${err.message}`);
+          return;
+        }
+        // A ticket works once; a reload rejoins the kept session instead.
+        const url = new URL(window.location.href);
+        url.searchParams.delete("ticket");
+        window.history.replaceState(null, "", url);
+      } else if (!CAN_CREATE_SESSIONS) {
+        if (!cancelled) setError("This viewer opens session links. Ask whoever runs the engine for a link to a session.");
+        return;
       } else {
         try {
           session = await createGlassSession(GLASS_ADDR, API_TOKEN, {
@@ -198,7 +218,7 @@ export function useGlassSession(notify: Notify) {
       // Only a session this run created is deleted here: a kept one may be
       // what the next run rejoins.
       if (cancelled) {
-        if (!attachSessionId && !kept) deleteGlassSession(session.id, GLASS_ADDR, API_TOKEN);
+        if (!attachSessionId && !kept && !ticket) deleteGlassSession(session.id, GLASS_ADDR, API_TOKEN);
         return;
       }
       setSessionId(session.id);
@@ -211,8 +231,7 @@ export function useGlassSession(notify: Notify) {
         // for the session's own tab, never for an attached viewer, which
         // does not own the session and must not end it for its owner or
         // anyone else watching.
-        deleteSessionOnClose: !attachSessionId,
-        ...(ICE_SERVERS ? { iceServers: ICE_SERVERS } : {}),
+        deleteSessionOnClose: !attachSessionId && !ticket,
         ...(ICE_TRANSPORT_POLICY
           ? { iceTransportPolicy: ICE_TRANSPORT_POLICY }
           : {}),
@@ -406,10 +425,16 @@ export function useGlassSession(notify: Notify) {
         // connection surfaces an actionable message.
         const userInitiated = reason.includes("client disconnected");
         if (userInitiated) return;
+        // A new session would not help: the link itself no longer admits anyone.
+        if (reason === LINK_EXPIRED_MESSAGE) {
+          setError("This link has expired. Ask whoever shared it for a new one.");
+          return;
+        }
         // attachSessionId viewers don't own the session (see its own doc
         // comment above) - if it's gone, that's the owner's session to
         // recreate, not this watch-only tab's.
-        if (attachSessionId) {
+        if (attachSessionId || ticket) {
+          if (ticket) keepSession(null);
           setError("Connection lost and could not be restored. Please reload.");
           return;
         }

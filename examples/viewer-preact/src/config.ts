@@ -10,35 +10,13 @@ import type { GlassInputMode, GlassVideoCodec } from "@glass/client";
 // just this one, so this doesn't need to match any specific dev-server port.
 export const GLASS_ADDR = import.meta.env.VITE_GLASS_ADDR ?? "http://localhost:8080";
 
-// Optional TURN/STUN override for this browser peer's own RTCPeerConnection -
-// mirrors the backend's GLASS_STUN_URLS/GLASS_TURN_URLS/etc. Unset by default, falling back to @glass/client's own public-
-// STUN default - only matters when testing/deploying against a real TURN
-// server, since the backend and this browser peer each gather their own ICE
-// candidates independently and need to agree on where the TURN server is.
+// STUN and TURN come from the engine: it hands every connection its servers,
+// with a short-lived TURN credential of its own, so nothing is read here at
+// build time (a credential in a bundle is public).
 // VITE_GLASS_ICE_TRANSPORT_POLICY=relay forces this peer to relay-only ICE -
 // useful to prove a TURN server actually relays media, since on a LAN or
 // same-machine test a direct/STUN path would otherwise succeed first and
 // mask a broken TURN config entirely.
-function iceServersFromEnv(): RTCIceServer[] | undefined {
-  const stunURLs = import.meta.env.VITE_GLASS_STUN_URLS as string | undefined;
-  const turnURLs = import.meta.env.VITE_GLASS_TURN_URLS as string | undefined;
-  if (!stunURLs && !turnURLs) return undefined;
-
-  const servers: RTCIceServer[] = [];
-  if (stunURLs) {
-    servers.push({ urls: stunURLs.split(",").map((u) => u.trim()) });
-  }
-  if (turnURLs) {
-    servers.push({
-      urls: turnURLs.split(",").map((u) => u.trim()),
-      username: import.meta.env.VITE_GLASS_TURN_USERNAME,
-      credential: import.meta.env.VITE_GLASS_TURN_CREDENTIAL,
-    });
-  }
-  return servers;
-}
-
-export const ICE_SERVERS = iceServersFromEnv();
 export const ICE_TRANSPORT_POLICY = import.meta.env
   .VITE_GLASS_ICE_TRANSPORT_POLICY as RTCIceTransportPolicy | undefined;
 
@@ -53,6 +31,34 @@ export const ICE_TRANSPORT_POLICY = import.meta.env
 // shipped JS. This exists purely so this standalone example can be
 // exercised end-to-end against a token-gated runtime during local testing.
 export const API_TOKEN = import.meta.env.VITE_GLASS_API_TOKEN as string | undefined;
+
+// isLocalAddress: the engine is on this machine or this private network
+// (localhost, loopback, or an RFC 1918 address), where a development build
+// with the API token is not published to anyone. vite.config.ts applies the
+// same rule at build time.
+function isLocalAddress(addr: string): boolean {
+  let host: string;
+  try {
+    host = new URL(addr).hostname.replace(/^\[|\]$/g, "");
+  } catch {
+    return false;
+  }
+  if (host === "localhost" || host === "::1" || /^127\./.test(host)) return true;
+  const m = host.match(/^(\d+)\.(\d+)\.\d+\.\d+$/);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
+}
+
+// CAN_CREATE_SESSIONS: creating a session takes the engine's API token,
+// which must never be in a browser bundle that is published. So this
+// viewer creates sessions only against a local engine; anywhere else it
+// only opens the session links it is handed
+// (?attachSessionId=...&attachSignalingUrl=...), created by whoever holds
+// the token: your backend, a script, or `glass session create`; or a
+// session ticket your backend signed (?ticket=...), redeemed for a session
+// of its own.
+export const CAN_CREATE_SESSIONS = isLocalAddress(GLASS_ADDR);
 
 // Requests the mic-capable browser pool at session-creation time (see
 // createGlassSession's own audioInput param) - a build-time flag
