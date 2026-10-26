@@ -89,7 +89,8 @@ mint links, inject input and, on sessions created with `"inspect": true`,
 read the page. It could not read your other secrets: the ticket secret, the
 TURN secret and the licence key are never sent by Glass. Each session's
 creation and close is in the log, by session ID
-(`docker logs glass | grep -E "(Created|Closed) session"`).
+([the audit stream](deployment.md#the-audit-stream): `session.created`
+with `by=api`, and `link.minted`, from before you replaced the token).
 
 For a planned rotation, see [Rotating the API token](deployment.md#authentication):
 the old token stays listed after the new one until your backend has moved.
