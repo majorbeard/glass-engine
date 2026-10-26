@@ -109,13 +109,17 @@ Open a WebSocket to the produce URL. **The producer offers first**:
 
 | Direction | `type` | Fields |
 |---|---|---|
+| ← Glass | `ice_config` | `iceServers`: apply them (`pc.setConfiguration`) before the offer |
 | → Glass | `offer` | `sdp`: one video m-section (plus, optionally, one audio) |
 | → Glass | `ice-candidate` | `candidate`: `RTCIceCandidateInit` |
 | ← Glass | `answer` | `sdp` |
 | ← Glass | `ice-candidate` | `candidate` |
 | ← Glass | `error` | `code`, `message` |
 
-Wait for the WebSocket's `open` event before sending the offer. Acquiring a
+Wait for the WebSocket's `open` event and for `ice_config` before sending
+the offer: `ice_config` carries the TURN credential for this connection
+([protocol.md](../protocol.md#glass--client)). If none arrives within 2 s
+(an older engine), offer without it. Acquiring a
 camera can finish before the socket is open, and sending early fails without
 any sign on the server side.
 

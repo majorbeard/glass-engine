@@ -65,8 +65,19 @@ sender is told why ([protocol.md](protocol.md#dropped-input)). For relay
 sessions, use `POST /v1/relay-sessions/{id}/connections`; the response includes
 a `produceUrl` only if you asked for `producesMedia`.
 
-Watch-only links can be shared freely and reused. A session admits at most 50
+Watch-only links can be shared and reused. A session admits at most 50
 connections by default (`GLASS_MAX_VIEWERS_PER_SESSION`).
+
+A watch link watches, and nothing more, until someone gives it control: it
+can't download or upload files, answer the page's microphone request, or
+read the session's statistics. Treat one as public once shared. A relay
+session's `signalingUrl` is a watch link; its `produceUrl` produces and may
+watch. The API token is not a call peer.
+
+Every link expires for joining after 24 hours by default
+(`GLASS_LINK_TTL_HOURS`), so one published by mistake stops working on its
+own; set your own lifetime per link, or none. A connection already in the
+session is never cut off. See [protocol.md](protocol.md#link-expiry).
 
 ### Tokens in URLs
 
@@ -82,6 +93,10 @@ Keep the API token on your backend. The intended flow:
 1. Your backend creates the session (and any grants) with the API token.
 2. It gives each client only the URL that client should have.
 3. Your backend deletes the session when the user is done.
+
+Or, when the browser should start the session itself: your backend signs a
+[session ticket](protocol.md#session-tickets), and the browser redeems it
+once for the session's links (`redeemGlassTicket`).
 
 ## Owner and control handoff
 

@@ -140,7 +140,17 @@ one as the other: a license key gets pasted into support tickets and
 screenshots, and the API token grants full control of your instance.
 
 Keep the API token on your backend. Clients get only the per-session URLs
-Glass returns ([concepts.md](concepts.md#tokens-in-urls)).
+Glass returns ([concepts.md](concepts.md#tokens-in-urls)). For a browser
+that should start its own session, give it a
+[session ticket](protocol.md#session-tickets) your backend signed
+(`GLASS_TICKET_SECRET`), never the token.
+
+**Rotating the token.** `GLASS_API_TOKEN` takes a comma-separated list, and
+every listed token works: put the new one first, keep the old one after
+it, move your backend over, then remove the old one. Glass logs, at most
+hourly, when a token other than the first is still in use (by its position
+in the list, never its value), so you can see when the old one stops being
+used. `GLASS_TICKET_SECRET` rotates the same way.
 
 ## Ports
 
@@ -207,22 +217,24 @@ symmetric NAT (common on mobile carriers) or firewalls that block UDP. For
 those clients, a TURN server relays the traffic. If your users are on phones
 or corporate networks, you need one.
 
-Configure it for Glass:
+Configure it for Glass with a secret shared with the TURN server:
 
 ```sh
 GLASS_TURN_URLS=turn:turn.example.com:3478,turns:turn.example.com:5349
-GLASS_TURN_USERNAME=glass
-GLASS_TURN_CREDENTIAL=<password>
+GLASS_TURN_SECRET=<openssl rand -hex 32>
 ```
 
-and pass the same servers to your clients (`iceServers` in `GlassClient`,
-`GlassProducer` and your call peers). Both ends of a connection may need it.
+Glass then issues every connection its own TURN credential, valid 24 hours
+(`GLASS_TURN_CREDENTIAL_TTL_HOURS`), and sends it to the client as the first
+message on the signaling connection (`ice_config`). `@glass/client` uses it
+on its own: there is nothing to pass to `GlassClient` or `GlassProducer`. A
+reconnect gets a fresh credential. A credential still lets its holder use
+your TURN server as a relay until it expires, so keep the relay out of your
+own network (the `denied-peer-ip` lines below).
 
-A credential given to clients is public: anyone who has it can use your TURN
-server as a relay. So keep the relay out of your own network (the
-`denied-peer-ip` lines below), give TURN its own password (never reuse one),
-and change it if it is misused. Short-lived credentials that Glass issues
-per connection are planned; until then, this is the safe setup.
+`GLASS_TURN_USERNAME` and `GLASS_TURN_CREDENTIAL` still work for Glass's own
+side, but Glass never hands them to clients; set `GLASS_TURN_SECRET` for
+clients behind strict networks.
 
 **Self-hosting with [coturn](https://github.com/coturn/coturn)** is the usual
 choice. Install the distribution package (`apt-get install coturn`) and set
@@ -232,7 +244,9 @@ choice. Install the distribution package (`apt-get install coturn`) and set
 listening-port=3478
 tls-listening-port=5349
 realm=turn.example.com
-user=glass:<password>
+# Credentials issued by Glass; the secret lives in coturn's database
+# (turnadmin -s, below), so it can be rotated without a restart.
+use-auth-secret
 min-port=49152
 max-port=65535
 # Behind cloud NAT (EC2 and similar), also:
@@ -259,6 +273,20 @@ denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
 # allow that one address (an allowed address wins over a denied range).
 # allowed-peer-ip=<glass-private-ip>
 ```
+
+Then store the secret, the same one as `GLASS_TURN_SECRET`:
+
+```sh
+sudo turnadmin -s <secret> -r turn.example.com
+```
+
+To rotate it: add the new secret (`turnadmin -s <new> -r …`), switch
+`GLASS_TURN_SECRET` to it and recreate the container, wait out
+`GLASS_TURN_CREDENTIAL_TTL_HOURS`, then delete the old one
+(`turnadmin --delete-secret=<old> -r …`). coturn needs no restart, and
+connections relayed with the old secret keep working until their
+credentials expire. (`static-auth-secret=<secret>` in the config file also
+works, but then a rotation restarts coturn.)
 
 `169.254.0.0/16` holds cloud metadata services
 (`169.254.169.254`): without these lines, anyone with the credential could

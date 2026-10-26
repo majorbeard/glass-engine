@@ -29,7 +29,8 @@ major version of everything on this page. It is currently **1**.
 
 When `GLASS_API_TOKEN` is set, every `/v1/*` request needs
 `Authorization: Bearer <token>`, except the WebSocket, stats and file routes,
-which accept the per-session `?token=` from the URLs Glass returns.
+which accept the per-session `?token=` from the URLs Glass returns, and
+`POST /v1/tickets`, which takes a [session ticket](#session-tickets) instead.
 `/healthz` and `/readyz` are always open.
 
 ### Runtime
@@ -44,11 +45,12 @@ which accept the per-session `?token=` from the URLs Glass returns.
 
 | Method | Path | Response |
 |---|---|---|
-| `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities, contentHint, codec}`. Optional body fields: `"audioInput": true`; `"contentHint": "detail"` or `"motion"` (anything else is `400`); `"codec": "h264"`, `"vp8"` or `"av1"` (one this host cannot serve is `400` with the reason, never served as another codec); `"inputMode": "floor"` (the default) or `"free"` (anything else is `400`; see [concepts.md](concepts.md#several-people-in-control)); `"inspect": true` allows [page inspection](page-inspection.md) (off by default; `400` for a source that cannot be inspected). The response also carries `inputMode` and `inspect`. `503` at capacity. |
+| `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities, contentHint, codec, linksExpireAt?}`. Optional body fields: `"audioInput": true`; `"contentHint": "detail"` or `"motion"` (anything else is `400`); `"codec": "h264"`, `"vp8"` or `"av1"` (one this host cannot serve is `400` with the reason, never served as another codec); `"inputMode": "floor"` (the default) or `"free"` (anything else is `400`; see [concepts.md](concepts.md#several-people-in-control)); `"inspect": true` allows [page inspection](page-inspection.md) (off by default; `400` for a source that cannot be inspected). `"linkExpiresIn"`: seconds until the session's link stops admitting new connections, `0` for never (see [link expiry](#link-expiry)). The response also carries `inputMode` and `inspect`. `503` at capacity. |
+| `POST` | `/v1/tickets` | Redeem a [session ticket](#session-tickets): `{"ticket": "…"}`. Creates one browser session; `201` as `POST /v1/sessions`, plus `watchUrls`. Takes no API token. Exists only when `GLASS_TICKET_SECRET` is set. |
 | `GET` | `/v1/sessions/{id}` | `{id, state: "pending"\|"active"\|"closed", createdAt, connectedAt?, codec?, inputMode?}`, or `404`. |
 | `DELETE` | `/v1/sessions/{id}` | `204`, or `404`. |
 | `GET` | `/v1/sessions/{id}/signaling` | WebSocket upgrade. |
-| `POST` | `/v1/sessions/{id}/connections` | Mint a grant. Body: any of `consumesMedia`, `producesMedia`, `producesInput` (booleans). `201 {signalingUrl, connectionCapabilities}`. `consumesInput` is reserved: `400`. |
+| `POST` | `/v1/sessions/{id}/connections` | Mint a grant. Body: any of `consumesMedia`, `producesMedia`, `producesInput` (booleans), and `expiresIn` (seconds, `0` for never; see [link expiry](#link-expiry)). `201 {signalingUrl, connectionCapabilities, expiresAt?}`. `consumesInput` is reserved: `400`. |
 | `POST` | `/v1/sessions/{id}/input` | Server-side input: `{"type", "data"}` as in the DataChannel input table. Not subject to the session's input mode, unless `"floor": true`: then it takes the page as one more controller, waiting up to `"wait"` ms (default 2000, at most 10000) for a person to pause, and is `409` (`floor_taken`, with `holder`) if they don't; keys and buttons it holds are released after 5 s without input from it; not for `set_viewport`. `202`; `400` for an unknown or invalid event; `429` when rate limited. |
 | `GET` | `/v1/sessions/{id}/page/snapshot` | The page's accessibility tree: `scope`, `prune`, `values`, `root`, `maxNodes`. See [page-inspection.md](page-inspection.md); every `/page` route takes the API token only, on a session created with `"inspect": true` (else `403`, `inspect_off`); a stale ref is `409` (`stale_ref`). |
 | `POST` | `/v1/sessions/{id}/page/query` | Nodes matching `{role?, name?, exact?, scope?, values?, maxResults?}`. |
@@ -58,30 +60,30 @@ which accept the per-session `?token=` from the URLs Glass returns.
 | `GET` | `/v1/sessions/{id}/page/state` | URL, title, viewport, scroll position, focused node. `409` (`dialog_open`) while a JavaScript dialog is open. |
 | `POST` | `/v1/sessions/{id}/page/dialog` | Answers the page's open JavaScript dialog: `{"accept", "text"?, "floor"?, "wait"?}`. `200`; `409` (`no_dialog`) when none is open. |
 | `GET` | `/v1/sessions/{id}/page/events?kinds` | Server-Sent Events: the page's state as counters, on each change. |
-| `GET` | `/v1/sessions/{id}/downloads/{guid}` | A finished download (see `DownloadReady`). |
-| `POST` | `/v1/sessions/{id}/upload` | `multipart/form-data` answer to `FileChooserOpened`. |
-| `GET` | `/v1/sessions/{id}/stats/stream` | Server-Sent Events: frame, transport and resource statistics, for operators. |
+| `GET` | `/v1/sessions/{id}/downloads/{guid}` | A finished download (see `DownloadReady`). The API token, or the link of a connection that has control of the page now; a watch link gets `403` until it is given control. |
+| `POST` | `/v1/sessions/{id}/upload` | `multipart/form-data` answer to `FileChooserOpened`. Same rule as downloads. |
+| `GET` | `/v1/sessions/{id}/stats/stream` | Server-Sent Events: frame, transport and resource statistics, for operators. Same rule as downloads. |
 
 ### Relay sessions
 
 | Method | Path | Response |
 |---|---|---|
-| `POST` | `/v1/relay-sessions` | `201` with `{id, signalingUrl, produceUrl, videoCodec, protocolVersion, sourceType, capabilities}`, plus `slots` and `produceUrls` when the body declares `{"slots": [...]}`. |
+| `POST` | `/v1/relay-sessions` | `201` with `{id, signalingUrl, produceUrl, videoCodec, protocolVersion, sourceType, capabilities, linksExpireAt?}`, plus `slots` and `produceUrls` when the body declares `{"slots": [...]}`. Optional `"linkExpiresIn"` for every link it returns. |
 | `GET` | `/v1/relay-sessions/{id}` | As for browser sessions. |
 | `DELETE` | `/v1/relay-sessions/{id}` | As for browser sessions. |
-| `GET` | `/v1/relay-sessions/{id}/signaling` | Viewer WebSocket. |
-| `GET` | `/v1/relay-sessions/{id}/produce` | Producer WebSocket. `409` while the slot has another producer. |
-| `POST` | `/v1/relay-sessions/{id}/connections` | Mint a grant; the response has `produceUrl` only when `producesMedia` was requested. A non-empty `slots` field is reserved: `400`. |
-| `GET` | `/v1/relay-sessions/{id}/stats/stream` | Server-Sent Events. |
+| `GET` | `/v1/relay-sessions/{id}/signaling` | Viewer WebSocket. The `signalingUrl` is a watch link; the producer's link may watch too. |
+| `GET` | `/v1/relay-sessions/{id}/produce` | Producer WebSocket. Only with a link minted to produce (the `produceUrl`, or a grant with `producesMedia`) or the API token; any other link is `403`. `409` while the slot has another producer. |
+| `POST` | `/v1/relay-sessions/{id}/connections` | Mint a grant; the response has `produceUrl` only when `producesMedia` was requested. `expiresIn` as for browser sessions. A non-empty `slots` field is reserved: `400`. |
+| `GET` | `/v1/relay-sessions/{id}/stats/stream` | Server-Sent Events. The API token only. |
 
 ### Calls
 
 | Method | Path | Response |
 |---|---|---|
-| `POST` | `/v1/calls` | `201 {id, peerAUrl, peerBUrl, videoCodec, protocolVersion, sourceType}`. |
+| `POST` | `/v1/calls` | `201 {id, peerAUrl, peerBUrl, videoCodec, protocolVersion, sourceType, linksExpireAt?}`. Optional body `{"linkExpiresIn"}` for both peer links. |
 | `GET` | `/v1/calls/{id}` | As for browser sessions. |
 | `DELETE` | `/v1/calls/{id}` | As for browser sessions. |
-| `GET` | `/v1/calls/{id}/peers/{a\|b}/signaling` | Peer WebSocket. The token must belong to that peer (`403` otherwise). |
+| `GET` | `/v1/calls/{id}/peers/{a\|b}/signaling` | Peer WebSocket. The token must belong to that peer (`403` otherwise); the API token is not a peer. |
 
 ### Session-creation fields
 
@@ -108,11 +110,69 @@ which accept the per-session `?token=` from the URLs Glass returns.
 |---|---|---|
 | `1000` | Client | Deliberate leave. The connection ends; no reconnect grace. |
 | `4001` | Glass | Relay producer sent no media. Held for grace; resume. |
+| `4401` | Glass | The link has expired: it admits no new connection ([link expiry](#link-expiry)). Don't retry; get a new link. |
 | `4404` | Glass | The session doesn't exist (never created, closed or expired). Don't retry. |
 | anything else | either | Treated as a lost connection: held for the reconnect grace. |
 
 Glass also sends WebSocket pings; a client that doesn't answer within 30 s is
 treated as disconnected. Browsers answer automatically.
+
+### Link expiry
+
+Every link Glass returns expires: a session's own link, minted grants, a
+relay session's viewer and producer links, and a call's peer links. The
+default is `GLASS_LINK_TTL_HOURS` (24 h; `0` is never). A request sets its
+own lifetime in seconds, `0` for never: `linkExpiresIn` when creating a
+session, relay session or call (every link it returns), `expiresIn` when
+minting a grant. A negative value is `400`. The response says when, as
+RFC 3339 UTC: `linksExpireAt` on creation, `expiresAt` on a grant; absent
+for a link that never expires.
+
+An expired link only stops **joining**: its WebSocket is accepted and closed
+at once with `4401`. The session goes on, connections already in it are not
+cut off, and a connection that joined with the link can still resume after
+a drop, within the reconnect grace. Your backend can mint a fresh link at
+any time.
+
+### Session tickets
+
+A ticket lets a browser start a session without the API token ever leaving
+your backend. Set `GLASS_TICKET_SECRET` (comma-separated to rotate: every
+listed secret verifies). Your backend signs a ticket and hands it to the
+page; the page sends `POST /v1/tickets` with `{"ticket": "<ticket>"}`.
+
+A ticket is a JWT signed with HMAC-SHA-256, as any JWT library makes one.
+The header must say `"alg": "HS256"` (a `typ` of `JWT` is fine, `crit` is
+not); any other algorithm is refused. Claims:
+
+| Claim | |
+|---|---|
+| `exp` | Required. At most 10 minutes ahead; 30 s of clock skew is allowed. |
+| `jti` | Required, up to 128 bytes. Each ticket is accepted once. |
+| `nbf` | Optional, honoured. |
+| `glass` | Optional: the session's `audioInput`, `contentHint`, `codec`, `inputMode` and `linkExpiresIn`, as for `POST /v1/sessions`, and `watchLinks` (0 to 10). Any other field, `inspect` included, is refused. |
+
+Other registered claims (`iss`, `sub`, `aud`, `iat`) are ignored.
+
+```js
+// Node, on your backend: any JWT library works.
+import jwt from "jsonwebtoken";
+const ticket = jwt.sign(
+  { jti: crypto.randomUUID(), glass: { watchLinks: 1 } },
+  process.env.GLASS_TICKET_SECRET,
+  { algorithm: "HS256", expiresIn: "5m" },
+);
+```
+
+`201` is the `POST /v1/sessions` body, plus `watchUrls` (watch-only links)
+when `watchLinks` asked for them. The session's own link controls the
+session. `401` with `code`: `ticket_invalid` (malformed, wrong signature or
+header, missing claim), `ticket_expired` (expired, not yet valid, or longer
+than 10 minutes) or `ticket_used`. `400` for options the session would
+refuse; a ticket refused that way, or at capacity (`503`), is not spent.
+
+A ticket opens only this route: it is not accepted as a token anywhere
+else, and the API token is not accepted here.
 
 ## Signaling: viewers
 
@@ -121,14 +181,15 @@ This applies to browser-session and relay-session viewers
 [sources/producers.md](sources/producers.md#connecting) and
 [sources/calls.md](sources/calls.md#joining).
 
-Every message is JSON with a `type`. On connect, **Glass sends the offer**;
-the client answers.
+Every message is JSON with a `type`. On connect, Glass sends `ice_config`,
+then **the offer**; the client answers.
 
 ### Glass → client
 
 | `type` | Fields | Meaning |
 |---|---|---|
-| `offer` | `sdp`, `connectionId`, `producesInput`, `isOwner` | First message. Identifies this connection and its starting rights. The booleans are always present. |
+| `ice_config` | `iceServers: [{urls, username?, credential?}]` | First message on every signaling connection, viewers, producers and call peers alike: the STUN and TURN servers to use, as an `RTCConfiguration`'s `iceServers`. With `GLASS_TURN_SECRET` set, the TURN entry carries a credential for this connection alone, valid `GLASS_TURN_CREDENTIAL_TTL_HOURS`; every reconnect gets a fresh one. Use these unless your application has its own. |
+| `offer` | `sdp`, `connectionId`, `producesInput`, `isOwner` | Right after `ice_config`. Identifies this connection and its starting rights. The booleans are always present. |
 | `ice-candidate` | `candidate` | Trickled ICE. Never sent before `offer`. |
 | `capabilities_changed` | `connectionId`, `producesInput` | Someone's control changed. Sent to every connection, including the one it concerns. |
 | `input_requested` | `connectionId` | Sent to the control holder when a request can't be granted outright. |
