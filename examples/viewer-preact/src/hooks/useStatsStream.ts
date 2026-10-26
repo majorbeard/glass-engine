@@ -4,7 +4,7 @@ import { API_TOKEN, GLASS_ADDR } from "../config";
 
 // useStatsStream follows the backend's per-session SSE stats stream for
 // BrowserHeader's stats menu.
-export function useStatsStream(sessionId: string | null) {
+export function useStatsStream(sessionId: string | null, linkToken: string | null) {
   // Live performance stats (BrowserHeader's StatsMenu) - previously wired
   // to permanently-hardcoded fps={0}/performanceStats={null}, a dead UI
   // shell with nothing feeding it. Fed by the backend's own SSE stats
@@ -25,7 +25,11 @@ export function useStatsStream(sessionId: string | null) {
   // matching the Go struct's json tags) are mapped here into
   // BrowserHeader's camelCase PerformanceStats shape.
   useEffect(() => {
-    if (!sessionId) {
+    // The API token in development, else the link this viewer joined with
+    // (the session's own link, or one given control). With neither, no
+    // stream: a request without a credential is only refused.
+    const token = API_TOKEN || linkToken;
+    if (!sessionId || !token) {
       setFps(0);
       setPerfStats(null);
       return;
@@ -38,9 +42,7 @@ export function useStatsStream(sessionId: string | null) {
     // 2026-09-07, silently broken since this stats stream was first wired
     // up, harmless beyond the stats menu never populating (video/input are
     // on a separate, already-authenticated signaling connection).
-    const statsStreamUrl = API_TOKEN
-      ? `${GLASS_ADDR}/v1/sessions/${sessionId}/stats/stream?token=${encodeURIComponent(API_TOKEN)}`
-      : `${GLASS_ADDR}/v1/sessions/${sessionId}/stats/stream`;
+    const statsStreamUrl = `${GLASS_ADDR}/v1/sessions/${sessionId}/stats/stream?token=${encodeURIComponent(token)}`;
     const es = new EventSource(statsStreamUrl);
     let prevFramesEmitted: number | null = null;
     let prevCapturedAt: number | null = null;
@@ -76,7 +78,7 @@ export function useStatsStream(sessionId: string | null) {
       // effect's own cleanup below tears it down on the next sessionId change.
     };
     return () => es.close();
-  }, [sessionId]);
+  }, [sessionId, linkToken]);
 
   return { fps, perfStats };
 }

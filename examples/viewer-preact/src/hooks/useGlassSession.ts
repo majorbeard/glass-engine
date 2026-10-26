@@ -114,6 +114,9 @@ export function useGlassSession(notify: Notify) {
   // (triggered by a later user click, well after that effect has run) can
   // still mint a grant for the right session.
   const [sessionId, setSessionId] = useState<string | null>(null);
+  // The token of the link this viewer joined with: the stats stream takes
+  // it, since a browser can't send a header there.
+  const [linkToken, setLinkToken] = useState<string | null>(null);
   const [producesInput, setProducesInput] = useState(false);
   // Several viewers may hold control at once; in the session's default input
   // mode only one of them drives the page at a time. True while that is
@@ -223,6 +226,7 @@ export function useGlassSession(notify: Notify) {
         return;
       }
       setSessionId(session.id);
+      setLinkToken(new URL(session.signalingUrl).searchParams.get("token"));
       if (!attachSessionId) keepSession(session);
 
       c = createGlassClient({
@@ -504,6 +508,7 @@ export function useGlassSession(notify: Notify) {
     canGoBack,
     canGoForward,
     sessionId,
+    linkToken,
     producesInput,
     otherHasFloor,
     pageDialog,
