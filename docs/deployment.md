@@ -152,6 +152,10 @@ hourly, when a token other than the first is still in use (by its position
 in the list, never its value), so you can see when the old one stops being
 used. `GLASS_TICKET_SECRET` rotates the same way.
 
+When a secret or a link leaks, follow
+[incident-response.md](incident-response.md); it also suggests a rotation
+schedule.
+
 ## Ports
 
 Open these to the internet, and nothing else:
@@ -406,4 +410,16 @@ Glass ships only as the Docker image; the `glass` command is inside it.
 ```sh
 docker run --rm --env-file /etc/glass/env ghcr.io/majorbeard/glass doctor --env
 docker exec glass docker-entrypoint.sh doctor   # inside a running container
+```
+
+`glass session` manages a running instance. Inside the container it sends
+the container's own `GLASS_API_TOKEN` (the first, when several are listed);
+elsewhere, set `GLASS_API_TOKEN` and pass `--addr`:
+
+```sh
+docker exec glass glass session list                  # running sessions, relay sessions and calls; no links
+docker exec glass glass session get <id>
+docker exec glass glass session close <id>
+docker exec glass glass session revoke '<link URL>'   # end one link; its session goes on
+docker exec glass glass session revoke --relay <id> <link id>
 ```

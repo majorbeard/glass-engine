@@ -228,6 +228,7 @@ What is being built next. None of it exists yet, and there are no dates.
 | [Protocol](docs/protocol.md) | Integrators | HTTP API, signaling and DataChannel messages |
 | [Architecture](docs/architecture.md) | Everyone | How media and input move through the engine |
 | [Deployment](docs/deployment.md) | Operators | Ports, NAT, TURN, TLS, auth, Docker |
+| [Incident response](docs/incident-response.md) | Operators | A leaked link, token or secret: what to do; rotation schedule |
 | [Performance](docs/performance.md) | Everyone | What Glass measured, on what, and how |
 | [Sizing](docs/sizing.md) | Operators | Capacity, memory, instance choice |
 | [Configuration](docs/configuration.md) | Operators | Every operator setting |
