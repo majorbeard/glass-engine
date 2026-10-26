@@ -5,7 +5,14 @@
 import type { ClientCore } from "./core";
 import * as transport from "./transport";
 import * as mic from "./mic";
-import { CLOSE_LINK_EXPIRED, CLOSE_SESSION_NOT_FOUND, LINK_EXPIRED_MESSAGE, deleteGlassSession } from "./index";
+import {
+  CLOSE_LINK_EXPIRED,
+  CLOSE_LINK_REVOKED,
+  CLOSE_SESSION_NOT_FOUND,
+  LINK_EXPIRED_MESSAGE,
+  LINK_REVOKED_MESSAGE,
+  deleteGlassSession,
+} from "./index";
 import { DEFAULT_RECONNECT_DELAYS_MS, SESSION_NOT_FOUND_MESSAGE, SIGNALING_TIMEOUT_MS, PEER_TIMEOUT_MS, DISCONNECTED_GRACE_MS } from "./internal";
 
 // See GlassClient.connect.
@@ -150,9 +157,15 @@ export function establish(c: ClientCore): Promise<void> {
 
     ws.onclose = (event) => {
       c.signalingConnected = false;
-      if (event?.code === CLOSE_SESSION_NOT_FOUND || event?.code === CLOSE_LINK_EXPIRED) {
-        c.sessionGone = event.code === CLOSE_LINK_EXPIRED ? LINK_EXPIRED_MESSAGE : SESSION_NOT_FOUND_MESSAGE;
-        c.serverTerminalError = c.sessionGone;
+      const final: Record<number, string> = {
+        [CLOSE_SESSION_NOT_FOUND]: SESSION_NOT_FOUND_MESSAGE,
+        [CLOSE_LINK_EXPIRED]: LINK_EXPIRED_MESSAGE,
+        [CLOSE_LINK_REVOKED]: LINK_REVOKED_MESSAGE,
+      };
+      const gone = event?.code === undefined ? undefined : final[event.code];
+      if (gone) {
+        c.sessionGone = gone;
+        c.serverTerminalError = gone;
       }
       if (c.peerConnected) {
         onTerminalDrop(c);

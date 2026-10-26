@@ -296,6 +296,14 @@ declare const CLOSE_SESSION_NOT_FOUND = 4404;
 declare const CLOSE_LINK_EXPIRED = 4401;
 /** The "closed" event's reason when the link has expired (CLOSE_LINK_EXPIRED). */
 declare const LINK_EXPIRED_MESSAGE = "this link has expired";
+/**
+ * WebSocket close code Glass sends for a link the operator revoked: the connection that joined
+ * with it is closed with this code, and the link admits nothing again, a resume included.
+ * Retrying can't help; ask whoever shared the link for a new one.
+ */
+declare const CLOSE_LINK_REVOKED = 4403;
+/** The "closed" event's reason when the link was revoked (CLOSE_LINK_REVOKED). */
+declare const LINK_REVOKED_MESSAGE = "this link has been revoked";
 declare const SUPPORTED_PROTOCOL_VERSION = 1;
 declare function createGlassSession(baseUrl?: string, apiToken?: string, options?: boolean | GlassCreateSessionOptions): Promise<GlassSession>;
 declare function redeemGlassTicket(ticket: string, baseUrl?: string): Promise<GlassSession>;
@@ -351,6 +359,7 @@ declare function createGlassClient(options: GlassClientOptions): GlassClient;
 
 export {
     CLOSE_LINK_EXPIRED,
+    CLOSE_LINK_REVOKED,
     CLOSE_SESSION_NOT_FOUND,
     type ElementState,
     type GlassCapabilities,
@@ -380,6 +389,7 @@ export {
     type InteractiveElement,
     type KeyEvent,
     LINK_EXPIRED_MESSAGE,
+    LINK_REVOKED_MESSAGE,
     type NavigationState,
     type ProducerSession,
     type ProducerState,

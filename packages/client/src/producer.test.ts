@@ -361,6 +361,20 @@ describe("GlassProducer", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
+  it("a producer ends in error, without retrying, when its link is revoked (4403)", async () => {
+    const p = new GlassProducer({ stream, produceUrl: "wss://glass/v1/relay-sessions/x9/produce?token=p" });
+    const states = recordStates(p);
+    const started = p.start();
+    await connectAttempt(0);
+    await started;
+
+    FakeWebSocket.instances[0]!.serverClose(4403);
+    await vi.waitFor(() => expect(p.state).toBe("error"));
+    expect(states[states.length - 1]).toEqual(["error", "this link has been revoked"]);
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+  });
+
   it("a creating producer makes a new session at once when the old one is gone (4404)", async () => {
     const p = new GlassProducer({ stream, serverUrl: "https://glass" });
     const sessions: string[] = [];

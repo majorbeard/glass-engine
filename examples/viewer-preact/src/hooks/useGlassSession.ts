@@ -5,6 +5,7 @@ import {
   deleteGlassSession,
   redeemGlassTicket,
   LINK_EXPIRED_MESSAGE,
+  LINK_REVOKED_MESSAGE,
   type GlassClient,
   type GlassDialog,
   type GlassRosterEntry,
@@ -428,6 +429,10 @@ export function useGlassSession(notify: Notify) {
         // A new session would not help: the link itself no longer admits anyone.
         if (reason === LINK_EXPIRED_MESSAGE) {
           setError("This link has expired. Ask whoever shared it for a new one.");
+          return;
+        }
+        if (reason === LINK_REVOKED_MESSAGE) {
+          setError("This link has been revoked. Ask whoever shared it for a new one.");
           return;
         }
         // attachSessionId viewers don't own the session (see its own doc
