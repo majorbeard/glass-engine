@@ -140,6 +140,11 @@ export class ClientCore {
   readonly signalingUrl: string;
   readonly sessionId?: string;
   readonly iceServers: RTCIceServer[];
+  // Whether the application gave its own iceServers. If it did not, the
+  // engine's are used: it sends them as the first message on every
+  // signaling connection (ice_config), TURN credential included.
+  readonly iceServersGiven: boolean;
+  serverIceServers: RTCIceServer[] | null = null;
   readonly iceTransportPolicy?: RTCIceTransportPolicy;
   readonly reconnectEnabled: boolean;
   readonly maxAttempts: number;
@@ -186,8 +191,9 @@ export class ClientCore {
   // never come back. Cleared once consumed so it can't leak into a later,
   // unrelated connection.
   serverTerminalError: string | null = null;
-  // Set when Glass closed the socket with CLOSE_SESSION_NOT_FOUND: stops the reconnect loop.
-  sessionGone = false;
+  // Set, to the "closed" reason, when Glass closed the socket with CLOSE_SESSION_NOT_FOUND or
+  // CLOSE_LINK_EXPIRED: stops the reconnect loop.
+  sessionGone: string | null = null;
 
   // Per-attempt settle guard (so a late ws/pc event can't resolve/reject an
   // already-settled establish() attempt).
@@ -226,6 +232,7 @@ export class ClientCore {
       this.iceServers = options.iceServers ?? [
         { urls: "stun:stun.l.google.com:19302" },
       ];
+      this.iceServersGiven = options.iceServers !== undefined;
       this.iceTransportPolicy = options.iceTransportPolicy;
       const rc = options.reconnect ?? true;
       this.reconnectEnabled = rc !== false;

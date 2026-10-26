@@ -99,7 +99,10 @@ export interface GlassClientOptions {
   signalingUrl: string;
   // Optional session id, used only to DELETE the session on final close.
   sessionId?: string;
-  // ICE servers for the RTCPeerConnection. Defaults to a public STUN server.
+  // ICE servers for the RTCPeerConnection. Without them the engine's are
+  // used: it hands every connection its STUN and TURN servers, with a
+  // short-lived TURN credential of its own when the engine mints them. Give
+  // them only to use servers of your own instead.
   iceServers?: RTCIceServer[];
   // Forces ICE candidate gathering/use to "relay" only (TURN) instead of the
   // browser default "all". Not needed for normal operation - exists so a
@@ -269,9 +272,17 @@ export type GlassClientEventMap = {
  * before anyone connected. Retrying can't help.
  */
 export const CLOSE_SESSION_NOT_FOUND = 4404;
+/**
+ * WebSocket close code Glass sends for a link that has expired: it no longer admits a new
+ * connection, though a connection that joined with it may still resume after a drop. Retrying
+ * can't help; ask whoever shared the link for a new one.
+ */
+export const CLOSE_LINK_EXPIRED = 4401;
+/** The "closed" event's reason when the link has expired (CLOSE_LINK_EXPIRED). */
+export const LINK_EXPIRED_MESSAGE = "this link has expired";
 // Highest wire-contract major this client understands. Must track the
 // engine's protocol version (docs/protocol.md, "Versioning"); see
-// createGlassSession for the fail-closed check and why absent means 1.
+// readSession for the fail-closed check and why absent means 1.
 export const SUPPORTED_PROTOCOL_VERSION = 1;
 
 
@@ -303,7 +314,7 @@ export async function createGlassSession(
   apiToken?: string,
   options: boolean | GlassCreateSessionOptions = false
 ): Promise<GlassSession> {
-  const { audioInput = false, contentHint, codec, inputMode, inspect } =
+  const { audioInput = false, contentHint, codec, inputMode, inspect, linkExpiresIn } =
     typeof options === "boolean" ? { audioInput: options } : options;
   // No body at all when nothing is asked for, as before.
   const body: Record<string, unknown> = {};
@@ -312,6 +323,7 @@ export async function createGlassSession(
   if (codec) body.codec = codec;
   if (inputMode) body.inputMode = inputMode;
   if (inspect) body.inspect = true;
+  if (linkExpiresIn !== undefined) body.linkExpiresIn = linkExpiresIn;
   const hasBody = Object.keys(body).length > 0;
   const res = await fetch(`${baseUrl}/v1/sessions`, {
     method: "POST",
@@ -320,6 +332,31 @@ export async function createGlassSession(
       : authHeaders(apiToken),
     body: hasBody ? JSON.stringify(body) : undefined,
   });
+  return readSession(res, "create session");
+}
+
+// Redeems a session ticket (POST {baseUrl}/v1/tickets) for a new session's
+// links: the session's own link, which controls it, and any watch links the
+// ticket asked for (watchUrls). This is how a browser starts a session with
+// no API token anywhere near it: your backend signs a short-lived ticket
+// (a JWT, HS256, with the runtime's GLASS_TICKET_SECRET; at most 10 minutes;
+// a unique jti, since each ticket is accepted once) and hands it to the page.
+// The ticket's "glass" claim carries the session's options (audioInput,
+// contentHint, codec, inputMode, linkExpiresIn) and watchLinks.
+export async function redeemGlassTicket(
+  ticket: string,
+  baseUrl = ""
+): Promise<GlassSession> {
+  const res = await fetch(`${baseUrl}/v1/tickets`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ticket }),
+  });
+  return readSession(res, "redeem ticket");
+}
+
+// Reads a session-creating response, failing with the runtime's reason.
+async function readSession(res: Response, what: string): Promise<GlassSession> {
   if (!res.ok) {
     let detail = "";
     try {
@@ -328,7 +365,7 @@ export async function createGlassSession(
       // ignore parse failure, fall back to status text
     }
     throw new Error(
-      `Failed to create session (${res.status}): ${detail || res.statusText}`
+      `Failed to ${what} (${res.status}): ${detail || res.statusText}`
     );
   }
   const session: GlassSession = await res.json();

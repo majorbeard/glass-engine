@@ -5,7 +5,7 @@
 import type { ClientCore } from "./core";
 import * as transport from "./transport";
 import * as mic from "./mic";
-import { CLOSE_SESSION_NOT_FOUND, deleteGlassSession } from "./index";
+import { CLOSE_LINK_EXPIRED, CLOSE_SESSION_NOT_FOUND, LINK_EXPIRED_MESSAGE, deleteGlassSession } from "./index";
 import { DEFAULT_RECONNECT_DELAYS_MS, SESSION_NOT_FOUND_MESSAGE, SIGNALING_TIMEOUT_MS, PEER_TIMEOUT_MS, DISCONNECTED_GRACE_MS } from "./internal";
 
 // See GlassClient.connect.
@@ -119,6 +119,12 @@ export function establish(c: ClientCore): Promise<void> {
           c.emit("error", reason);
           return;
         }
+        // The engine's ICE servers come first on every connection, before
+        // the offer; each reconnect brings a fresh TURN credential.
+        if (signal.type === "ice_config") {
+          if (Array.isArray(signal.iceServers)) c.serverIceServers = signal.iceServers;
+          return;
+        }
         if (!c.pc && signal.type === "offer") {
           transport.initPeerConnection(c, () => {
             // onConnected for this attempt
@@ -144,14 +150,14 @@ export function establish(c: ClientCore): Promise<void> {
 
     ws.onclose = (event) => {
       c.signalingConnected = false;
-      if (event?.code === CLOSE_SESSION_NOT_FOUND) {
-        c.sessionGone = true;
-        c.serverTerminalError = SESSION_NOT_FOUND_MESSAGE;
+      if (event?.code === CLOSE_SESSION_NOT_FOUND || event?.code === CLOSE_LINK_EXPIRED) {
+        c.sessionGone = event.code === CLOSE_LINK_EXPIRED ? LINK_EXPIRED_MESSAGE : SESSION_NOT_FOUND_MESSAGE;
+        c.serverTerminalError = c.sessionGone;
       }
       if (c.peerConnected) {
         onTerminalDrop(c);
       } else {
-        settle(() => reject(new Error(c.sessionGone ? SESSION_NOT_FOUND_MESSAGE : "signaling socket closed")));
+        settle(() => reject(new Error(c.sessionGone ?? "signaling socket closed")));
       }
     };
   });
@@ -238,7 +244,7 @@ export async function reconnectLoop(c: ClientCore): Promise<void> {
       } catch {
         if (c.sessionGone) {
           c.serverTerminalError = null;
-          c.emit("closed", SESSION_NOT_FOUND_MESSAGE);
+          c.emit("closed", c.sessionGone);
           return;
         }
         await c.wait(nextDelayMs(c));

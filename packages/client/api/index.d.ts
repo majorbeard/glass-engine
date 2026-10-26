@@ -59,10 +59,13 @@ interface GlassCreateSessionOptions {
     codec?: GlassVideoCodec;
     inputMode?: GlassInputMode;
     inspect?: boolean;
+    linkExpiresIn?: number;
 }
 interface GlassSession {
     id: string;
     signalingUrl: string;
+    linksExpireAt?: string;
+    watchUrls?: string[];
     contentHint?: GlassContentHint;
     codec?: GlassVideoCodec;
     inputMode?: GlassInputMode;
@@ -285,8 +288,17 @@ type GlassClientEventMap = {
  * before anyone connected. Retrying can't help.
  */
 declare const CLOSE_SESSION_NOT_FOUND = 4404;
+/**
+ * WebSocket close code Glass sends for a link that has expired: it no longer admits a new
+ * connection, though a connection that joined with it may still resume after a drop. Retrying
+ * can't help; ask whoever shared the link for a new one.
+ */
+declare const CLOSE_LINK_EXPIRED = 4401;
+/** The "closed" event's reason when the link has expired (CLOSE_LINK_EXPIRED). */
+declare const LINK_EXPIRED_MESSAGE = "this link has expired";
 declare const SUPPORTED_PROTOCOL_VERSION = 1;
 declare function createGlassSession(baseUrl?: string, apiToken?: string, options?: boolean | GlassCreateSessionOptions): Promise<GlassSession>;
+declare function redeemGlassTicket(ticket: string, baseUrl?: string): Promise<GlassSession>;
 declare function deleteGlassSession(id: string, baseUrl?: string, apiToken?: string): void;
 declare function mintConnectionGrant(sessionId: string, capabilities: Partial<GlassConnectionCapabilities>, baseUrl?: string, apiToken?: string): Promise<GlassConnectionGrant>;
 declare class GlassClient extends Emitter<GlassClientEventMap> {
@@ -338,6 +350,7 @@ declare class GlassClient extends Emitter<GlassClientEventMap> {
 declare function createGlassClient(options: GlassClientOptions): GlassClient;
 
 export {
+    CLOSE_LINK_EXPIRED,
     CLOSE_SESSION_NOT_FOUND,
     type ElementState,
     type GlassCapabilities,
@@ -366,6 +379,7 @@ export {
     type InputLatencySummary,
     type InteractiveElement,
     type KeyEvent,
+    LINK_EXPIRED_MESSAGE,
     type NavigationState,
     type ProducerSession,
     type ProducerState,
@@ -378,4 +392,5 @@ export {
     createGlassSession,
     deleteGlassSession,
     mintConnectionGrant,
+    redeemGlassTicket,
 };

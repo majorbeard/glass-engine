@@ -3,7 +3,7 @@
 // behavior, so internal refactors must keep it passing unchanged. Message
 // type bytes are the wire protocol's (docs/protocol.md), not internal names.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GlassClient } from "./index";
+import { CLOSE_LINK_EXPIRED, GlassClient, LINK_EXPIRED_MESSAGE } from "./index";
 import { connectedClient, FakePeerConnection, FakeWebSocket, flush, installFakes, type FakeDataChannel } from "./testing/fakes";
 
 const URL = "ws://glass.test/v1/sessions/s1/signaling?token=tok";
@@ -18,6 +18,34 @@ afterEach(() => {
 const connected = connectedClient;
 
 describe("connect", () => {
+  // The engine sends a connection's ICE servers first, before the offer;
+  // the peer connection uses them unless the application gave its own.
+  it("uses the engine's ICE servers, sent before the offer", async () => {
+    const engineIce = [{ urls: ["turn:turn.example:3478"], username: "1:abc", credential: "minted" }];
+    const client = new GlassClient({ signalingUrl: URL, reconnect: false });
+    void client.connect();
+    const ws = FakeWebSocket.last();
+    ws.open();
+    ws.receive({ type: "ice_config", iceServers: engineIce });
+    ws.receive({ type: "offer", sdp: "offer-sdp" });
+    await flush();
+    expect(FakePeerConnection.last().config.iceServers).toEqual(engineIce);
+    client.disconnect();
+  });
+
+  it("keeps the application's own ICE servers over the engine's", async () => {
+    const own = [{ urls: "stun:own.example:3478" }];
+    const client = new GlassClient({ signalingUrl: URL, reconnect: false, iceServers: own });
+    void client.connect();
+    const ws = FakeWebSocket.last();
+    ws.open();
+    ws.receive({ type: "ice_config", iceServers: [{ urls: ["turn:turn.example:3478"] }] });
+    ws.receive({ type: "offer", sdp: "offer-sdp" });
+    await flush();
+    expect(FakePeerConnection.last().config.iceServers).toEqual(own);
+    client.disconnect();
+  });
+
   it("answers the offer and resolves once the peer connects", async () => {
     const client = new GlassClient({ signalingUrl: URL, reconnect: false });
     const events: string[] = [];
@@ -265,6 +293,16 @@ describe("reconnect", () => {
     FakeWebSocket.last().drop(4404);
     await flush();
     expect(closed).toHaveBeenCalledWith("session not found or expired");
+  });
+
+  it("closes without retrying when the server says the link has expired", async () => {
+    const { client, ws } = await connected({ reconnect: { maxAttempts: 5, delaysMs: [10] } });
+    const closed = vi.fn();
+    client.on("closed", closed);
+    ws.drop(1006);
+    FakeWebSocket.last().drop(CLOSE_LINK_EXPIRED);
+    await flush();
+    expect(closed).toHaveBeenCalledWith(LINK_EXPIRED_MESSAGE);
   });
 });
 

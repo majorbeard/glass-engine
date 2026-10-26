@@ -150,12 +150,23 @@ export interface GlassCreateSessionOptions {
   // Allows page inspection on the session: its structure through the API's
   // /page routes, for your backend with the API token. Off by default.
   inspect?: boolean;
+  // Seconds until the session's link stops admitting new connections; 0 is
+  // never. Absent, the runtime's default (24 hours unless the operator
+  // changed it).
+  linkExpiresIn?: number;
 }
 
-// Returned by createGlassSession / the backend's POST /v1/sessions.
+// Returned by createGlassSession, redeemGlassTicket and the backend's
+// POST /v1/sessions.
 export interface GlassSession {
   id: string;
   signalingUrl: string;
+  // When the session's links stop admitting new connections (RFC 3339).
+  // Absent when they never do, and from runtimes that predate link expiry.
+  linksExpireAt?: string;
+  // Watch-only links to share, as many as the ticket asked for. Only from
+  // redeemGlassTicket.
+  watchUrls?: string[];
   // The content hint the session is running with. Absent from runtimes that
   // predate it and from sources that have none.
   contentHint?: GlassContentHint;
