@@ -23,6 +23,7 @@ change between releases.
 | `GLASS_TICKET_SECRET` | unset | Secret your backend signs [session tickets](protocol.md#session-tickets) with, so a browser can start a session without the API token. Comma-separated to rotate. Unset, tickets are off. |
 | `GLASS_LINK_TTL_HOURS` | `24` | How long a link Glass returns admits new connections, unless its request sets its own. `0` is never. See [protocol.md](protocol.md#link-expiry). |
 | `GLASS_INSECURE_LOCAL_DEV` | `false` | Allow no token on a non-loopback address. Local Docker development only. |
+| `GLASS_ALLOW_NO_SANDBOX` | `false` | Run Chrome without its sandbox where the sandbox cannot start (as root, or in a container without Glass's seccomp profile) instead of refusing to start. Removes a layer of defense against a hostile page. See [deployment.md](deployment.md#hardening). |
 | `GLASS_LICENSE_KEY` | unset (Free) | Your license key. Checked at startup and periodically; an unreachable license server is retried for about 30 s at startup, and a paid tier is kept for 7 days from its last successful check. `GET /v1/info` shows the tier in effect. |
 | `GLASS_LICENSE_CACHE_PATH` | `~/.cache/glass/license-cache.json` | File that keeps the last validated tier (never the key) across restarts. On a persistent volume (the image's `glass-cache` volume covers the default) it also survives re-creating the container. |
 

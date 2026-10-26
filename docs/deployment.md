@@ -2,8 +2,9 @@
 
 Running Glass anywhere other than your own laptop. The short version:
 
-1. Run the Docker image with an API token, a restart policy and enough
-   shared memory, its API bound to this host only.
+1. Run the Docker image with an API token, Glass's seccomp profile (Chrome's
+   sandbox needs it), a restart policy and enough shared memory, its API
+   bound to this host only.
 2. Put a TLS proxy in front, and open **TCP 443** (and 80, for the
    certificate) **and UDP 50000**, nothing else (see [Ports](#ports)).
 3. Add TURN if viewers or producers are on mobile or corporate networks.
@@ -17,8 +18,18 @@ container at start (below). It runs as an unprivileged user with an init
 process that reaps Chrome's child processes.
 
 ```sh
+docker run --rm ghcr.io/majorbeard/glass:<version> seccomp-profile > /etc/glass/seccomp.json
+
 docker run -d --name glass \
   --restart unless-stopped \
+  --security-opt seccomp=/etc/glass/seccomp.json \
+  --security-opt no-new-privileges \
+  --cap-drop=ALL --cap-add=SYS_CHROOT \
+  --read-only \
+  --tmpfs /tmp:rw,exec,nosuid,nodev,size=2g \
+  --tmpfs /home/glass/.config:rw,nosuid,nodev,size=64m \
+  --tmpfs /home/glass/.local:rw,nosuid,nodev,size=64m \
+  --memory=6g --pids-limit=4096 \
   --shm-size=2g \
   -p 127.0.0.1:8080:8080 \
   -p 50000:50000/udp \
@@ -26,6 +37,11 @@ docker run -d --name glass \
   --env-file /etc/glass/env \
   ghcr.io/majorbeard/glass:<version>
 ```
+
+The first command writes the seccomp profile Chrome's sandbox needs, from
+the image itself (it downloads nothing). Without it, or with the
+capabilities dropped further, Glass refuses to start: see
+[Hardening](#hardening) for what each flag does.
 
 with `/etc/glass/env` (mode `0600`):
 
@@ -41,6 +57,18 @@ services:
   glass:
     image: ghcr.io/majorbeard/glass:<version>
     restart: unless-stopped
+    security_opt:
+      - seccomp=/etc/glass/seccomp.json
+      - no-new-privileges
+    cap_drop: [ALL]
+    cap_add: [SYS_CHROOT]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,exec,nosuid,nodev,size=2g
+      - /home/glass/.config:rw,nosuid,nodev,size=64m
+      - /home/glass/.local:rw,nosuid,nodev,size=64m
+    mem_limit: 6g
+    pids_limit: 4096
     shm_size: "2gb"
     ports:
       - "127.0.0.1:8080:8080"
@@ -385,10 +413,13 @@ GLASS_CORS_ORIGINS=https://app.example.com
   pinned, which defeats DNS rebinding. Only disable it
   (`GLASS_EGRESS_FILTER=false`) if sessions must reach internal services on
   purpose.
-- **Chrome sandbox.** Active in the official image, which runs as a non-root
-  user; the log says `Chrome sandbox active`. If you build your own image,
-  don't run Glass as root: Chrome's sandbox can't start under root, and Glass
-  then runs without it and logs a loud warning.
+- **Chrome sandbox.** On when the container runs with Glass's seccomp
+  profile, as above; the log says `Chrome sandbox active`, and
+  `glass doctor` checks it. Where it cannot start (no profile, capabilities
+  dropped further, running as root), Glass refuses to start unless you set
+  `GLASS_ALLOW_NO_SANDBOX=true`, which runs Chrome without it. Images before
+  v0.1.93 ran Chrome without its sandbox in every container, while logging
+  that it was active: upgrade, and add the profile.
 - **Threat model.** Each session has its own Chrome process while it runs and
   its own storage, but Chrome processes are reused by later sessions. Chrome's
   sandbox is what stops a compromised page from persisting into the next
@@ -399,6 +430,50 @@ GLASS_CORS_ORIGINS=https://app.example.com
 - **Logs** contain no user content: no typed text, no clipboard, no page paths
   or queries (origins only), no file names, no tokens. Client IP addresses
   appear only as a short salted hash that changes per process run.
+
+## Hardening
+
+What the `docker run` above does, measured with real sessions on a
+CPU host (arm64, Ubuntu, Docker 29):
+
+| Flag | Why |
+|---|---|
+| `--security-opt seccomp=/etc/glass/seccomp.json` | Docker's default seccomp profile plus one rule: `clone` and `unshare`, which Chrome's sandbox needs to give each renderer its own user, pid and network namespaces. Docker's default allows them only with `CAP_SYS_ADMIN`, which this avoids. `glass seccomp-profile` prints it; regenerate it when you update the image. |
+| `--cap-drop=ALL --cap-add=SYS_CHROOT` | No Linux capabilities but the one the sandbox needs. |
+| `--security-opt no-new-privileges` | Nothing in the container can gain privileges (setuid binaries included). |
+| `--read-only` and the three `--tmpfs` | The image can't be changed by anything running in it. `/tmp` must allow `exec`: Glass runs a small helper from there. Chrome's downloads stay in the `glass-cache` volume. |
+| `--memory`, `--pids-limit` | A runaway page can't take the host down. Size `--memory` to the host: a session with a heavy page costs a few hundred MB. |
+
+Don't add `--security-opt apparmor=unconfined`: on Ubuntu hosts that
+restrict user namespaces, it stops Chrome's sandbox from starting.
+
+**GPU hosts** (`--gpus`, the `nvidia` capture method): the capabilities and
+the read-only root haven't been measured there yet. Start with the seccomp
+profile and `no-new-privileges`, and check `glass doctor`.
+
+**A dedicated network** (`docker network create --subnet 172.30.0.0/24
+--gateway 172.30.0.1 glass-net`, then `--network glass-net`) keeps other
+containers away from Glass. Requests from your proxy then arrive from that
+network's gateway: set `GLASS_TRUSTED_PROXIES=172.30.0.1`, or every client
+looks the same in the logs.
+
+**The host:** keep it for Glass (and its proxy and TURN server), apply
+security updates, and allow SSH by key only.
+
+### Staying current
+
+Glass renders untrusted pages, so an old Chrome is the largest risk on the
+list; a new image comes at least every two weeks with Chrome's security
+fixes. Two ways to take them:
+
+- **Pin the digest** (`ghcr.io/majorbeard/glass@sha256:...`) and move it on
+  a schedule: you choose when, and every host runs exactly what you
+  tested.
+- **Follow a tag with an updater:** pull the new image and recreate the
+  container at a quiet hour, after waiting until
+  `docker exec glass glass session list` shows no sessions. Recreating
+  closes any left within Docker's stop timeout, and viewers see the
+  session end. Regenerate the seccomp profile with each new image.
 
 ## The audit stream
 
@@ -444,6 +519,7 @@ Glass ships only as the Docker image; the `glass` command is inside it.
 ```sh
 docker run --rm --env-file /etc/glass/env ghcr.io/majorbeard/glass doctor --env
 docker exec glass docker-entrypoint.sh doctor   # inside a running container
+docker run --rm ghcr.io/majorbeard/glass:<version> seccomp-profile   # the seccomp profile, see Hardening
 ```
 
 `glass session` manages a running instance. Inside the container it sends
