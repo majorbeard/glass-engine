@@ -60,7 +60,9 @@ You need Docker. Start Glass for local development (loopback only, no
 token):
 
 ```sh
+docker run --rm ghcr.io/majorbeard/glass seccomp-profile > glass-seccomp.json
 docker run -d --name glass \
+  --security-opt seccomp=glass-seccomp.json \
   -p 127.0.0.1:8080:8080 \
   -p 50000:50000/udp \
   --shm-size=1g \
