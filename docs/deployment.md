@@ -400,6 +400,40 @@ GLASS_CORS_ORIGINS=https://app.example.com
   or queries (origins only), no file names, no tokens. Client IP addresses
   appear only as a short salted hash that changes per process run.
 
+## The audit stream
+
+Glass writes one line to its log for each thing you may need to account
+for later, marked `[Audit]` so it can be filtered out of everything else:
+
+```sh
+docker logs glass 2>&1 | grep '\[Audit\]'
+```
+
+```text
+[Audit] event=session.created session=4d82acf8-… kind=browser by=api client=ip-e1acb3ce link=d7a916a39018a209 expires=2026-10-27T13:40:16Z
+[Audit] event=link.minted session=4d82acf8-… link=7ccc96e109d9b5cc caps=watch by=api client=ip-e1acb3ce expires=2026-10-27T13:40:16Z
+[Audit] event=connection.joined session=4d82acf8-… connection=729ace33-… link=own caps=watch+input client=ip-e1acb3ce resumed=false
+[Audit] event=link.revoked session=4d82acf8-… link=7ccc96e109d9b5cc closed=1 by=api client=ip-e1acb3ce
+[Audit] event=auth.refused route="GET sessions" reason=bad-token client=ip-0b1c9a77
+[Audit] event=session.closed session=4d82acf8-… kind=browser reason=api after=17s
+```
+
+| Event | Means |
+|---|---|
+| `session.created`, `session.closed` | A session (`kind`: browser, relay, call) started, by the API token or a ticket (`by`), or ended, with `reason`: `api`, `empty` (its last viewer left), `dropped`, `never-joined`, `grace-expired`, `setup-failed`, `shutdown`. |
+| `link.minted`, `link.revoked` | A link was handed out, with what it may do (`caps`: `watch`, `input`, `produce`) and when it expires, or revoked, with how many connections it closed. |
+| `connection.joined`, `connection.left` | A viewer or call peer joined (`resumed=true` after a drop) or left (`reason`: `left`, `dropped`, `revoked`). |
+| `producer.started`, `producer.stopped` | A relay producer, by `slot`. |
+| `control.granted`, `control.released`, `control.revoked` | Control of the page changed hands. |
+| `auth.refused`, `link.refused`, `ticket.refused` | A request with no or a wrong API token, a link that expired, was revoked or used, a ticket refused. |
+| `auth.retiring-token` | A token you are retiring was used (at most hourly). |
+| `audit.suppressed` | More than 30 refusals of one kind in a minute: the rest are counted here. |
+
+`link` is a link's ID, not the link (`own` for a session's own link,
+`api` for the API token), and `client` is the salted hash above: the
+stream holds no token and no URL. A steady rise in `*.refused` lines is
+the one worth an alert: someone is trying tokens or links.
+
 ## The `glass` CLI
 
 Glass ships only as the Docker image; the `glass` command is inside it.
