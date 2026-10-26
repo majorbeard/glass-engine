@@ -30,8 +30,8 @@ docker exec glass glass session close <id>            # end one session
 
 | What leaked | Reach | Do |
 |---|---|---|
-| A watch link or other link you minted | That one session, as far as the link allows | [Revoke the link](#a-link-leaked) |
-| A session's own link (`signalingUrl` from `POST /v1/sessions`, a relay session's `signalingUrl`) | Control of that session | [Close the session](#a-sessions-own-link-leaked) |
+| A watch link or other link you minted, a relay session's `signalingUrl` or `produceUrl` | That one session, as far as the link allows | [Revoke the link](#a-link-leaked) |
+| A browser session's own link (`signalingUrl` from `POST /v1/sessions`) | Control of that session | [Close the session](#a-sessions-own-link-leaked) |
 | The API token (`GLASS_API_TOKEN`) | Everything: create, read and close any session | [Replace the token](#the-api-token-leaked) |
 | The ticket secret (`GLASS_TICKET_SECRET`) | Start sessions, as many as capacity allows | [Replace the secret](#the-ticket-secret-leaked) |
 | The TURN secret (`GLASS_TURN_SECRET`) | Use your TURN server as a relay | [Replace the secret](#the-turn-secret-leaked) |
@@ -67,11 +67,11 @@ docker exec glass glass session list         # find the session
 docker exec glass glass session close <id>
 ```
 
-A session's own link is the owner's and can't be revoked separately:
-closing the session ends it. A relay session's `signalingUrl` is its own
-link too; to share a relay stream, mint watch links
-(`POST /v1/relay-sessions/{id}/connections`) instead, so a leak can be
-revoked. A call's peer links end with the call (`DELETE /v1/calls/{id}`).
+A browser session's own link is the owner's and can't be revoked
+separately: closing the session ends it. A call's peer links end with the
+call (`DELETE /v1/calls/{id}`). A relay session's links, its
+`signalingUrl` included, are revoked like any other
+([A link leaked](#a-link-leaked)).
 
 ## The API token leaked
 

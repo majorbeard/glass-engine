@@ -77,7 +77,7 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 | `GET` | `/v1/relay-sessions/{id}/signaling` | Viewer WebSocket. The `signalingUrl` is a watch link; the producer's link may watch too. |
 | `GET` | `/v1/relay-sessions/{id}/produce` | Producer WebSocket. Only with a link minted to produce (the `produceUrl`, or a grant with `producesMedia`) or the API token; any other link is `403`. `409` while the slot has another producer. |
 | `POST` | `/v1/relay-sessions/{id}/connections` | Mint a grant; the response has `produceUrl` only when `producesMedia` was requested. `expiresIn` as for browser sessions. A non-empty `slots` field is reserved: `400`. |
-| `DELETE` | `/v1/relay-sessions/{id}/connections/{linkId}` | Revoke one link, as for browser sessions; a producer's link too. The session's own `signalingUrl` is not revocable: mint watch links to share a relay stream. |
+| `DELETE` | `/v1/relay-sessions/{id}/connections/{linkId}` | Revoke one link, as for browser sessions: the `signalingUrl` (a watch link), a producer's link, or one minted later. |
 | `GET` | `/v1/relay-sessions/{id}/stats/stream` | Server-Sent Events. The API token only. |
 
 ### Calls
