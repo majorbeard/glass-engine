@@ -3,7 +3,7 @@
 // behavior, so internal refactors must keep it passing unchanged. Message
 // type bytes are the wire protocol's (docs/protocol.md), not internal names.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CLOSE_LINK_EXPIRED, GlassClient, LINK_EXPIRED_MESSAGE } from "./index";
+import { CLOSE_LINK_EXPIRED, CLOSE_LINK_REVOKED, GlassClient, LINK_EXPIRED_MESSAGE, LINK_REVOKED_MESSAGE } from "./index";
 import { connectedClient, FakePeerConnection, FakeWebSocket, flush, installFakes, type FakeDataChannel } from "./testing/fakes";
 
 const URL = "ws://glass.test/v1/sessions/s1/signaling?token=tok";
@@ -303,6 +303,18 @@ describe("reconnect", () => {
     FakeWebSocket.last().drop(CLOSE_LINK_EXPIRED);
     await flush();
     expect(closed).toHaveBeenCalledWith(LINK_EXPIRED_MESSAGE);
+  });
+
+  it("closes without retrying when the link is revoked mid-session", async () => {
+    const { client, ws } = await connected({ reconnect: { maxAttempts: 5, delaysMs: [10] } });
+    const closed = vi.fn();
+    client.on("closed", closed);
+    const sockets = FakeWebSocket.instances.length;
+    ws.drop(CLOSE_LINK_REVOKED);
+    await flush();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(closed).toHaveBeenCalledWith(LINK_REVOKED_MESSAGE);
+    expect(FakeWebSocket.instances).toHaveLength(sockets);
   });
 });
 

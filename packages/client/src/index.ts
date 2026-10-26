@@ -280,6 +280,14 @@ export const CLOSE_SESSION_NOT_FOUND = 4404;
 export const CLOSE_LINK_EXPIRED = 4401;
 /** The "closed" event's reason when the link has expired (CLOSE_LINK_EXPIRED). */
 export const LINK_EXPIRED_MESSAGE = "this link has expired";
+/**
+ * WebSocket close code Glass sends for a link the operator revoked: the connection that joined
+ * with it is closed with this code, and the link admits nothing again, a resume included.
+ * Retrying can't help; ask whoever shared the link for a new one.
+ */
+export const CLOSE_LINK_REVOKED = 4403;
+/** The "closed" event's reason when the link was revoked (CLOSE_LINK_REVOKED). */
+export const LINK_REVOKED_MESSAGE = "this link has been revoked";
 // Highest wire-contract major this client understands. Must track the
 // engine's protocol version (docs/protocol.md, "Versioning"); see
 // readSession for the fail-closed check and why absent means 1.

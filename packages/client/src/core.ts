@@ -191,8 +191,8 @@ export class ClientCore {
   // never come back. Cleared once consumed so it can't leak into a later,
   // unrelated connection.
   serverTerminalError: string | null = null;
-  // Set, to the "closed" reason, when Glass closed the socket with CLOSE_SESSION_NOT_FOUND or
-  // CLOSE_LINK_EXPIRED: stops the reconnect loop.
+  // Set, to the "closed" reason, when Glass closed the socket with CLOSE_SESSION_NOT_FOUND,
+  // CLOSE_LINK_EXPIRED or CLOSE_LINK_REVOKED: stops the reconnect loop.
   sessionGone: string | null = null;
 
   // Per-attempt settle guard (so a late ws/pc event can't resolve/reject an

@@ -123,6 +123,8 @@ class SessionGoneError extends Error {}
 const CLOSE_SESSION_GONE = 4404;
 /** WebSocket close code Glass sends for an expired link (see CLOSE_LINK_EXPIRED). */
 const CLOSE_LINK_EXPIRED = 4401;
+/** WebSocket close code Glass sends for a revoked link (see CLOSE_LINK_REVOKED). */
+const CLOSE_LINK_REVOKED = 4403;
 
 interface Drop {
   fatal: boolean;
@@ -463,6 +465,7 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
       socket.addEventListener("close", (e) => {
         if (e.code === CLOSE_SESSION_GONE) drop(false, "session not found or expired", true);
         else if (e.code === CLOSE_LINK_EXPIRED) drop(true, "this link has expired");
+        else if (e.code === CLOSE_LINK_REVOKED) drop(true, "this link has been revoked");
         else drop(false, `signaling connection closed (code ${e.code})`);
       });
 
