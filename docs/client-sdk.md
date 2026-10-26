@@ -23,13 +23,14 @@ for development and for backends written in TypeScript.
 
 ```ts
 createGlassSession(baseUrl?, apiToken?, options?): Promise<GlassSession>
+redeemGlassTicket(ticket, baseUrl?): Promise<GlassSession>
 deleteGlassSession(id, baseUrl?, apiToken?): void
 mintConnectionGrant(sessionId, capabilities, baseUrl?, apiToken?): Promise<GlassConnectionGrant>
 ```
 
 `createGlassSession`'s third argument is either `true` (the
 microphone-capable browser, as before) or an options object,
-`GlassCreateSessionOptions`: `{ audioInput?: boolean, contentHint?: "detail" | "motion", codec?: "h264" | "vp8" | "av1", inputMode?: "floor" | "free", inspect?: boolean }`.
+`GlassCreateSessionOptions`: `{ audioInput?: boolean, contentHint?: "detail" | "motion", codec?: "h264" | "vp8" | "av1", inputMode?: "floor" | "free", inspect?: boolean, linkExpiresIn?: number }`.
 `contentHint` (`GlassContentHint`) chooses what the session protects when
 bitrate or CPU is short: `"detail"` keeps the size and lowers the frame rate
 (text, interfaces), `"motion"` keeps the frame rate and lowers the size
@@ -52,6 +53,17 @@ to everyone at once, which is chaos with more than one active person. See
 `inspect: true` allows page inspection on the session, for your backend with
 the API token; see [page-inspection.md](page-inspection.md).
 
+`linkExpiresIn` is how many seconds the session's link admits new
+connections, `0` for never; absent, the runtime's default (24 hours). The
+returned `GlassSession` has `linksExpireAt`. See
+[protocol.md](protocol.md#link-expiry).
+
+`redeemGlassTicket` is how a browser starts a session with no API token
+anywhere near it: your backend signs a short-lived
+[session ticket](protocol.md#session-tickets) and hands it to the page,
+which redeems it once for the session. The returned `GlassSession` also has
+`watchUrls`, when the ticket asked for watch links.
+
 `createGlassSession` refuses a server whose `protocolVersion` is newer than
 `SUPPORTED_PROTOCOL_VERSION`, rather than connecting and failing in confusing
 ways.
@@ -64,7 +76,7 @@ import { createGlassClient } from "@glass/client";
 const client = createGlassClient({
   signalingUrl,             // required: from session creation or a grant
   sessionId,                // optional: used for deleteSessionOnClose
-  iceServers,               // optional: add TURN here for restrictive networks
+  iceServers,               // optional: your own; by default Glass's, TURN included
   reconnect: true,          // or { maxAttempts, delaysMs }
 });
 client.on("videoTrack", (stream) => (video.srcObject = stream));
@@ -77,7 +89,7 @@ await client.connect();
 |---|---|---|
 | `signalingUrl` | required | The WebSocket URL to connect to. |
 | `sessionId` | none | The session's ID. |
-| `iceServers` | public STUN | The viewer's ICE servers. Add TURN for viewers behind strict firewalls. |
+| `iceServers` | Glass's | Your own ICE servers. Absent, the client uses the ones Glass sends on connect: its STUN servers and, with `GLASS_TURN_SECRET` set, a TURN credential for this connection alone. |
 | `iceTransportPolicy` | `"all"` | `"relay"` forces TURN. |
 | `reconnect` | `true` | `false`, or `{ maxAttempts: 8, delaysMs: [1000, 2000, 4000, 8000, 16000] }`. The first retry is immediate. |
 | `statsIntervalMs` | off | Emit a `stats` event at this interval. |
@@ -96,7 +108,7 @@ await client.connect();
 | `videoTrack(stream)` | The media stream (video, plus audio when the session has it). |
 | `connected`, `disconnected` | Transport up or down. |
 | `reconnecting(attempt, maxAttempts)` | A retry is scheduled. |
-| `closed(reason)` | Final: the session ended, doesn't exist (`4404`), or retries ran out. |
+| `closed(reason)` | Final: the session ended, doesn't exist (`4404`), the link expired (`4401`, reason `LINK_EXPIRED_MESSAGE`), or retries ran out. |
 | `error(message)` | A non-fatal error from Glass (for example, the encoder failed). |
 | `stats(stats)` | RTT, throughput, jitter buffer, decoded and dropped frames. |
 
@@ -211,7 +223,7 @@ producer.stop();
 | `produceUrl` | none | Produce into an existing session (recommended). |
 | `serverUrl`, `apiToken`, `slots` | none | Create the session itself instead (development only). |
 | `slot` | `"main"` | Which slot this producer fills. |
-| `iceServers` | public STUN | |
+| `iceServers` | Glass's | As for `GlassClient`. The producer waits up to 2 s for Glass's before it offers. |
 | `maxBitrateKbps` | `1000` | Video bitrate cap; keep it below the uplink. `0` is uncapped. |
 | `startBitrateKbps` | `min(500, cap)` | Starting bitrate hint (Chromium only). |
 | `reconnect` | `true` | Recover from drops. |

@@ -42,7 +42,7 @@ The peer offers, Glass answers, the same as a relay producer
 ([producers.md](producers.md#connecting)):
 
 ```ts
-const pc = new RTCPeerConnection({ iceServers });
+const pc = new RTCPeerConnection();
 const local = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
 local.getTracks().forEach((t) => pc.addTrack(t, local));
 
@@ -55,15 +55,21 @@ pc.onicecandidate = (e) => {
 };
 ws.onmessage = async (event) => {
   const msg = JSON.parse(event.data);
+  if (msg.type === "ice_config") {              // first message: this peer's STUN and TURN
+    pc.setConfiguration({ iceServers: msg.iceServers });
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    ws.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
+  }
   if (msg.type === "answer") await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
   if (msg.type === "ice-candidate") await pc.addIceCandidate(msg.candidate);
 };
-ws.onopen = async () => {                       // only after the socket is open
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  ws.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
-};
 ```
+
+The offer waits for `ice_config`, Glass's first message: it carries the TURN
+credential for this peer's connection when Glass mints them
+([deployment.md](../deployment.md#turn)). An engine older than v0.1.89
+sends none; offer once the socket opens instead.
 
 - Send video in the call's `videoCodec`, and optionally one Opus audio track.
 - A peer that joins first sees a silent, black remote track until the other

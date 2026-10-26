@@ -53,18 +53,27 @@
       pc.onicecandidate = (e) => {
         if (e.candidate) ws.send(JSON.stringify({ type: "ice-candidate", candidate: e.candidate.toJSON() }));
       };
+      let offered = false;
+      const offer = async () => {
+        if (offered) return;
+        offered = true;
+        const o = await pc.createOffer();
+        await pc.setLocalDescription(o);
+        ws.send(JSON.stringify({ type: "offer", sdp: o.sdp }));
+      };
       ws.onmessage = async (event) => {
         const msg = JSON.parse(event.data);
+        // Glass's first message: this peer's STUN and TURN servers. Offer with them.
+        if (msg.type === "ice_config") {
+          pc.setConfiguration({ iceServers: msg.iceServers });
+          await offer();
+        }
         if (msg.type === "answer") await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
         if (msg.type === "ice-candidate") await pc.addIceCandidate(msg.candidate);
       };
-      ws.onclose = (e) => status(`signaling closed (${e.code})`);
-      ws.onopen = async () => {
-        // Offer only once the socket is open.
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        ws.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
-      };
+      ws.onclose = (e) => status(`signaling closed (${e.code === 4401 ? "this link has expired" : e.code})`);
+      // An engine older than v0.1.89 sends no ice_config: offer anyway after 2 s.
+      ws.onopen = () => setTimeout(offer, 2000);
       window.addEventListener("pagehide", () => ws.close(1000, "hung up"));
     }
 

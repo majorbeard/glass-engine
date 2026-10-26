@@ -19,7 +19,9 @@ change between releases.
 | Variable | Default | Purpose |
 |---|---|---|
 | `GLASS_ADDR` | `:8080` | HTTP listen address. |
-| `GLASS_API_TOKEN` | unset | Bearer token for the HTTP API. Required unless Glass listens on loopback only. See [deployment.md](deployment.md#authentication). |
+| `GLASS_API_TOKEN` | unset | Bearer token for the HTTP API. Required unless Glass listens on loopback only. Comma-separated to rotate: the current token first, then those being retired; every listed token works. See [deployment.md](deployment.md#authentication). |
+| `GLASS_TICKET_SECRET` | unset | Secret your backend signs [session tickets](protocol.md#session-tickets) with, so a browser can start a session without the API token. Comma-separated to rotate. Unset, tickets are off. |
+| `GLASS_LINK_TTL_HOURS` | `24` | How long a link Glass returns admits new connections, unless its request sets its own. `0` is never. See [protocol.md](protocol.md#link-expiry). |
 | `GLASS_INSECURE_LOCAL_DEV` | `false` | Allow no token on a non-loopback address. Local Docker development only. |
 | `GLASS_LICENSE_KEY` | unset (Free) | Your license key. Checked at startup and periodically; an unreachable license server is retried for about 30 s at startup, and a paid tier is kept for 7 days from its last successful check. `GET /v1/info` shows the tier in effect. |
 | `GLASS_LICENSE_CACHE_PATH` | `~/.cache/glass/license-cache.json` | File that keeps the last validated tier (never the key) across restarts. On a persistent volume (the image's `glass-cache` volume covers the default) it also survives re-creating the container. |
@@ -58,7 +60,9 @@ change between releases.
 | `GLASS_WEBRTC_NAT_1TO1_IPS` | discovered | Public address(es) to advertise, comma-separated. By default Glass discovers its public address through STUN at startup. See [deployment.md](deployment.md#public-address-and-nat). |
 | `GLASS_STUN_URLS` | Google public STUN | Comma-separated STUN URLs. |
 | `GLASS_TURN_URLS` | unset | Comma-separated TURN/TURNS URLs. |
-| `GLASS_TURN_USERNAME`, `GLASS_TURN_CREDENTIAL` | unset | TURN credentials. |
+| `GLASS_TURN_SECRET` | unset | Secret shared with your TURN server (coturn's `use-auth-secret`). Set, Glass issues every connection its own short-lived TURN credential, for itself and for the client. See [deployment.md](deployment.md#turn). |
+| `GLASS_TURN_CREDENTIAL_TTL_HOURS` | `24` | How long an issued TURN credential lasts. |
+| `GLASS_TURN_USERNAME`, `GLASS_TURN_CREDENTIAL` | unset | A fixed TURN credential, for Glass's own side only: it is never given to clients. Ignored when `GLASS_TURN_SECRET` is set. |
 | `GLASS_CORS_ORIGINS` | unset | Extra browser origins allowed, exact match, comma-separated. Loopback and private-network origins are always allowed. |
 | `GLASS_TRUSTED_PROXIES` | loopback | IPs or CIDRs of reverse proxies whose `X-Forwarded-For` and `X-Forwarded-Host` are trusted. |
 | `GLASS_PUBLIC_URL` | the request's own host | The address viewers reach Glass at, such as `https://glass.example.com`: the host and scheme of the signaling URLs Glass hands out. Set it behind a proxy that rewrites `Host`. See [deployment.md](deployment.md#the-address-viewers-are-given). |
