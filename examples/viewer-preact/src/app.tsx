@@ -60,7 +60,7 @@ export function App() {
     fileChooserMultiple, setFileChooserMultiple, uploading, setUploading, uploadError, setUploadError,
     micAccessOrigin, setMicAccessOrigin, micError, setMicError, micGranting, setMicGranting,
   } = session;
-  const { fps, perfStats } = useStatsStream(sessionId);
+  const { fps, perfStats } = useStatsStream(sessionId, session.linkToken);
   const closeContextMenu = useCallback(() => setContextMenu({ show: false, x: 0, y: 0 }), []);
   const { handleNavigate, handleNavigateBack, handleNavigateForward, handleRefresh } = useNavigation({
     client,
