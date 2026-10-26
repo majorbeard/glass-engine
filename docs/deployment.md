@@ -307,10 +307,31 @@ to it (browsers block mixed content), so put a reverse proxy in front.
 
 ```text
 # /etc/caddy/Caddyfile
+{
+    # Session links carry their credential in the query (?token=), and a
+    # viewer page's address can hold a link: keep both out of Caddy's logs.
+    log {
+        format filter {
+            wrap json
+            fields {
+                request>uri query {
+                    replace token REDACTED
+                }
+                request>headers>Referer delete
+            }
+        }
+    }
+}
+
 glass.example.com {
     reverse_proxy localhost:8080
 }
 ```
+
+Without the `log` block, Caddy writes the full request address, token
+included, to its log (the system journal by default) whenever a proxied
+connection ends badly: a dropped WebSocket, a restarted Glass. Anyone who
+can read that log can then join those sessions until their links expire.
 
 Open TCP 80 and 443, and keep Glass's port 8080 on the host
 (`-p 127.0.0.1:8080:8080`, as above): the proxy is the only way in. Media
