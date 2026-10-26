@@ -59,7 +59,7 @@ change between releases.
 | `GLASS_WEBRTC_UDP_PORT` | `50000` | The one UDP port every WebRTC connection shares. |
 | `GLASS_WEBRTC_NAT_1TO1_IPS` | discovered | Public address(es) to advertise, comma-separated. By default Glass discovers its public address through STUN at startup. See [deployment.md](deployment.md#public-address-and-nat). |
 | `GLASS_STUN_URLS` | Google public STUN | Comma-separated STUN URLs. |
-| `GLASS_TURN_URLS` | unset | Comma-separated TURN/TURNS URLs. |
+| `GLASS_TURN_URLS` | unset | Comma-separated TURN/TURNS URLs. Needs `GLASS_TURN_SECRET`, or both `GLASS_TURN_USERNAME` and `GLASS_TURN_CREDENTIAL`: without a credential no session could connect, so Glass refuses to start and `glass doctor` fails the check. |
 | `GLASS_TURN_SECRET` | unset | Secret shared with your TURN server (coturn's `use-auth-secret`). Set, Glass issues every connection its own short-lived TURN credential, for itself and for the client. See [deployment.md](deployment.md#turn). |
 | `GLASS_TURN_CREDENTIAL_TTL_HOURS` | `24` | How long an issued TURN credential lasts. |
 | `GLASS_TURN_USERNAME`, `GLASS_TURN_CREDENTIAL` | unset | A fixed TURN credential, for Glass's own side only: it is never given to clients. Ignored when `GLASS_TURN_SECRET` is set. |

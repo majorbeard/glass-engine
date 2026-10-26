@@ -47,10 +47,12 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 |---|---|---|
 | `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities, contentHint, codec, linksExpireAt?}`. Optional body fields: `"audioInput": true`; `"contentHint": "detail"` or `"motion"` (anything else is `400`); `"codec": "h264"`, `"vp8"` or `"av1"` (one this host cannot serve is `400` with the reason, never served as another codec); `"inputMode": "floor"` (the default) or `"free"` (anything else is `400`; see [concepts.md](concepts.md#several-people-in-control)); `"inspect": true` allows [page inspection](page-inspection.md) (off by default; `400` for a source that cannot be inspected). `"linkExpiresIn"`: seconds until the session's link stops admitting new connections, `0` for never (see [link expiry](#link-expiry)). The response also carries `inputMode` and `inspect`. `503` at capacity. |
 | `POST` | `/v1/tickets` | Redeem a [session ticket](#session-tickets): `{"ticket": "…"}`. Creates one browser session; `201` as `POST /v1/sessions`, plus `watchUrls`. Takes no API token. Exists only when `GLASS_TICKET_SECRET` is set. |
+| `GET` | `/v1/sessions` | Every running browser session, oldest first: `{"sessions": [...]}`, each as `GET /v1/sessions/{id}` plus `connections` (how many are connected now). Never a link. API token only. |
 | `GET` | `/v1/sessions/{id}` | `{id, state: "pending"\|"active"\|"closed", createdAt, connectedAt?, codec?, inputMode?}`, or `404`. |
 | `DELETE` | `/v1/sessions/{id}` | `204`, or `404`. |
 | `GET` | `/v1/sessions/{id}/signaling` | WebSocket upgrade. |
-| `POST` | `/v1/sessions/{id}/connections` | Mint a grant. Body: any of `consumesMedia`, `producesMedia`, `producesInput` (booleans), and `expiresIn` (seconds, `0` for never; see [link expiry](#link-expiry)). `201 {signalingUrl, connectionCapabilities, expiresAt?}`. `consumesInput` is reserved: `400`. |
+| `POST` | `/v1/sessions/{id}/connections` | Mint a grant. Body: any of `consumesMedia`, `producesMedia`, `producesInput` (booleans), and `expiresIn` (seconds, `0` for never; see [link expiry](#link-expiry)). `201 {signalingUrl, connectionCapabilities, linkId, expiresAt?}`; `linkId` names the link for revoking it. `consumesInput` is reserved: `400`. |
+| `DELETE` | `/v1/sessions/{id}/connections/{linkId}` | Revoke one link: it admits nothing again, a reconnect included, and every connection that joined with it is closed with `4403`. The session goes on for everyone else. `204` (also when already revoked); `404` for an unknown session or link; `400` for the session's own link (close the session instead). API token only. `linkId` is the one the link was minted with, or the first 16 hex digits of the SHA-256 of the link's `token` (`glass session revoke <URL>` works it out). |
 | `POST` | `/v1/sessions/{id}/input` | Server-side input: `{"type", "data"}` as in the DataChannel input table. Not subject to the session's input mode, unless `"floor": true`: then it takes the page as one more controller, waiting up to `"wait"` ms (default 2000, at most 10000) for a person to pause, and is `409` (`floor_taken`, with `holder`) if they don't; keys and buttons it holds are released after 5 s without input from it; not for `set_viewport`. `202`; `400` for an unknown or invalid event; `429` when rate limited. |
 | `GET` | `/v1/sessions/{id}/page/snapshot` | The page's accessibility tree: `scope`, `prune`, `values`, `root`, `maxNodes`. See [page-inspection.md](page-inspection.md); every `/page` route takes the API token only, on a session created with `"inspect": true` (else `403`, `inspect_off`); a stale ref is `409` (`stale_ref`). |
 | `POST` | `/v1/sessions/{id}/page/query` | Nodes matching `{role?, name?, exact?, scope?, values?, maxResults?}`. |
@@ -69,11 +71,13 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 | Method | Path | Response |
 |---|---|---|
 | `POST` | `/v1/relay-sessions` | `201` with `{id, signalingUrl, produceUrl, videoCodec, protocolVersion, sourceType, capabilities, linksExpireAt?}`, plus `slots` and `produceUrls` when the body declares `{"slots": [...]}`. Optional `"linkExpiresIn"` for every link it returns. |
+| `GET` | `/v1/relay-sessions` | Every running relay session, as `GET /v1/sessions`. |
 | `GET` | `/v1/relay-sessions/{id}` | As for browser sessions. |
 | `DELETE` | `/v1/relay-sessions/{id}` | As for browser sessions. |
 | `GET` | `/v1/relay-sessions/{id}/signaling` | Viewer WebSocket. The `signalingUrl` is a watch link; the producer's link may watch too. |
 | `GET` | `/v1/relay-sessions/{id}/produce` | Producer WebSocket. Only with a link minted to produce (the `produceUrl`, or a grant with `producesMedia`) or the API token; any other link is `403`. `409` while the slot has another producer. |
 | `POST` | `/v1/relay-sessions/{id}/connections` | Mint a grant; the response has `produceUrl` only when `producesMedia` was requested. `expiresIn` as for browser sessions. A non-empty `slots` field is reserved: `400`. |
+| `DELETE` | `/v1/relay-sessions/{id}/connections/{linkId}` | Revoke one link, as for browser sessions; a producer's link too. The session's own `signalingUrl` is not revocable: mint watch links to share a relay stream. |
 | `GET` | `/v1/relay-sessions/{id}/stats/stream` | Server-Sent Events. The API token only. |
 
 ### Calls
@@ -81,7 +85,8 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 | Method | Path | Response |
 |---|---|---|
 | `POST` | `/v1/calls` | `201 {id, peerAUrl, peerBUrl, videoCodec, protocolVersion, sourceType, linksExpireAt?}`. Optional body `{"linkExpiresIn"}` for both peer links. |
-| `GET` | `/v1/calls/{id}` | As for browser sessions. |
+| `GET` | `/v1/calls` | Every running call, as `GET /v1/sessions`. |
+| `GET` | `/v1/calls/{id}` | As for browser sessions. A call's peer links end with the call. |
 | `DELETE` | `/v1/calls/{id}` | As for browser sessions. |
 | `GET` | `/v1/calls/{id}/peers/{a\|b}/signaling` | Peer WebSocket. The token must belong to that peer (`403` otherwise); the API token is not a peer. |
 
@@ -111,6 +116,7 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 | `1000` | Client | Deliberate leave. The connection ends; no reconnect grace. |
 | `4001` | Glass | Relay producer sent no media. Held for grace; resume. |
 | `4401` | Glass | The link has expired: it admits no new connection ([link expiry](#link-expiry)). Don't retry; get a new link. |
+| `4403` | Glass | The link was revoked: this connection is closed, and the link admits nothing again. Don't retry; get a new link. |
 | `4404` | Glass | The session doesn't exist (never created, closed or expired). Don't retry. |
 | anything else | either | Treated as a lost connection: held for the reconnect grace. |
 

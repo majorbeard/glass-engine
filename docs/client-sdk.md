@@ -108,7 +108,7 @@ await client.connect();
 | `videoTrack(stream)` | The media stream (video, plus audio when the session has it). |
 | `connected`, `disconnected` | Transport up or down. |
 | `reconnecting(attempt, maxAttempts)` | A retry is scheduled. |
-| `closed(reason)` | Final: the session ended, doesn't exist (`4404`), the link expired (`4401`, reason `LINK_EXPIRED_MESSAGE`), or retries ran out. |
+| `closed(reason)` | Final: the session ended, doesn't exist (`4404`), the link expired (`4401`, reason `LINK_EXPIRED_MESSAGE`), the link was revoked (`4403`, reason `LINK_REVOKED_MESSAGE`), or retries ran out. |
 | `error(message)` | A non-fatal error from Glass (for example, the encoder failed). |
 | `stats(stats)` | RTT, throughput, jitter buffer, decoded and dropped frames. |
 
