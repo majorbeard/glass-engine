@@ -21,6 +21,8 @@ change between releases.
 | `GLASS_ADDR` | `:8080` | HTTP listen address. |
 | `GLASS_API_TOKEN` | unset | Bearer token for the HTTP API. Required unless Glass listens on loopback only. Comma-separated to rotate: the current token first, then those being retired; every listed token works. See [deployment.md](deployment.md#authentication). |
 | `GLASS_TICKET_SECRET` | unset | Secret your backend signs [session tickets](protocol.md#session-tickets) with, so a browser can start a session without the API token. Comma-separated to rotate. Unset, tickets are off. |
+| `GLASS_CREATE_RATE_PER_MINUTE` | `120` | How many sessions, relay sessions and calls one client may create a minute, in bursts of up to a third more. `0` is no limit. See [protocol.md](protocol.md#rate-limits). |
+| `GLASS_TICKET_RATE_PER_MINUTE` | `10` | How many session tickets one client may redeem, or try to, a minute, in bursts of up to a third more. `0` is no limit. |
 | `GLASS_LINK_TTL_HOURS` | `24` | How long a link Glass returns admits new connections, unless its request sets its own. `0` is never. See [protocol.md](protocol.md#link-expiry). |
 | `GLASS_INSECURE_LOCAL_DEV` | `false` | Allow no token on a non-loopback address. Local Docker development only. |
 | `GLASS_ALLOW_NO_SANDBOX` | `false` | Run Chrome without its sandbox where the sandbox cannot start (as root, or in a container without Glass's seccomp profile) instead of refusing to start. Removes a layer of defense against a hostile page. See [deployment.md](deployment.md#hardening). |

@@ -460,6 +460,15 @@ looks the same in the logs.
 **The host:** keep it for Glass (and its proxy and TURN server), apply
 security updates, and allow SSH by key only.
 
+### Rate limits
+
+Glass limits, per client, how fast sessions are created and tickets
+redeemed ([protocol.md](protocol.md#rate-limits)), so your proxy needs no
+plugin for it. Set `GLASS_TRUSTED_PROXIES` for your proxy, or every client
+shares the proxy's limit. If your backend creates more than 120 sessions a
+minute from one address, raise `GLASS_CREATE_RATE_PER_MINUTE`. To limit at
+the edge as well, nginx's `limit_req` does it; Caddy needs a plugin.
+
 ### Staying current
 
 Glass renders untrusted pages, so an old Chrome is the largest risk on the

@@ -45,8 +45,8 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 
 | Method | Path | Response |
 |---|---|---|
-| `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities, contentHint, codec, linksExpireAt?}`. Optional body fields: `"audioInput": true`; `"contentHint": "detail"` or `"motion"` (anything else is `400`); `"codec": "h264"`, `"vp8"` or `"av1"` (one this host cannot serve is `400` with the reason, never served as another codec); `"inputMode": "floor"` (the default) or `"free"` (anything else is `400`; see [concepts.md](concepts.md#several-people-in-control)); `"inspect": true` allows [page inspection](page-inspection.md) (off by default; `400` for a source that cannot be inspected). `"linkExpiresIn"`: seconds until the session's link stops admitting new connections, `0` for never (see [link expiry](#link-expiry)). The response also carries `inputMode` and `inspect`. `503` at capacity. |
-| `POST` | `/v1/tickets` | Redeem a [session ticket](#session-tickets): `{"ticket": "…"}`. Creates one browser session; `201` as `POST /v1/sessions`, plus `watchUrls`. Takes no API token. Exists only when `GLASS_TICKET_SECRET` is set. |
+| `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities, contentHint, codec, linksExpireAt?}`. Optional body fields: `"audioInput": true`; `"contentHint": "detail"` or `"motion"` (anything else is `400`); `"codec": "h264"`, `"vp8"` or `"av1"` (one this host cannot serve is `400` with the reason, never served as another codec); `"inputMode": "floor"` (the default) or `"free"` (anything else is `400`; see [concepts.md](concepts.md#several-people-in-control)); `"inspect": true` allows [page inspection](page-inspection.md) (off by default; `400` for a source that cannot be inspected). `"linkExpiresIn"`: seconds until the session's link stops admitting new connections, `0` for never (see [link expiry](#link-expiry)). The response also carries `inputMode` and `inspect`. `503` at capacity. `429` past [the creation rate limit](#rate-limits). |
+| `POST` | `/v1/tickets` | Redeem a [session ticket](#session-tickets): `{"ticket": "…"}`. Creates one browser session; `201` as `POST /v1/sessions`, plus `watchUrls`. Takes no API token. Exists only when `GLASS_TICKET_SECRET` is set. `429` past [the ticket rate limit](#rate-limits), which every attempt counts toward. |
 | `GET` | `/v1/sessions` | Every running browser session, oldest first: `{"sessions": [...]}`, each as `GET /v1/sessions/{id}` plus `connections` (how many are connected now). Never a link. API token only. |
 | `GET` | `/v1/sessions/{id}` | `{id, state: "pending"\|"active"\|"closed", createdAt, connectedAt?, codec?, inputMode?}`, or `404`. |
 | `DELETE` | `/v1/sessions/{id}` | `204`, or `404`. |
@@ -70,7 +70,7 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 
 | Method | Path | Response |
 |---|---|---|
-| `POST` | `/v1/relay-sessions` | `201` with `{id, signalingUrl, produceUrl, videoCodec, protocolVersion, sourceType, capabilities, linksExpireAt?}`, plus `slots` and `produceUrls` when the body declares `{"slots": [...]}`. Optional `"linkExpiresIn"` for every link it returns. |
+| `POST` | `/v1/relay-sessions` | `201` with `{id, signalingUrl, produceUrl, videoCodec, protocolVersion, sourceType, capabilities, linksExpireAt?}`, plus `slots` and `produceUrls` when the body declares `{"slots": [...]}`. Optional `"linkExpiresIn"` for every link it returns. `429` past [the creation rate limit](#rate-limits). |
 | `GET` | `/v1/relay-sessions` | Every running relay session, as `GET /v1/sessions`. |
 | `GET` | `/v1/relay-sessions/{id}` | As for browser sessions. |
 | `DELETE` | `/v1/relay-sessions/{id}` | As for browser sessions. |
@@ -84,7 +84,7 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 
 | Method | Path | Response |
 |---|---|---|
-| `POST` | `/v1/calls` | `201 {id, peerAUrl, peerBUrl, videoCodec, protocolVersion, sourceType, linksExpireAt?}`. Optional body `{"linkExpiresIn"}` for both peer links. |
+| `POST` | `/v1/calls` | `201 {id, peerAUrl, peerBUrl, videoCodec, protocolVersion, sourceType, linksExpireAt?}`. Optional body `{"linkExpiresIn"}` for both peer links. `429` past [the creation rate limit](#rate-limits). |
 | `GET` | `/v1/calls` | Every running call, as `GET /v1/sessions`. |
 | `GET` | `/v1/calls/{id}` | As for browser sessions. A call's peer links end with the call. |
 | `DELETE` | `/v1/calls/{id}` | As for browser sessions. |
@@ -122,6 +122,17 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 
 Glass also sends WebSocket pings; a client that doesn't answer within 30 s is
 treated as disconnected. Browsers answer automatically.
+
+### Rate limits
+
+Creating sessions, relay sessions and calls is limited per client to
+`GLASS_CREATE_RATE_PER_MINUTE` (default 120 a minute, in bursts of up to
+40), and redeeming tickets to `GLASS_TICKET_RATE_PER_MINUTE` (default 10, in
+bursts of up to 4; every attempt counts, valid or not). The client is the
+address Glass sees, or behind a trusted proxy the one it forwards
+(`GLASS_TRUSTED_PROXIES`). Past the limit: `429` with `Retry-After` (whole
+seconds) and `{"error", "code": "rate_limited"}`. A request refused for
+its credential doesn't count. `0` turns a limit off.
 
 ### Link expiry
 
