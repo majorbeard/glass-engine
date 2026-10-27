@@ -407,6 +407,30 @@ GLASS_CORS_ORIGINS=https://app.example.com
 
 ## Security posture
 
+### Monitoring what runs
+
+`GET /v1/info` (with the API token) says what runs, how old it is and how
+it is protected; the startup log and `glass doctor` say the same. Watch it
+rather than trusting your configuration:
+
+```json
+"build": {"version": "v0.1.95", "built": "2026-10-27", "ageDays": 3, "stale": false, "chrome": "156.0.8078.47"},
+"security": {"apiAuth": "on", "apiTokens": 1, "chromeSandbox": "on", "egressFilter": true,
+             "tickets": true, "turnCredentials": "minted", "linkTTLHours": 24,
+             "rateLimits": {"createPerMinute": 120, "ticketPerMinute": 10}}
+```
+
+- **`stale`** turns true when the image is more than 14 days old. A release
+  ships Chrome's current Stable, so an image's age is its Chrome's: past
+  two weeks it has likely missed a Chrome security update. Glass keeps
+  running; update it ([Staying current](#staying-current)).
+- **`chromeSandbox`** is what Chrome actually ran with: `on`, or
+  `off: running as root` / `off: no usable sandbox` when
+  `GLASS_ALLOW_NO_SANDBOX` let it run without one.
+- **`apiAuth`** is `on` with a token, otherwise why it is off.
+- Everything is a state or a count: no token, secret or link.
+
+
 - **Egress filter** (on by default): browsers can't reach loopback, private or
   link-local addresses, including cloud metadata endpoints. Every connection a
   page makes is checked, not only navigations, and the resolved address is
