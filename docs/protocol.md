@@ -109,6 +109,42 @@ which accept the per-session `?token=` from the URLs Glass returns, and
   a client that asks for AV1 checks first (Safari decodes AV1 only on
   devices with AV1 hardware).
 
+### Errors
+
+Every error an HTTP route returns, a refused WebSocket handshake included,
+is JSON:
+
+```json
+{ "error": "a sentence for people", "code": "a_code_for_programs" }
+```
+
+The message may change between releases; the code does not, so branch on
+the code. A body may carry more fields beside these two (`floor_taken`'s
+`holder`). The codes:
+
+| `code` | Status | Meaning |
+|---|---|---|
+| `bad_request` | 400 | The request is malformed, or a field is out of range. |
+| `unauthorized` | 401 | No credential, or one the runtime does not know. |
+| `ticket_invalid`, `ticket_expired`, `ticket_used` | 401 | A session ticket refused (`POST /v1/tickets`). |
+| `link_expired`, `link_revoked` | 401 | A link past its expiry, or revoked. |
+| `origin_not_allowed` | 403 | A browser origin the runtime does not allow. |
+| `link_not_allowed` | 403 | A valid link without the right this needs: control of the page, producing, the statistics, the other peer's place. |
+| `link_used` | 403 | A single-use link already used. |
+| `inspect_off` | 403 | A page route on a session created without `"inspect": true`. |
+| `session_not_found` | 404 | No such session, or it has ended. |
+| `not_found` | 404 | No such thing inside the session: a download, a link id, a call peer. |
+| `unsupported` | 400, 404, 501 | The session's source cannot do this (no downloads, no inspection, no page events). |
+| `session_closed` | 409 | The session is closing. |
+| `slot_in_use` | 409 | A relay slot another producer holds. |
+| `no_page`, `stale_ref`, `no_dialog`, `dialog_open` | 409 | Page routes: no page; a node reference from an earlier snapshot; no dialog open; a dialog blocks the page. |
+| `floor_taken` | 409 | Another connection has the page (input mode `floor`); the body also carries `holder`. |
+| `no_file_chooser` | 409 | Files uploaded when no file chooser is waiting for them. |
+| `too_large` | 413 | A file, a batch or the session's uploads over their limit. |
+| `rate_limited` | 429 | Too many requests or inputs from this client; see `Retry-After`. |
+| `internal_error` | 500 | A fault in the runtime; the detail is in its log, never in the body. |
+| `at_capacity`, `hard_cap_reached`, `shutting_down`, `unavailable` | 503 | No session slot; no CPU headroom; the runtime is stopping; not available on this session now. |
+
 ### WebSocket close codes
 
 | Code | Sent by | Meaning |
