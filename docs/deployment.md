@@ -460,6 +460,40 @@ looks the same in the logs.
 **The host:** keep it for Glass (and its proxy and TURN server), apply
 security updates, and allow SSH by key only.
 
+### Rate limits
+
+Glass limits, per client, how fast sessions are created and tickets
+redeemed ([protocol.md](protocol.md#rate-limits)), so your proxy needs no
+plugin for it. Set `GLASS_TRUSTED_PROXIES` for your proxy, or every client
+shares the proxy's limit. If your backend creates more than 120 sessions a
+minute from one address, raise `GLASS_CREATE_RATE_PER_MINUTE`. To limit at
+the edge as well, nginx's `limit_req` does it; Caddy needs a plugin.
+
+### Verifying an image
+
+From v0.1.94 every image is signed with Glass's release key, by its digest,
+and carries a software bill of materials (SPDX) and a provenance record of
+how it was built. Check the signature before you run an image, with
+[cosign](https://github.com/sigstore/cosign) v3:
+
+```sh
+cosign verify   --key https://raw.githubusercontent.com/majorbeard/glass-engine/main/cosign.pub   ghcr.io/majorbeard/glass:v0.1.94
+```
+
+It prints the digest it verified. Run that digest
+(`ghcr.io/majorbeard/glass@sha256:...`), so what you checked is what
+runs: a tag can be moved, a digest cannot. Each release's notes give its
+digest. The signature covers the SBOM and provenance too; read them with
+
+```sh
+docker buildx imagetools inspect ghcr.io/majorbeard/glass:v0.1.94 --format '{{ json .SBOM }}'
+docker buildx imagetools inspect ghcr.io/majorbeard/glass:v0.1.94 --format '{{ json .Provenance }}'
+```
+
+The public key is [`cosign.pub`](../cosign.pub) in this repository. If it
+ever changes, the release notes say so, and older releases still verify
+against the key they were signed with.
+
 ### Staying current
 
 Glass renders untrusted pages, so an old Chrome is the largest risk on the
