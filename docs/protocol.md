@@ -39,7 +39,7 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 |---|---|---|
 | `GET` | `/healthz` | `200 {"status":"ok"}` whenever the process is up. |
 | `GET` | `/readyz` | `200` when at least one pooled browser answers, else `503`. Body: `{"status","browsers":{…},"diskFreeMB":{…},"diskLow"}`. Disk fields are informational. |
-| `GET` | `/v1/info` | `{"sessions":{"active","relayActive","callActive","capacity"},"capacity":{"licensedMax","configuredCap","effectiveCeiling","hardCapEnabled","currentCpuPercent",…},"license":{"tier","sessionLimit"},"protocolVersion","uptimeSeconds","codecs":{"available","default"}}`. `codecs` lists the video codecs a browser session may ask for, and the one it gets without asking. `license.tier` is the tier actually in effect; `capacity.effectiveCeiling` is how many sessions can be admitted right now. |
+| `GET` | `/v1/info` | `{"sessions":{"active","relayActive","callActive","capacity"},"capacity":{"licensedMax","configuredCap","effectiveCeiling","hardCapEnabled","currentCpuPercent",…},"license":{"tier","sessionLimit"},"protocolVersion","uptimeSeconds","codecs":{"available","default"},"build":{…},"security":{…}}`. `build` and `security` are described in [deployment.md](deployment.md#monitoring-what-runs). `codecs` lists the video codecs a browser session may ask for, and the one it gets without asking. `license.tier` is the tier actually in effect; `capacity.effectiveCeiling` is how many sessions can be admitted right now. |
 
 ### Browser sessions
 
