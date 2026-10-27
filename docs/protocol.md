@@ -266,10 +266,23 @@ page's CSS pixels.
 messages may carry `s`, a per-connection sequence number used for latency
 measurement.
 
-Two diagnostic messages are accepted from every connection, watch-only
-included: `input_latency_report` (the client's measured input-to-display
-latency and receiver statistics, every 5 s) and `clock_probe_reply`. Both are
-optional.
+Five diagnostic messages are accepted from every connection, watch-only
+included. All are optional. `@glass/client` sends the first two by itself:
+
+- `input_latency_report`: the client's measured input-to-display latency
+  and receiver statistics, every 5 s;
+- `clock_probe_reply`: the answer to a `clock_probe`.
+
+It sends the other three only when its diagnostic options are on:
+
+- `client_stats_report`: the viewer's frame and packet counters, at the
+  trace-report interval;
+- `pixel_trace_sample` (`samples: [{rtpTimestamp, paintedAtMs}]`): when
+  frames reached the screen; the engine ignores it unless its own
+  pixel tracing is on;
+- `encoded_frame_report` (`reports: [{rtpTimestamp, type, size, hash}]`):
+  what the viewer's decoder was given for each frame, compared with what
+  was sent.
 
 ## DataChannel messages (Glass → client)
 
