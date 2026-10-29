@@ -77,7 +77,7 @@ describe("linkExpiresIn and tickets", () => {
   });
 
   it("fails with the runtime's reason for a refused ticket", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 401, statusText: "Unauthorized", json: async () => ({ error: "ticket already used" }) })));
-    await expect(redeemGlassTicket("a.b.c", "http://host")).rejects.toThrow("Failed to redeem ticket (401): ticket already used");
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 401, statusText: "Unauthorized", text: async () => JSON.stringify({ error: "ticket already used", code: "ticket_used" }) })));
+    await expect(redeemGlassTicket("a.b.c", "http://host")).rejects.toThrow("Failed to redeem ticket (401): ticket already used (ticket_used)");
   });
 });

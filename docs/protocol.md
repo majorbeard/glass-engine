@@ -53,7 +53,7 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 | `GET` | `/v1/sessions/{id}/signaling` | WebSocket upgrade. |
 | `POST` | `/v1/sessions/{id}/connections` | Mint a grant. Body: any of `consumesMedia`, `producesMedia`, `producesInput` (booleans), and `expiresIn` (seconds, `0` for never; see [link expiry](#link-expiry)). `201 {signalingUrl, connectionCapabilities, linkId, expiresAt?}`; `linkId` names the link for revoking it. `consumesInput` is reserved: `400`. |
 | `DELETE` | `/v1/sessions/{id}/connections/{linkId}` | Revoke one link: it admits nothing again, a reconnect included, and every connection that joined with it is closed with `4403`. The session goes on for everyone else. `204` (also when already revoked); `404` for an unknown session or link; `400` for the session's own link (close the session instead). API token only. `linkId` is the one the link was minted with, or the first 16 hex digits of the SHA-256 of the link's `token` (`glass session revoke <URL>` works it out). |
-| `POST` | `/v1/sessions/{id}/input` | Server-side input: `{"type", "data"}` as in the DataChannel input table. Not subject to the session's input mode, unless `"floor": true`: then it takes the page as one more controller, waiting up to `"wait"` ms (default 2000, at most 10000) for a person to pause, and is `409` (`floor_taken`, with `holder`) if they don't; keys and buttons it holds are released after 5 s without input from it; not for `set_viewport`. `202`; `400` for an unknown or invalid event; `429` when rate limited. |
+| `POST` | `/v1/sessions/{id}/input` | Server-side input: `{"type", "data"}` as in the DataChannel input table. Not subject to the session's input mode, unless `"floor": true`: then it takes the page as one more controller, waiting up to `"wait"` ms (default 2000, at most 10000) for a person to pause, and is `409` (`floor_taken`, with `holder`) if they don't; keys and buttons it holds are released after 5 s without input from it; not for `set_viewport`. `202`; `400` for an unknown or invalid event, and `400` (`navigation_not_allowed`) for a `navigate` to a URL the navigation rules refuse (a scheme other than `http` or `https`, loopback, a private or link-local address), answered before anything runs; `429` when rate limited. |
 | `GET` | `/v1/sessions/{id}/page/snapshot` | The page's accessibility tree: `scope`, `prune`, `values`, `root`, `maxNodes`. See [page-inspection.md](page-inspection.md); every `/page` route takes the API token only, on a session created with `"inspect": true` (else `403`, `inspect_off`); a stale ref is `409` (`stale_ref`). |
 | `POST` | `/v1/sessions/{id}/page/query` | Nodes matching `{role?, name?, exact?, scope?, values?, maxResults?}`. |
 | `GET` | `/v1/sessions/{id}/page/at?x&y` | The node at a viewport point and its ancestors. |
@@ -125,6 +125,7 @@ the code. A body may carry more fields beside these two (`floor_taken`'s
 | `code` | Status | Meaning |
 |---|---|---|
 | `bad_request` | 400 | The request is malformed, or a field is out of range. |
+| `navigation_not_allowed` | 400 | A `navigate` input to a URL the navigation rules refuse: a scheme other than `http` or `https`, loopback, a private or link-local address. |
 | `unauthorized` | 401 | No credential, or one the runtime does not know. |
 | `ticket_invalid`, `ticket_expired`, `ticket_used` | 401 | A session ticket refused (`POST /v1/tickets`). |
 | `link_expired`, `link_revoked` | 401 | A link past its expiry, or revoked. |
@@ -144,6 +145,7 @@ the code. A body may carry more fields beside these two (`floor_taken`'s
 | `rate_limited` | 429 | Too many requests or inputs from this client; see `Retry-After`. |
 | `internal_error` | 500 | A fault in the runtime; the detail is in its log, never in the body. |
 | `at_capacity`, `hard_cap_reached`, `shutting_down`, `unavailable` | 503 | No session slot; no CPU headroom; the runtime is stopping; not available on this session now. |
+| `source_failed` | (signaling only) | The session's browser stopped; the session has ended. Sent in the signaling `error` message, never by an HTTP route. |
 
 ### WebSocket close codes
 
@@ -154,6 +156,7 @@ the code. A body may carry more fields beside these two (`floor_taken`'s
 | `4401` | Glass | The link has expired: it admits no new connection ([link expiry](#link-expiry)). Don't retry; get a new link. |
 | `4403` | Glass | The link was revoked: this connection is closed, and the link admits nothing again. Don't retry; get a new link. |
 | `4404` | Glass | The session doesn't exist (never created, closed or expired). Don't retry. |
+| `1011` | Glass | The session's browser stopped; sent after the signaling `error` message (`source_failed`). The session has ended: don't retry it. |
 | anything else | either | Treated as a lost connection: held for the reconnect grace. |
 
 Glass also sends WebSocket pings; a client that doesn't answer within 30 s is
@@ -253,7 +256,7 @@ then **the offer**; the client answers.
 | `slot_state` | `slots: {name: "empty"\|"live"\|"stalled"}` | Relay only. Once after `offer`, then on every change. |
 | `new_tab_request` | `url` | Browser only: the page tried to open a popup or tab. |
 | `clock_probe` | `id` | Clock calibration before the DataChannel opens. Reply `clock_probe_reply`. |
-| `error` | `error` | The source failed for good. Glass closes the socket next; don't reconnect. |
+| `error` | `code`, `error` | The source failed for good (`code` is `source_failed`; `error` is a sentence for people). Glass closes the socket next with `1011`; don't reconnect. |
 
 ### Client → Glass
 

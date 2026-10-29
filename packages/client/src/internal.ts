@@ -7,6 +7,22 @@ export const INPUT_LATENCY_REPORT_MS = 5000;
 
 export const SESSION_NOT_FOUND_MESSAGE = "session not found or expired";
 
+// The reason a failed HTTP response gives. Glass answers every error with
+// {"error": message, "code": code}; anything else (a proxy's page, an empty
+// body) falls back to its text, then to the status text.
+export async function errorDetail(res: Response): Promise<string> {
+  const text = await res.text().catch(() => "");
+  try {
+    const body = JSON.parse(text);
+    if (body && typeof body.error === "string") {
+      return body.code ? `${body.error} (${body.code})` : body.error;
+    }
+  } catch {
+    // Not JSON.
+  }
+  return text || res.statusText;
+}
+
 export const DEFAULT_MAX_RECONNECT_ATTEMPTS = 8;
 
 export const MOUSE_BATCH_INTERVAL_MS = 16; // ~60fps

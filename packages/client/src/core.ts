@@ -195,10 +195,6 @@ export class ClientCore {
   // CLOSE_LINK_EXPIRED or CLOSE_LINK_REVOKED: stops the reconnect loop.
   sessionGone: string | null = null;
 
-  // Per-attempt settle guard (so a late ws/pc event can't resolve/reject an
-  // already-settled establish() attempt).
-  attemptSettled = true;
-
   // Timers we must clear on close (backoff waits, batch timer, stats timer).
   pendingTimeouts = new Set<ReturnType<typeof setTimeout>>();
   mouseBatchTimer: ReturnType<typeof setInterval> | null = null;

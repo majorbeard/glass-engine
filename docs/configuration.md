@@ -60,6 +60,10 @@ change between releases.
 | Variable | Default | Purpose |
 |---|---|---|
 | `GLASS_WEBRTC_UDP_PORT` | `50000` | The one UDP port every WebRTC connection shares. |
+| `GLASS_WEBRTC_UDP_SOCKETS` | the CPU count, at most 8 | Sockets behind that one port (Linux, `SO_REUSEPORT`), so many connections' packets don't queue on one socket. Still one port to open. `1` is a single socket. |
+| `GLASS_WEBRTC_UDP_BUFFER_BYTES` | `16777216` | Read and write buffer asked for on each of those sockets. The host kernel caps it at `net.core.rmem_max` / `wmem_max`; Glass logs the size it got and warns under 5 MB. See [deployment.md](deployment.md#many-connections). |
+| `GLASS_WEBRTC_UDP_BATCH_SIZE` | `0` (off) | Packets a socket sends in one system call (`sendmmsg`, Linux). Off by default: measured, it cost a little loss and latency and gained nothing. Turn it on only if you measure a gain. |
+| `GLASS_WEBRTC_UDP_BATCH_INTERVAL_US` | `500` | With batching on, the longest a packet waits for its batch, in microseconds. |
 | `GLASS_WEBRTC_NAT_1TO1_IPS` | discovered | Public address(es) to advertise, comma-separated. By default Glass discovers its public address through STUN at startup. See [deployment.md](deployment.md#public-address-and-nat). |
 | `GLASS_STUN_URLS` | Google public STUN | Comma-separated STUN URLs. |
 | `GLASS_TURN_URLS` | unset | Comma-separated TURN/TURNS URLs. Needs `GLASS_TURN_SECRET`, or both `GLASS_TURN_USERNAME` and `GLASS_TURN_CREDENTIAL`: without a credential no session could connect, so Glass refuses to start and `glass doctor` fails the check. |

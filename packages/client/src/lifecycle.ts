@@ -80,12 +80,20 @@ export function establish(c: ClientCore): Promise<void> {
   // entries from before a reconnect gap (someone left/joined/changed
   // state while this connection was down) never linger.
   c._connections = new Map();
-  c.attemptSettled = false;
 
   return new Promise<void>((resolve, reject) => {
+    // Settled is this attempt's own: a timer or event of an earlier attempt
+    // must never settle a later one, or the reconnect loop waits on a
+    // promise nothing will settle. Settling clears both of this attempt's
+    // timers for the same reason.
+    let settled = false;
+    let signalingTimeout: ReturnType<typeof setTimeout> | null = null;
+    let peerTimeout: ReturnType<typeof setTimeout> | null = null;
     const settle = (fn: () => void) => {
-      if (c.attemptSettled) return;
-      c.attemptSettled = true;
+      if (settled) return;
+      settled = true;
+      if (signalingTimeout !== null) c.clearTimeoutTracked(signalingTimeout);
+      if (peerTimeout !== null) c.clearTimeoutTracked(peerTimeout);
       fn();
     };
 
@@ -98,23 +106,21 @@ export function establish(c: ClientCore): Promise<void> {
     }
     c.ws = ws;
 
-    const signalingTimeout = c.timeout(() => {
-      if (!c.signalingConnected) {
-        settle(() => reject(new Error("signaling connection timed out")));
-        teardownInternals(c);
-      }
+    signalingTimeout = c.timeout(() => {
+      if (settled || c.signalingConnected) return;
+      settle(() => reject(new Error("signaling connection timed out")));
+      teardownInternals(c);
     }, SIGNALING_TIMEOUT_MS);
 
-    const peerTimeout = c.timeout(() => {
-      if (!c.peerConnected) {
-        settle(() => reject(new Error("peer connection timed out")));
-        teardownInternals(c);
-      }
+    peerTimeout = c.timeout(() => {
+      if (settled || c.peerConnected) return;
+      settle(() => reject(new Error("peer connection timed out")));
+      teardownInternals(c);
     }, PEER_TIMEOUT_MS);
 
     ws.onopen = () => {
       c.signalingConnected = true;
-      c.clearTimeoutTracked(signalingTimeout);
+      if (signalingTimeout !== null) c.clearTimeoutTracked(signalingTimeout);
     };
 
     ws.onmessage = async (event) => {
@@ -135,7 +141,6 @@ export function establish(c: ClientCore): Promise<void> {
         if (!c.pc && signal.type === "offer") {
           transport.initPeerConnection(c, () => {
             // onConnected for this attempt
-            c.clearTimeoutTracked(peerTimeout);
             settle(() => resolve());
           });
         }

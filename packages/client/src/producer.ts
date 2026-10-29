@@ -4,6 +4,7 @@
 
 import { Emitter } from "./emitter";
 import { withStartBitrate } from "./sdp";
+import { errorDetail } from "./internal";
 
 export type ProducerState =
   | "idle"
@@ -541,7 +542,7 @@ async function createRelaySession(serverUrl: string, apiToken?: string, slots?: 
     clearTimeout(timer);
   }
   if (!res.ok) {
-    const text = await res.text();
+    const text = await errorDetail(res);
     if (res.status === 400) throw new FatalError(`create relay session failed: ${res.status} ${text}`);
     throw new Error(`create relay session failed: ${res.status} ${text}`);
   }
