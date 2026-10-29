@@ -272,6 +272,48 @@ describe("reconnect", () => {
     client.disconnect();
   });
 
+  it("keeps retrying through a link that drops everything", async () => {
+    const { client, ws } = await connected({ reconnect: { maxAttempts: 4, delaysMs: [1000, 2000] } });
+    vi.useFakeTimers();
+    const events: string[] = [];
+    client.on("reconnecting", (n: number, max: number) => events.push(`reconnecting ${n}/${max}`));
+    client.on("closed", (r: string) => events.push(`closed ${r}`));
+    ws.drop(1006);
+    // Every attempt's socket neither opens nor closes, as when every packet
+    // is dropped: each attempt ends on its own timers, and an earlier
+    // attempt's timer must not settle a later one.
+    for (let s = 0; s < 120; s++) {
+      vi.advanceTimersByTime(1000);
+      await flush();
+    }
+    expect(events).toEqual(["reconnecting 1/4", "reconnecting 2/4", "reconnecting 3/4", "reconnecting 4/4", "closed reconnection attempts exhausted"]);
+  });
+
+  it("connects on a slow attempt after a fast failure", async () => {
+    const { client, ws } = await connected({ reconnect: { maxAttempts: 3, delaysMs: [100] } });
+    vi.useFakeTimers();
+    const events: string[] = [];
+    client.on("connected", () => events.push("connected"));
+    ws.drop(1006);
+    FakeWebSocket.last().drop(1006); // attempt 1 fails at once; its timers would fire at 10 s and 15 s
+    await flush();
+    vi.advanceTimersByTime(100);
+    await flush();
+    const attempt2 = FakeWebSocket.last();
+    attempt2.open();
+    attempt2.receive({ type: "offer", sdp: "offer-sdp", connectionId: "c1" });
+    await flush();
+    // 15.05 s in: past attempt 1's peer timer (15 s from its start), not yet
+    // attempt 2's own (15 s from 0.1 s). Attempt 2 must still be up.
+    vi.advanceTimersByTime(14950);
+    await flush();
+    expect(attempt2.closedWith).toBeNull();
+    FakePeerConnection.last().setState("connected");
+    await flush();
+    expect(events).toEqual(["connected"]);
+    client.disconnect();
+  });
+
   it("gives up with closed once attempts run out", async () => {
     const { client, ws } = await connected({ reconnect: { maxAttempts: 1, delaysMs: [10] } });
     vi.useFakeTimers();

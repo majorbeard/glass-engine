@@ -211,6 +211,25 @@ They still work when set on their own, and they cap a host at about as many
 connections as ports. Existing firewall rules for `50000-50100/udp` keep
 working, because they include 50000.
 
+### Many connections
+
+Glass serves every connection from the one UDP port through several sockets
+(`GLASS_WEBRTC_UDP_SOCKETS`) with 16 MB buffers each. The host kernel caps
+a socket's buffer at `net.core.rmem_max` and `net.core.wmem_max`, often 4 MB
+or less, and a container can't raise them. On a host carrying many
+connections, raise them on the host:
+
+```sh
+sudo sysctl -w net.core.rmem_max=16777216 net.core.wmem_max=16777216
+# and keep them across reboots:
+printf 'net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+' | sudo tee /etc/sysctl.d/90-glass.conf
+```
+
+Glass logs the buffer it got at the first connection (`shared UDP port: N
+socket(s) ... receive buffer ... bytes`) and warns when it is under 5 MB.
+
 ## Public address and NAT
 
 Clients must be able to reach the address Glass advertises. At startup Glass

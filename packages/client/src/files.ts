@@ -1,7 +1,7 @@
 // Download URLs and uploads. See GlassClient (index.ts) for the public API.
 
 import type { ClientCore } from "./core";
-import { sessionIdFromSignalingUrl } from "./internal";
+import { errorDetail, sessionIdFromSignalingUrl } from "./internal";
 
 // See GlassClient.downloadUrl.
 export function downloadUrl(c: ClientCore, guid: string): string {
@@ -34,7 +34,6 @@ export async function uploadFiles(c: ClientCore, files: FileList | File[]): Prom
 
   const res = await fetch(url, { method: "POST", body: form });
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`upload failed (${res.status}): ${text || res.statusText}`);
+    throw new Error(`upload failed (${res.status}): ${await errorDetail(res)}`);
   }
 }

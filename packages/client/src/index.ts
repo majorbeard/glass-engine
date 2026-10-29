@@ -15,7 +15,7 @@
 
 import { Emitter } from "./emitter.js";
 import { ClientCore, type Emit } from "./core";
-import { authHeaders } from "./internal";
+import { authHeaders, errorDetail } from "./internal";
 import * as lifecycle from "./lifecycle";
 import * as transport from "./transport";
 import * as inputs from "./input";
@@ -366,14 +366,9 @@ export async function redeemGlassTicket(
 // Reads a session-creating response, failing with the runtime's reason.
 async function readSession(res: Response, what: string): Promise<GlassSession> {
   if (!res.ok) {
-    let detail = "";
-    try {
-      detail = (await res.json()).error;
-    } catch {
-      // ignore parse failure, fall back to status text
-    }
+    const detail = await errorDetail(res);
     throw new Error(
-      `Failed to ${what} (${res.status}): ${detail || res.statusText}`
+      `Failed to ${what} (${res.status}): ${detail}`
     );
   }
   const session: GlassSession = await res.json();
@@ -439,14 +434,9 @@ export async function mintConnectionGrant(
     body: JSON.stringify(capabilities),
   });
   if (!res.ok) {
-    let detail = "";
-    try {
-      detail = (await res.json()).error;
-    } catch {
-      // ignore parse failure, fall back to status text
-    }
+    const detail = await errorDetail(res);
     throw new Error(
-      `Failed to mint connection grant (${res.status}): ${detail || res.statusText}`
+      `Failed to mint connection grant (${res.status}): ${detail}`
     );
   }
   return res.json();
