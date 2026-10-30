@@ -200,7 +200,10 @@ the old one can't be resumed.
 - Input and state messages travel on a WebRTC DataChannel; video never does.
 - Each viewer gets its own bandwidth estimate (Google Congestion Control), and
   lost packets are retransmitted. A hosted browser adapts its encoding to the
-  viewers' bandwidth. Relay streams are forwarded as the producer sent them.
+  viewers' bandwidth: when a viewer's path can't carry what's captured,
+  frames are dropped before they're encoded, never after, so every encoded
+  frame is sent to the viewer. Relay streams are forwarded as the producer sent
+  them.
 
 The wire-level detail is in [protocol.md](protocol.md), and the path media takes
 through the engine is in [architecture.md](architecture.md).
