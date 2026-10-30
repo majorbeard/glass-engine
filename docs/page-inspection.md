@@ -72,7 +72,7 @@ streamed picture and as input.
 | `prune` | Default: only what a person would perceive or use (controls, landmarks, headings, text). `none`: every node, ignored ones marked `"ignored": true`. |
 | `values` | `true`: form fields' current values. Off by default. |
 | `root` | A ref: only that subtree. |
-| `maxNodes` | 1 to 5000, default 1000. A snapshot cut short says so in `truncated` (`maxNodes`, or `time` past its 5 s budget). |
+| `maxNodes` | 1 to 5000, default 1000. A snapshot cut short says so in `truncated` (`maxNodes`, or `time` past its 5 s budget). A cut keeps the start of the document: every node returned comes with its ancestors. |
 
 **What a snapshot never contains:**
 
@@ -258,6 +258,9 @@ navigate the session, Glass replaces the page without asking it.
 - Hosted-browser sessions only; relay and call sessions have no page.
 - A snapshot of a very large page costs up to a few hundred milliseconds (a
   long encyclopedia article: about 0.5 s for 865 nodes).
+- In the `viewport` scope, nodes far off screen are skipped before they count
+  towards `maxNodes`, so what lies far down a long page doesn't cut a
+  viewport snapshot short. A snapshot from a `root` ref doesn't skip them.
 - Clickable elements with no link, button or role (a card with only a script
   click handler) are not kept as their own nodes by the default pruning; their
   text and images are. `prune=none` returns them.
