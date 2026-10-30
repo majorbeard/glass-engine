@@ -109,6 +109,31 @@ which accept the per-session `?token=` from the URLs Glass returns, and
   a client that asks for AV1 checks first (Safari decodes AV1 only on
   devices with AV1 hardware).
 
+### Session statistics
+
+`GET /v1/sessions/{id}/stats/stream` sends one Server-Sent Event every 2 s,
+`data:` and a JSON object of running totals since the session started. The
+frame fields:
+
+| Field | Meaning |
+|---|---|
+| `framesCaptured` | frames the capture delivered |
+| `framesEmitted` | captured frames that carried a picture and went on toward the encoder; the drops below and the encoder's own skips come after this count |
+| `framesDroppedCongestion` | captured frames not encoded because a viewer's path could not carry them: the sum of the three below |
+| `framesDroppedForWindow` | dropped while more data was in flight than the path's congestion window allows |
+| `framesDroppedByDropper` | dropped to hold an encoder that runs over its target bitrate to it |
+| `framesPausedForQueue` | held back while a viewer's send queue would take over 2 s to leave; the newest is encoded once it drains |
+| `framesDroppedPacing` | always 0, kept for readers that sum it |
+| `encodedBytes`, `keyframesEncoded` | the encoder's whole output; every encoded frame is sent |
+| `targetBitrateBps` | the congestion controller's send-rate target, the lowest across the session's viewers; 0 with no estimate |
+
+Frames are dropped before they are encoded, never after, so every encoded
+frame is sent to the viewers and a drop never needs a keyframe to recover. The
+encoder can also skip frames on its own to keep to its bitrate; those are not
+counted here. The object carries more fields (transport, input latency,
+memory, `encoderBackend`, `audio` when audio is on); new fields are
+additions, not errors.
+
 ### Errors
 
 Every error an HTTP route returns, a refused WebSocket handshake included,
