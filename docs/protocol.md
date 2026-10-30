@@ -339,7 +339,7 @@ included. All are optional. `@glass/client` sends the first two by itself:
 
 It sends the other three only when its diagnostic options are on:
 
-- `client_stats_report`: the viewer's frame and packet counters, at the
+- `client_stats_report`: the viewer's frame, packet and freeze counters, at the
   trace-report interval;
 - `pixel_trace_sample` (`samples: [{rtpTimestamp, paintedAtMs}]`): when
   frames reached the screen; the engine ignores it unless its own
