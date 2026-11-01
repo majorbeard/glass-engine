@@ -121,6 +121,10 @@ export async function collectAndSendTraceReport(c: ClientCore): Promise<void> {
         ? candidatePair.currentRoundTripTime * 1000
         : null,
     bytesReceived: candidatePair?.bytesReceived ?? null,
+    // The viewer's own freeze count and time frozen, as the browser judges
+    // them (a gap longer than the recent frame rate explains).
+    freezeCount: inboundVideo?.freezeCount ?? null,
+    totalFreezesDuration: inboundVideo?.totalFreezesDuration ?? null,
   });
 }
 

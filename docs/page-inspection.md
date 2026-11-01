@@ -72,7 +72,7 @@ streamed picture and as input.
 | `prune` | Default: only what a person would perceive or use (controls, landmarks, headings, text). `none`: every node, ignored ones marked `"ignored": true`. |
 | `values` | `true`: form fields' current values. Off by default. |
 | `root` | A ref: only that subtree. |
-| `maxNodes` | 1 to 5000, default 1000. A snapshot cut short says so in `truncated` (`maxNodes`, or `time` past its 5 s budget). A cut keeps the start of the document: every node returned comes with its ancestors. |
+| `maxNodes` | 1 to 5000, default 1000. A snapshot cut short says so in `truncated` (`maxNodes`, or `time` past its 5 s budget). A cut keeps the start of the document: every node returned comes with its ancestors. In the `viewport` scope only nodes on or near the screen count towards it, so a long page's screen is not cut short by what lies below it. |
 
 **What a snapshot never contains:**
 

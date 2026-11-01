@@ -15,6 +15,7 @@ judge it and repeat it. Where a result has a limit, the limit is next to it.
 | GPU encoding | eight light sessions at **19% of the CPU quota instead of 31.5%** (NVENC instead of software H.264) | RunPod A40 |
 | A click to the picture showing it | **159 to 188 ms** at the median from a 4-vCPU cloud machine to a PC on home 4G (95th percentile 188 to 245 ms), within about 30 ms of Chrome's own WebRTC sender | AWS c6g.xlarge |
 | Sound against picture | phone on cellular: every tone within **-61 to +30 ms** of its picture (median -22 ms) | AWS c6g.xlarge |
+| Long, lossy paths | a 200 ms round trip with 2% loss: the picture frozen **1 to 3 s in about 50 s of watching, where v0.1.102 froze about 20 s**; no delay added on a clean link | a desktop PC, the link emulated |
 | Start | container healthy **46 s** after a first start that downloads Chrome; **7 s** with the cache volume | AWS c6g.xlarge |
 
 ## The engine at scale (signaling, sessions, streaming)
@@ -196,6 +197,42 @@ NVENC:
 browser (about 500 MB against 300 on an animated page, proportional set
 size). See [sizing.md](sizing.md).
 
+## Long, lossy paths
+
+A viewer repairs a lost packet by asking for it again, which takes at
+least a round trip. Since v0.1.103 the engine tells the viewer what the
+round trip is, as a browser sending video does, so the viewer's buffer
+waits for the repair instead of freezing. It waits only while packets are
+being lost, up to 200 ms, which is the browser's own limit.
+
+**v0.1.103 against v0.1.102** (2026-11-01, a desktop PC: the engine in
+Docker, the viewer Chrome 152 on the same machine, the link emulated on
+the engine's outgoing path; two runs each, the time the viewer's browser
+counted as frozen from connecting to the end, about 50 s):
+
+| Link | Page | v0.1.102 | v0.1.103 |
+|---|---|---|---|
+| 200 ms round trip, no loss | animation (testufo) | 0.0, 0.0 s | 0.5, 0.0 s |
+| | article (Wikipedia, scrolled) | 0.2, 0.0 s | 0.0, 0.0 s |
+| **200 ms, 2% loss** | animation | 19.5, 20.6 s | **2.7, 1.1 s** |
+| | article | 8.3, 9.7 s | **1.3, 0.7 s** |
+| 400 ms, 5% loss, 20 ms jitter | animation | 17.7, 20.5 s | 15.4, 9.0 s |
+| | article | 14.3, 17.9 s | 11.3, 12.6 s |
+| 300 ms, a 3 s burst of 20% loss | animation | 1.8, 3.0 s | 1.3, 4.6 s |
+| | article | 8.7, 2.5 s | 3.1, 3.4 s |
+
+- **The cost:** on a lossy path the picture runs about 0.2 s further
+  behind, smooth instead of frozen. On a clean path the viewer's buffer
+  held 9 to 32 ms on both versions.
+- **The limit:** at 400 ms and beyond, a repair takes longer than the
+  200 ms the viewer will wait, and the picture still freezes often. A
+  600 ms round trip with 10% loss froze for most of each run on both
+  versions.
+- **The link is emulated**, unlike the rest of this page: delay and loss
+  set on one machine, so the runs can be repeated exactly.
+- **`@glass/client`'s own settings** (no added delay asked for) gave the
+  same result: 0.2 to 3.0 s frozen at 200 ms with 2% loss.
+
 ## Start
 
 v0.1.76, 2026-10-17, the c6g.xlarge above, with the microphone-capable
@@ -213,7 +250,7 @@ browser configured, so both Chrome builds are needed:
   version gives different numbers. The CPU a hosted browser needs is mostly
   Chrome's and depends on the page: size by testing your own pages
   ([sizing.md](sizing.md)).
-- **Viewer links are real ones.** The PC numbers are over a home 4G
+- **Viewer links are real ones**, except under [Long, lossy paths](#long-lossy-paths). The PC numbers are over a home 4G
   connection and the phone's over cellular, not a datacenter network.
 - **Older versions are labelled.** Results from an earlier version stay
   until they are re-measured.

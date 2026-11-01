@@ -48,6 +48,7 @@ page and method are in [docs/performance.md](docs/performance.md).
 | **19% of the CPU instead of 31.5%** | eight sessions encoded on the GPU (NVENC) |
 | **159 to 188 ms** click to picture | cloud machine to a PC on home 4G, median; within about 30 ms of Chrome's own WebRTC sender |
 | **Sound within -61 to +30 ms** of its picture | a phone on cellular |
+| **1 to 3 s frozen in about 50 s of watching, instead of about 20 s** | a 200 ms round trip with 2% loss (emulated), v0.1.103 against v0.1.102 |
 
 ## Status
 
