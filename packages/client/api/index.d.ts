@@ -247,6 +247,7 @@ interface GlassClientOptions {
     iceServers?: RTCIceServer[];
     iceTransportPolicy?: RTCIceTransportPolicy;
     reconnect?: boolean | GlassReconnectOptions;
+    repairWait?: boolean;
     statsIntervalMs?: number;
     deleteSessionOnClose?: boolean;
     sessionBaseUrl?: string;

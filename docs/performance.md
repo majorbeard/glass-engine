@@ -225,13 +225,41 @@ counted as frozen from connecting to the end, about 50 s):
   behind, smooth instead of frozen. On a clean path the viewer's buffer
   held 9 to 32 ms on both versions.
 - **The limit:** at 400 ms and beyond, a repair takes longer than the
-  200 ms the viewer will wait, and the picture still freezes often. A
-  600 ms round trip with 10% loss froze for most of each run on both
-  versions.
+  200 ms the browser will wait on its own, and the picture still freezes
+  often. A 600 ms round trip with 10% loss froze for most of each run on
+  both versions. `@glass/client`'s repair wait (below) covers that case.
 - **The link is emulated**, unlike the rest of this page: delay and loss
   set on one machine, so the runs can be repeated exactly.
 - **`@glass/client`'s own settings** (no added delay asked for) gave the
   same result: 0.2 to 3.0 s frozen at 200 ms with 2% loss.
+
+### Past 200 ms: the repair wait
+
+Once the round trip is over 200 ms and the viewer has asked for a resend
+3 times within a minute, `@glass/client` asks the browser to hold video
+for the round trip plus 30 ms, and lets go after a minute without a
+resend. It never engages on a short or loss-free path. It is on by
+default; `repairWait: false` turns it off
+([client-sdk.md](client-sdk.md#options)).
+
+**With and without it** (2026-11-02, the same desktop PC and emulated
+link, the engine v0.1.103, the viewer Chrome 152; frozen time per run of
+about 50 s, the mean of four runs, three for one cell):
+
+| Link | Page | No added delay | Repair wait |
+|---|---|---|---|
+| 400 ms, 5% loss, 20 ms jitter | animation | 9.6 s | **4.4 s** |
+| | article | 15.1 s | **9.2 s** |
+| 600 ms, 10% loss, 30 ms jitter | animation | 26.3 s | **14.7 s** |
+| | article | 50.1 s | **31.0 s** |
+
+- **The cost:** about 150 to 250 ms more delay at a 400 ms round trip,
+  only while it is engaged.
+- **No change** on a 200 ms round trip, with or without loss: the
+  browser's own wait already covers a repair there.
+- **The limit:** at a 600 ms round trip with 10% loss a resend is often
+  lost too, which costs a second round trip, and the picture still
+  freezes for a third of the run or more.
 
 ## Start
 

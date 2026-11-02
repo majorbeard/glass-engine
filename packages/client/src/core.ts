@@ -173,6 +173,8 @@ export class ClientCore {
   readonly _decodeReadbackEnabled: boolean;
   // @internal See InternalGlassClientOptions.__internalJitterBufferTargetMs.
   readonly jitterBufferTargetMs: number | "native";
+  // See GlassClientOptions.repairWait and repair_wait.ts.
+  readonly repairWait: boolean;
   readonly deleteOnClose: boolean;
   readonly sessionBaseUrl: string;
   readonly apiToken?: string;
@@ -200,6 +202,7 @@ export class ClientCore {
   mouseBatchTimer: ReturnType<typeof setInterval> | null = null;
   statsTimer: ReturnType<typeof setInterval> | null = null;
   traceReportTimer: ReturnType<typeof setInterval> | null = null;
+  repairWaitTimer: ReturnType<typeof setInterval> | null = null;
   // Armed while the peer connection sits in "disconnected"; see
   // scheduleDisconnectedGrace. Tracked via this.timeout()/pendingTimeouts so
   // close() clears it like every other timer.
@@ -236,6 +239,7 @@ export class ClientCore {
       this.maxAttempts = rcOpts.maxAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
       this.delaysMs = rcOpts.delaysMs ?? DEFAULT_RECONNECT_DELAYS_MS;
       this.statsIntervalMs = options.statsIntervalMs ?? 0;
+      this.repairWait = options.repairWait ?? true;
       const internalOpts = options as GlassClientOptions & InternalGlassClientOptions;
       this.traceReportIntervalMs = internalOpts.__internalTraceReportIntervalMs ?? 0;
       this._pixelTraceEnabled = internalOpts.__internalPixelTraceEnabled ?? false;
