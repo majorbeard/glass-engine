@@ -18,7 +18,7 @@ news site, the CPU split was **Chrome 81%, encoder 15%, the Glass engine 4%**.
 | CPU | Varies with the page. A single session on a heavy page can use most of a core for Chrome, plus 0.3–0.8 of a core for the encoder. Static or idle pages use very little: a page that stops painting stops costing CPU. |
 | Memory | About 500 MB a session on an animated page with a display (the full Chrome and its display), about 300 MB with `GLASS_CAPTURE=screencast` (the headless browser). Measured as proportional set size, which counts shared pages once. |
 | Shared memory (`--shm-size`) | About 200 MB. Chrome keeps scratch files there. |
-| Disk | Downloads and uploads are buffered on disk (up to 500 MB per file) and removed when the session ends. |
+| Disk | Downloads and uploads are buffered on disk (up to 500 MB per file) and removed when the session ends. A page's download is canceled while it runs past 500 MB, or when under 512 MB is left where it is written (`/tmp` in the hardened run); a session keeps at most five downloads running or waiting to be saved, and five saved ones, each for 10 minutes. |
 
 - **Start at 4 vCPU** (for example AWS `c6g.xlarge`) for a handful of
   concurrent sessions. At 2 vCPU a single session on a heavy page can starve
