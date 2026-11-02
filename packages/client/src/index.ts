@@ -115,6 +115,13 @@ export interface GlassClientOptions {
   // Reconnection behavior. true (default) uses defaults; false disables it;
   // an object customizes attempts/backoff.
   reconnect?: boolean | GlassReconnectOptions;
+  // On a long, lossy path (a round trip over 200 ms with packets being
+  // resent), let the browser hold video for about one round trip so a
+  // resent packet arrives in time, instead of the picture freezing for a
+  // round trip at every loss. It never engages on a short or loss-free
+  // path, and costs that much delay while engaged. Default true; false
+  // keeps the lowest delay whatever the path.
+  repairWait?: boolean;
   // If > 0, emit a "stats" event this often (ms). Off by default; getStats()
   // is always available for one-shot snapshots regardless.
   statsIntervalMs?: number;

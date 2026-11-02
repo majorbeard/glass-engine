@@ -9,6 +9,7 @@ import * as mic from "./mic";
 import * as statsTrace from "./stats_trace";
 import type { ElementState, GlassDialog, GlassRosterEntry, GlassSlotState, InteractiveElement, NavigationState } from "./types";
 import { EncodedStreamChecker } from "./encoded_stream_check";
+import { startRepairWait } from "./repair_wait";
 
 // Binary DataChannel message types pushed from the engine. Must match
 // docs/protocol.md.
@@ -63,6 +64,11 @@ export function initPeerConnection(c: ClientCore, onConnectedThisAttempt: () => 
     // "native": deliberately does nothing here - see
     // InternalGlassClientOptions.__internalJitterBufferTargetMs's own
     // doc comment for why leaving both hints untouched is the point.
+    // The repair wait raises the video target from 0 only on a long, lossy
+    // path; an internal override of the target turns it off.
+    if (event.track.kind === "video" && c.repairWait && c.jitterBufferTargetMs === 0) {
+      startRepairWait(c, event.receiver);
+    }
     // Video-only: EncodedStreamChecker inspects encoded frame hashes for
     // the video-decode-corruption detection it exists for (see its own
     // doc comment) - meaningless against an Opus receiver. Without this

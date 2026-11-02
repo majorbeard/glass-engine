@@ -5,6 +5,7 @@
 import type { ClientCore } from "./core";
 import * as transport from "./transport";
 import * as mic from "./mic";
+import { stopRepairWait } from "./repair_wait";
 import {
   CLOSE_LINK_EXPIRED,
   CLOSE_LINK_REVOKED,
@@ -315,6 +316,7 @@ export function teardownInternals(c: ClientCore): void {
     clearInterval(c.traceReportTimer);
     c.traceReportTimer = null;
   }
+  stopRepairWait(c);
   c.lastStatsSample = null;
   c.lastJitterSample = null;
   c.lastTraceReportAt = null;

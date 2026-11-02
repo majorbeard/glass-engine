@@ -92,6 +92,7 @@ await client.connect();
 | `iceServers` | Glass's | Your own ICE servers. Absent, the client uses the ones Glass sends on connect: its STUN servers and, with `GLASS_TURN_SECRET` set, a TURN credential for this connection alone. |
 | `iceTransportPolicy` | `"all"` | `"relay"` forces TURN. |
 | `reconnect` | `true` | `false`, or `{ maxAttempts: 8, delaysMs: [1000, 2000, 4000, 8000, 16000] }`. The first retry is immediate. |
+| `repairWait` | `true` | On a long, lossy path (a round trip over 200 ms with packets being resent), let the browser hold video for about one round trip so a resent packet arrives in time, instead of freezing for a round trip at every loss. Never engages on a short or loss-free path; while engaged, the picture runs that much further behind. `false` keeps the lowest delay on every path. See [performance.md](performance.md#long-lossy-paths). |
 | `statsIntervalMs` | off | Emit a `stats` event at this interval. |
 | `deleteSessionOnClose` | `false` | Delete the session when this client disconnects. Needs `sessionBaseUrl` and `apiToken`: development only. |
 
