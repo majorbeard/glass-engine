@@ -46,7 +46,7 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 | Method | Path | Response |
 |---|---|---|
 | `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities, contentHint, codec, linksExpireAt?}`. Optional body fields: `"audioInput": true`; `"contentHint": "detail"` or `"motion"` (anything else is `400`); `"codec": "h264"`, `"vp8"` or `"av1"` (one this host cannot serve is `400` with the reason, never served as another codec); `"inputMode": "floor"` (the default) or `"free"` (anything else is `400`; see [concepts.md](concepts.md#several-people-in-control)); `"inspect": true` allows [page inspection](page-inspection.md) (off by default; `400` for a source that cannot be inspected). `"linkExpiresIn"`: seconds until the session's link stops admitting new connections, `0` for never (see [link expiry](#link-expiry)). The response also carries `inputMode` and `inspect`. `503` at capacity. `429` past [the creation rate limit](#rate-limits). |
-| `POST` | `/v1/tickets` | Redeem a [session ticket](#session-tickets): `{"ticket": "…"}`. Creates one browser session; `201` as `POST /v1/sessions`, plus `watchUrls`. Takes no API token. Exists only when `GLASS_TICKET_SECRET` is set. `429` past [the ticket rate limit](#rate-limits), which every attempt counts toward. |
+| `POST` | `/v1/tickets` | Redeem a [session ticket](#session-tickets): `{"ticket": "…"}`. Creates one browser session; `201` as `POST /v1/sessions`, plus `watchUrls`. Takes no API token. Exists only when `GLASS_TICKET_SECRET` is set. `429` past [the ticket rate limit](#rate-limits), which every attempt counts toward. `503` (`unavailable`) when Glass can't read or write its record of used tickets (see the `jti` claim). |
 | `GET` | `/v1/sessions` | Every running browser session, oldest first: `{"sessions": [...]}`, each as `GET /v1/sessions/{id}` plus `connections` (how many are connected now). Never a link. API token only. |
 | `GET` | `/v1/sessions/{id}` | `{id, state: "pending"\|"active"\|"closed", createdAt, connectedAt?, codec?, inputMode?}`, or `404`. |
 | `DELETE` | `/v1/sessions/{id}` | `204`, or `404`. |
@@ -169,7 +169,7 @@ the code. A body may carry more fields beside these two (`floor_taken`'s
 | `too_large` | 413 | A file, a batch or the session's uploads over their limit. |
 | `rate_limited` | 429 | Too many requests or inputs from this client; see `Retry-After`. |
 | `internal_error` | 500 | A fault in the runtime; the detail is in its log, never in the body. |
-| `at_capacity`, `hard_cap_reached`, `shutting_down`, `unavailable` | 503 | No session slot; no CPU headroom; the runtime is stopping; not available on this session now. |
+| `at_capacity`, `hard_cap_reached`, `shutting_down`, `unavailable` | 503 | No session slot; no hardware headroom (the message names the CPU, memory, the GPU or its encoder); the runtime is stopping; not available on this session now, or tickets unavailable. |
 | `source_failed` | (signaling only) | The session's browser stopped; the session has ended. Sent in the signaling `error` message, never by an HTTP route. |
 
 ### WebSocket close codes
@@ -229,7 +229,7 @@ not); any other algorithm is refused. Claims:
 | Claim | |
 |---|---|
 | `exp` | Required. At most 10 minutes ahead; 30 s of clock skew is allowed. |
-| `jti` | Required, up to 128 bytes. Each ticket is accepted once. |
+| `jti` | Required, up to 128 bytes. Each ticket is accepted once, across restarts: Glass keeps the used ids (hashed) in its cache directory, the `glass-cache` volume of [deployment.md](deployment.md). If that record can't be written, the ticket is refused; if it can't be read at start, tickets are refused for one ticket lifetime (10 minutes and 30 s), after which none redeemed before can still be. |
 | `nbf` | Optional, honoured. |
 | `glass` | Optional: the session's `audioInput`, `contentHint`, `codec`, `inputMode` and `linkExpiresIn`, as for `POST /v1/sessions`, and `watchLinks` (0 to 10). Any other field, `inspect` included, is refused. |
 
@@ -361,7 +361,7 @@ Binary. The first byte is the message type; most carry JSON after it.
 | `0x08` | `ClockProbe` | `{id}` | Reply at once with `clock_probe_reply`. |
 | `0x09` | `ClipboardText` | `{text}` | Answer to `copy_text`. |
 | `0x0A` | `InteractiveElements` | `{elements: [{x, y, width, height}]}` | Phones only: text-field positions. Replaces the previous list. |
-| `0x0B` | `ConsoleMessage` | `{level, text}` | The page's console output. |
+| `0x0B` | `ConsoleMessage` | `{level, text}` | The page's console output: each `text` at most 2 KB (cut with ` [truncated]`), at most 50 lines a second per session (bursts of 100); after lines were dropped, a `warning` line says how many. |
 | `0x0C` | `DownloadReady` | `{filename, guid}` | Fetch `GET …/downloads/{guid}` when the user chooses to. |
 | `0x0D` | `FileChooserOpened` | `{multiple}` | Answer with `POST …/upload` within 60 s. |
 | `0x0E` | `FileChooserClosed` | `{}` | The file picker expired or was replaced. |

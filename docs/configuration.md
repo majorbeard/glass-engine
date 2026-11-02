@@ -20,7 +20,7 @@ change between releases.
 |---|---|---|
 | `GLASS_ADDR` | `:8080` | HTTP listen address. |
 | `GLASS_API_TOKEN` | unset | Bearer token for the HTTP API. Required unless Glass listens on loopback only. Comma-separated to rotate: the current token first, then those being retired; every listed token works. See [deployment.md](deployment.md#authentication). |
-| `GLASS_TICKET_SECRET` | unset | Secret your backend signs [session tickets](protocol.md#session-tickets) with, so a browser can start a session without the API token. Comma-separated to rotate. Unset, tickets are off. |
+| `GLASS_TICKET_SECRET` | unset | Secret your backend signs [session tickets](protocol.md#session-tickets) with, so a browser can start a session without the API token. Comma-separated to rotate. Unset, tickets are off. Give each Glass instance its own secret: an instance remembers only the tickets it redeemed. |
 | `GLASS_CREATE_RATE_PER_MINUTE` | `120` | How many sessions, relay sessions and calls one client may create a minute, in bursts of up to a third more. `0` is no limit. See [protocol.md](protocol.md#rate-limits). |
 | `GLASS_TICKET_RATE_PER_MINUTE` | `10` | How many session tickets one client may redeem, or try to, a minute, in bursts of up to a third more. `0` is no limit. |
 | `GLASS_LINK_TTL_HOURS` | `24` | How long a link Glass returns admits new connections, unless its request sets its own. `0` is never. See [protocol.md](protocol.md#link-expiry). |
@@ -65,8 +65,9 @@ change between releases.
 | `GLASS_WEBRTC_UDP_BATCH_SIZE` | `0` (off) | Packets a socket sends in one system call (`sendmmsg`, Linux). Off by default: measured, it cost a little loss and latency and gained nothing. Turn it on only if you measure a gain. |
 | `GLASS_WEBRTC_UDP_BATCH_INTERVAL_US` | `500` | With batching on, the longest a packet waits for its batch, in microseconds. |
 | `GLASS_WEBRTC_NAT_1TO1_IPS` | discovered | Public address(es) to advertise, comma-separated. By default Glass discovers its public address through STUN at startup. See [deployment.md](deployment.md#public-address-and-nat). |
-| `GLASS_STUN_URLS` | Google public STUN | Comma-separated STUN URLs. |
-| `GLASS_TURN_URLS` | unset | Comma-separated TURN/TURNS URLs. Needs `GLASS_TURN_SECRET`, or both `GLASS_TURN_USERNAME` and `GLASS_TURN_CREDENTIAL`: without a credential no session could connect, so Glass refuses to start and `glass doctor` fails the check. |
+| `GLASS_STUN_URLS` | Google public STUN | Comma-separated STUN URLs (`stun:` or `stuns:`). Glass refuses to start on one it can't parse, and `glass doctor` fails the check. |
+| `GLASS_TURN_URLS` | unset | Comma-separated TURN/TURNS URLs, each `turn:<host>:<port>` or `turns:<host>:<port>`. Glass refuses to start on one it can't parse (a missing `turn:` is the usual slip), and `glass doctor` fails the check. Needs `GLASS_TURN_SECRET`, or both `GLASS_TURN_USERNAME` and `GLASS_TURN_CREDENTIAL`: without a credential no session could connect, so Glass refuses to start and `glass doctor` fails the check. |
+| `GLASS_WEBRTC_ALLOW_PRIVATE_PEERS` | `false` | Accept ICE candidates a client sends at private, loopback or link-local addresses (or mDNS `.local` names). Off, they are dropped, so a link holder can't point Glass's connectivity checks into your network; clients on a private network still connect from the packets they send, and a TURN server on the same private network keeps working. Turn it on only if clients on your private network fail to connect without it. `GLASS_INSECURE_LOCAL_DEV` implies it. |
 | `GLASS_TURN_SECRET` | unset | Secret shared with your TURN server (coturn's `use-auth-secret`). Set, Glass issues every connection its own short-lived TURN credential, for itself and for the client. See [deployment.md](deployment.md#turn). |
 | `GLASS_TURN_CREDENTIAL_TTL_HOURS` | `24` | How long an issued TURN credential lasts. |
 | `GLASS_TURN_USERNAME`, `GLASS_TURN_CREDENTIAL` | unset | A fixed TURN credential, for Glass's own side only: it is never given to clients. Ignored when `GLASS_TURN_SECRET` is set. |
