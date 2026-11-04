@@ -26,9 +26,9 @@ docker run -d --name glass \
   --security-opt no-new-privileges \
   --cap-drop=ALL --cap-add=SYS_CHROOT \
   --read-only \
-  --tmpfs /tmp:rw,exec,nosuid,nodev,size=2g \
-  --tmpfs /home/glass/.config:rw,nosuid,nodev,size=64m \
-  --tmpfs /home/glass/.local:rw,nosuid,nodev,size=64m \
+  --tmpfs /tmp:rw,exec,nosuid,nodev,size=2g,mode=1777 \
+  --tmpfs /home/glass/.config:rw,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700 \
+  --tmpfs /home/glass/.local:rw,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700 \
   --memory=6g --pids-limit=4096 \
   --shm-size=2g \
   -p 127.0.0.1:8080:8080 \
@@ -64,9 +64,9 @@ services:
     cap_add: [SYS_CHROOT]
     read_only: true
     tmpfs:
-      - /tmp:rw,exec,nosuid,nodev,size=2g
-      - /home/glass/.config:rw,nosuid,nodev,size=64m
-      - /home/glass/.local:rw,nosuid,nodev,size=64m
+      - /tmp:rw,exec,nosuid,nodev,size=2g,mode=1777
+      - /home/glass/.config:rw,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700
+      - /home/glass/.local:rw,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700
     mem_limit: 6g
     pids_limit: 4096
     shm_size: "2gb"
@@ -484,7 +484,7 @@ CPU host (arm64, Ubuntu, Docker 29):
 | `--security-opt seccomp=/etc/glass/seccomp.json` | Docker's default seccomp profile plus one rule: `clone` and `unshare`, which Chrome's sandbox needs to give each renderer its own user, pid and network namespaces. Docker's default allows them only with `CAP_SYS_ADMIN`, which this avoids. `glass seccomp-profile` prints it; regenerate it when you update the image. |
 | `--cap-drop=ALL --cap-add=SYS_CHROOT` | No Linux capabilities but the one the sandbox needs. |
 | `--security-opt no-new-privileges` | Nothing in the container can gain privileges (setuid binaries included). |
-| `--read-only` and the three `--tmpfs` | The image can't be changed by anything running in it. `/tmp` must allow `exec`: Glass runs a small helper from there. Chrome's downloads stay in the `glass-cache` volume. |
+| `--read-only` and the three `--tmpfs` | The image can't be changed by anything running in it. `/tmp` must allow `exec`: Glass runs a small helper from there. Each `--tmpfs` states its owner and mode: without them, Docker remounts the folders root-owned when the same container restarts (after a crash, a Docker restart or a reboot), and Glass can't start until the container is recreated. 1000 is the image's `glass` user. Chrome's downloads stay in the `glass-cache` volume. |
 | `--memory`, `--pids-limit` | A runaway page can't take the host down. Size `--memory` to the host: a session with a heavy page costs a few hundred MB. |
 
 Don't add `--security-opt apparmor=unconfined`: on Ubuntu hosts that
