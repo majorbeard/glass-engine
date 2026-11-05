@@ -53,6 +53,17 @@ interface GlassDialog {
     defaultPrompt?: string;
     inPicture: boolean;
 }
+interface GlassPlaybackState {
+    playing: boolean;
+    positionMs: number;
+    durationMs: number;
+    ended: boolean;
+}
+interface GlassTimelineEvent {
+    t: number;
+    type: string;
+    [field: string]: unknown;
+}
 interface GlassCreateSessionOptions {
     audioInput?: boolean;
     contentHint?: GlassContentHint;
@@ -199,6 +210,8 @@ type GlassProducerEvents = {
     /** The session this producer sends into. Fires again if a drop led to a new session. */
     session: [session: ProducerSession];
     stats: [stats: ProducerStats];
+    /** Whether the session is being recorded: on connect, then on every change. */
+    recording: [active: boolean];
 };
 /**
  * GlassProducer sends a MediaStream into one slot of a Glass relay session and keeps it there across
@@ -276,6 +289,9 @@ type GlassClientEventMap = {
     ];
     inputRequested: [connectionId: string];
     floorChanged: [connectionId: string | null, isSelf: boolean];
+    recording: [active: boolean];
+    playback: [state: GlassPlaybackState];
+    timeline: [event: GlassTimelineEvent];
     dialog: [dialog: GlassDialog];
     rosterChanged: [connections: GlassRosterEntry[]];
     slotStateChanged: [slots: Record<string, GlassSlotState>];
@@ -327,6 +343,9 @@ declare class GlassClient extends Emitter<GlassClientEventMap> {
     connectionId(): string | null;
     producesInput(): boolean;
     floorHolder(): string | null;
+    playbackState(): GlassPlaybackState | null;
+    controlPlayback(action: "play" | "pause" | "seek", positionMs?: number): void;
+    recording(): boolean;
     dialog(): GlassDialog | null;
     answerDialog(accept: boolean, text?: string): void;
     isOwner(): boolean;
@@ -375,6 +394,7 @@ export {
     type GlassInputDrop,
     type GlassInputDropCode,
     type GlassInputMode,
+    type GlassPlaybackState,
     GlassProducer,
     type GlassProducerEvents,
     type GlassProducerOptions,
@@ -383,6 +403,7 @@ export {
     type GlassSession,
     type GlassSlotState,
     type GlassStats,
+    type GlassTimelineEvent,
     type GlassVideoCodec,
     type InputLatencySample,
     type InputLatencyStats,

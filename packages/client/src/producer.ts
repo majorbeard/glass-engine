@@ -86,6 +86,8 @@ export type GlassProducerEvents = {
   /** The session this producer sends into. Fires again if a drop led to a new session. */
   session: [session: ProducerSession];
   stats: [stats: ProducerStats];
+  /** Whether the session is being recorded: on connect, then on every change. */
+  recording: [active: boolean];
 };
 
 /** Deadline for POST /v1/relay-sessions: a request made during an outage must not stall the retry loop. */
@@ -445,7 +447,7 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
       });
 
       socket.addEventListener("message", (event) => {
-        let msg: { type: string; sdp?: string; candidate?: RTCIceCandidateInit; code?: string; message?: string; iceServers?: RTCIceServer[] };
+        let msg: { type: string; sdp?: string; candidate?: RTCIceCandidateInit; code?: string; message?: string; iceServers?: RTCIceServer[]; active?: boolean };
         try {
           msg = JSON.parse(event.data);
         } catch {
@@ -457,6 +459,8 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
           void pc.setRemoteDescription({ type: "answer", sdp: withStartBitrate(msg.sdp, this.startBitrateKbps) });
         } else if (msg.type === "ice-candidate" && msg.candidate) {
           void pc.addIceCandidate(msg.candidate);
+        } else if (msg.type === "recording") {
+          this.emit("recording", msg.active === true);
         } else if (msg.type === "error") {
           // Retrying can't fix codec_mismatch; it can fix producer_not_connected and the rest.
           const detail = `${msg.code ?? "error"}${msg.message ? `: ${msg.message}` : ""}`;

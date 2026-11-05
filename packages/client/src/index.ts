@@ -38,6 +38,8 @@ import type {
   GlassVideoCodec,
   GlassInputMode,
   GlassDialog,
+  GlassPlaybackState,
+  GlassTimelineEvent,
   GlassSession,
   GlassStats,
   InteractiveElement,
@@ -74,6 +76,8 @@ export type {
   GlassVideoCodec,
   GlassInputMode,
   GlassDialog,
+  GlassPlaybackState,
+  GlassTimelineEvent,
   GlassSession,
   GlassStats,
   InteractiveElement,
@@ -232,6 +236,16 @@ export type GlassClientEventMap = {
   // someone else takes the page or the controller leaves. floorHolder()
   // already reflects it.
   floorChanged: [connectionId: string | null, isSelf: boolean];
+  // Whether the session is being recorded. Fires on connect with the
+  // current state, and on every change. Recording starts only when the
+  // operator asks for it; every connection is told. recording() already
+  // reflects it.
+  recording: [active: boolean];
+  // A playback session's state: on connect, on every change, and once a
+  // second while it plays. playbackState() already reflects it.
+  playback: [state: GlassPlaybackState];
+  // A playback session passed one event of its recording's timeline.
+  timeline: [event: GlassTimelineEvent];
   // The page's JavaScript dialog opened (dialog.open) or closed, by any
   // answer. Fires on connect too when one is already open. See GlassDialog
   // for inPicture; answer it with answerDialog(). dialog() already reflects
@@ -591,6 +605,24 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
   // or null when no one has it (see the "floorChanged" event).
   floorHolder(): string | null {
     return this.core._floorHolder;
+  }
+
+  // A playback session's state, or null for any other session (see the
+  // "playback" event).
+  playbackState(): GlassPlaybackState | null {
+    return this.core._playback;
+  }
+
+  // Plays, pauses or seeks a playback session; a seek lands on the
+  // recording's keyframe at or before positionMs. Needs a connection that
+  // may give input (the session's own link, or one granted control).
+  controlPlayback(action: "play" | "pause" | "seek", positionMs?: number): void {
+    return inputs.controlPlayback(this.core, action, positionMs);
+  }
+
+  // Whether the session is being recorded (see the "recording" event).
+  recording(): boolean {
+    return this.core._recording;
   }
 
   // The page's open JavaScript dialog, or null (see the "dialog" event).

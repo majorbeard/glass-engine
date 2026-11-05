@@ -197,6 +197,18 @@ every 2 s per code and event type. See
 
 The feature behind each is described in [sources/browser.md](sources/browser.md).
 
+### Recording and playback
+
+See [recording.md](recording.md). Starting a recording takes the API token, so
+it belongs on your backend; the client only hears about it.
+
+| Method / event | |
+|---|---|
+| `recording()`, `recording(active)` event | Whether the session is being recorded: on connect, then on every change. `GlassProducer` has the event too. |
+| `playbackState()`, `playback(state)` event | A playback session's `{playing, positionMs, durationMs, ended}`, or `null` on any other session. |
+| `controlPlayback(action, positionMs?)` | `"play"`, `"pause"` or `"seek"`, from a connection that may control. |
+| `timeline(event)` event | The recording's timeline events, `{t, type, ...}`, as playback passes them. |
+
 ### Relay sessions
 
 | Method / event | |
@@ -267,6 +279,8 @@ A reload rejoins the tab's own session (see
 `?contentHint=motion` (or `VITE_GLASS_CONTENT_HINT`) creates its session with
 that hint, and `?codec=h264`, `vp8` or `av1` (or `VITE_GLASS_CODEC`) with
 that codec; a reload keeps the session's codec, so open a new tab to switch.
+A recorded session shows a "Recording" mark, and a playback session a bar with
+play, pause and seek (attach to it as to any existing session).
 `?inputMode=free` (or `VITE_GLASS_INPUT_MODE`) creates its session in input
 mode `free`. While another viewer has the page, the header shows "Another
 viewer is in control", and a dropped click or key says so.

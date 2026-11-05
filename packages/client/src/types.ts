@@ -135,6 +135,24 @@ export interface GlassDialog {
   inPicture: boolean;
 }
 
+// Where a playback session stands: playing or paused, the position and the
+// recording's length in milliseconds, and whether it reached the end.
+export interface GlassPlaybackState {
+  playing: boolean;
+  positionMs: number;
+  durationMs: number;
+  ended: boolean;
+}
+
+// One event of a recording's timeline, as a playback session passes it:
+// t is its time in milliseconds, type its kind ("navigation", "input",
+// "join", ...). It holds IDs, origins, kinds and numbers only.
+export interface GlassTimelineEvent {
+  t: number;
+  type: string;
+  [field: string]: unknown;
+}
+
 // Options for createGlassSession. All are optional.
 export interface GlassCreateSessionOptions {
   // Requests the mic-capable browser pool. See createGlassSession.

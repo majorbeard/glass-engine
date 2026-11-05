@@ -227,6 +227,7 @@ What is being built next. None of it exists yet, and there are no dates.
 | [Page inspection](docs/page-inspection.md) | Integrators | Reading a hosted page's structure, acting on it with real input, watching its events |
 | [Relay producers](docs/sources/producers.md) | Integrators | The producer contract, stream slots, `GlassProducer` |
 | [Calls](docs/sources/calls.md) | Integrators | Two-party calling |
+| [Recording and playback](docs/recording.md) | Everyone | Keeping a session's stream, playing it back, its timeline |
 | [Client SDK](docs/client-sdk.md) | Integrators | `GlassClient`, `GlassProducer`, the viewer layer |
 | [Protocol](docs/protocol.md) | Integrators | HTTP API, signaling and DataChannel messages |
 | [Architecture](docs/architecture.md) | Everyone | How media and input move through the engine |

@@ -186,6 +186,12 @@ A producer should reconnect on its own. `GlassProducer` does this:
 6. Retry at once, without waiting out the backoff, when the app returns to the
    foreground or the network comes back.
 
+## Recording
+
+A relay session can be recorded: its main slot's video and the audio, whether or
+not anyone is watching. `GlassProducer` fires `recording` so your app can show
+it. See [recording.md](../recording.md).
+
 ## Viewers
 
 Viewers use `createGlassClient` with the relay session's `signalingUrl` (or a

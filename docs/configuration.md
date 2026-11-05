@@ -89,6 +89,19 @@ change between releases.
 | `GLASS_MIC_POOL_SIZE` | `1` | Most microphone-capable browsers. |
 | `GLASS_MIC_POOL_WARM_FLOOR` | `0` | Microphone-capable browsers kept ready. |
 
+## Recording
+
+Recording is off unless `GLASS_RECORDING_DIR` is set, and it never starts by
+itself. See [recording.md](recording.md).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GLASS_RECORDING_DIR` | unset | Folder recordings are kept in; in Docker, a mounted volume the image's `glass` user can write. Unset, recording is off. |
+| `GLASS_RECORDING_MAX_MB` | `2048` | A recording stops at this size. `0` is no limit. |
+| `GLASS_RECORDING_MAX_MINUTES` | `120` | A recording stops after this long. `0` is no limit. |
+| `GLASS_RECORDING_MAX_ACTIVE` | `4` | How many recordings may run at once. `0` is no limit. |
+| `GLASS_RECORDING_KEYFRAME_INTERVAL_MS` | `10000` | The shortest time between keyframes while a session records; longer on a slow link. |
+
 ## Encoding
 
 | Variable | Default | Purpose |

@@ -7,7 +7,7 @@ import * as lifecycle from "./lifecycle";
 import * as handoff from "./handoff";
 import * as mic from "./mic";
 import * as statsTrace from "./stats_trace";
-import type { ElementState, GlassDialog, GlassRosterEntry, GlassSlotState, InteractiveElement, NavigationState } from "./types";
+import type { ElementState, GlassDialog, GlassRosterEntry, GlassSlotState, GlassTimelineEvent, InteractiveElement, NavigationState } from "./types";
 import { EncodedStreamChecker } from "./encoded_stream_check";
 import { startRepairWait } from "./repair_wait";
 
@@ -385,6 +385,24 @@ export async function handleSignal(c: ClientCore, signal: any): Promise<void> {
         c.emit("floorChanged", holder, holder !== null && holder === c._connectionId);
         break;
       }
+      case "recording":
+        c._recording = signal.active === true;
+        c.emit("recording", c._recording);
+        break;
+      case "playback":
+        c._playback = {
+          playing: signal.playing === true,
+          positionMs: Number(signal.positionMs) || 0,
+          durationMs: Number(signal.durationMs) || 0,
+          ended: signal.ended === true,
+        };
+        c.emit("playback", c._playback);
+        break;
+      case "timeline":
+        if (signal.event && typeof signal.event === "object") {
+          c.emit("timeline", signal.event as GlassTimelineEvent);
+        }
+        break;
       case "new_tab_request":
         if (typeof signal.url === "string") {
           c.emit("newTabRequested", signal.url);
