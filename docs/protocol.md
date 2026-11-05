@@ -45,7 +45,7 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 
 | Method | Path | Response |
 |---|---|---|
-| `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities, contentHint, codec, linksExpireAt?}`. Optional body fields: `"audioInput": true`; `"contentHint": "detail"` or `"motion"` (anything else is `400`); `"codec": "h264"`, `"vp8"` or `"av1"` (one this host cannot serve is `400` with the reason, never served as another codec); `"inputMode": "floor"` (the default) or `"free"` (anything else is `400`; see [concepts.md](concepts.md#several-people-in-control)); `"inspect": true` allows [page inspection](page-inspection.md) (off by default; `400` for a source that cannot be inspected). `"linkExpiresIn"`: seconds until the session's link stops admitting new connections, `0` for never (see [link expiry](#link-expiry)). The response also carries `inputMode` and `inspect`. `503` at capacity. `429` past [the creation rate limit](#rate-limits). |
+| `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities, contentHint, codec, linksExpireAt?}`. Optional body fields: `"audioInput": true`; `"contentHint": "detail"` or `"motion"` (anything else is `400`); `"codec": "h264"`, `"vp8"` or `"av1"` (one this host cannot serve is `400` with the reason, never served as another codec); `"inputMode": "floor"` (the default) or `"free"` (anything else is `400`; see [concepts.md](concepts.md#several-people-in-control)); `"inspect": true` allows [page inspection](page-inspection.md) (off by default; `400` for a source that cannot be inspected). `"record": true` starts [recording](#recordings) the session as it is created, and the response then carries `recording`; `409` (`recording_off`) when recording is off, and if it can't start, the session is closed and the error returned. Tickets can't set it. `"linkExpiresIn"`: seconds until the session's link stops admitting new connections, `0` for never (see [link expiry](#link-expiry)). The response also carries `inputMode` and `inspect`. `503` at capacity. `429` past [the creation rate limit](#rate-limits). |
 | `POST` | `/v1/tickets` | Redeem a [session ticket](#session-tickets): `{"ticket": "…"}`. Creates one browser session; `201` as `POST /v1/sessions`, plus `watchUrls`. Takes no API token. Exists only when `GLASS_TICKET_SECRET` is set. `429` past [the ticket rate limit](#rate-limits), which every attempt counts toward. `503` (`unavailable`) when Glass can't read or write its record of used tickets (see the `jti` claim). |
 | `GET` | `/v1/sessions` | Every running browser session, oldest first: `{"sessions": [...]}`, each as `GET /v1/sessions/{id}` plus `connections` (how many are connected now). Never a link. API token only. |
 | `GET` | `/v1/sessions/{id}` | `{id, state: "pending"\|"active"\|"closed", createdAt, connectedAt?, codec?, inputMode?}`, or `404`. |
@@ -54,6 +54,7 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 | `POST` | `/v1/sessions/{id}/connections` | Mint a grant. Body: any of `consumesMedia`, `producesMedia`, `producesInput` (booleans), and `expiresIn` (seconds, `0` for never; see [link expiry](#link-expiry)). `201 {signalingUrl, connectionCapabilities, linkId, expiresAt?}`; `linkId` names the link for revoking it. `consumesInput` is reserved: `400`. |
 | `DELETE` | `/v1/sessions/{id}/connections/{linkId}` | Revoke one link: it admits nothing again, a reconnect included, and every connection that joined with it is closed with `4403`. The session goes on for everyone else. `204` (also when already revoked); `404` for an unknown session or link; `400` for the session's own link (close the session instead). API token only. `linkId` is the one the link was minted with, or the first 16 hex digits of the SHA-256 of the link's `token` (`glass session revoke <URL>` works it out). |
 | `POST` | `/v1/sessions/{id}/input` | Server-side input: `{"type", "data"}` as in the DataChannel input table. Not subject to the session's input mode, unless `"floor": true`: then it takes the page as one more controller, waiting up to `"wait"` ms (default 2000, at most 10000) for a person to pause, and is `409` (`floor_taken`, with `holder`) if they don't; keys and buttons it holds are released after 5 s without input from it; not for `set_viewport`. `202`; `400` for an unknown or invalid event, and `400` (`navigation_not_allowed`) for a `navigate` to a URL the navigation rules refuse (a scheme other than `http` or `https`, loopback, a private or link-local address), answered before anything runs; `429` when rate limited. |
+| `POST` | `/v1/sessions/{id}/recording` | Start or stop recording the session: `{"action":"start"}` (`201`) or `{"action":"stop"}` (`200`), each answering the recording (see [Recordings](#recordings)). API token only. |
 | `GET` | `/v1/sessions/{id}/page/snapshot` | The page's accessibility tree: `scope`, `prune`, `values`, `root`, `maxNodes`. See [page-inspection.md](page-inspection.md); every `/page` route takes the API token only, on a session created with `"inspect": true` (else `403`, `inspect_off`); a stale ref is `409` (`stale_ref`). |
 | `POST` | `/v1/sessions/{id}/page/query` | Nodes matching `{role?, name?, exact?, scope?, values?, maxResults?}`. |
 | `GET` | `/v1/sessions/{id}/page/at?x&y` | The node at a viewport point and its ancestors. |
@@ -79,6 +80,7 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 | `POST` | `/v1/relay-sessions/{id}/connections` | Mint a grant; the response has `produceUrl` only when `producesMedia` was requested. `expiresIn` as for browser sessions. A non-empty `slots` field is reserved: `400`. |
 | `DELETE` | `/v1/relay-sessions/{id}/connections/{linkId}` | Revoke one link, as for browser sessions: the `signalingUrl` (a watch link), a producer's link, or one minted later. |
 | `GET` | `/v1/relay-sessions/{id}/stats/stream` | Server-Sent Events. The API token only. |
+| `POST` | `/v1/relay-sessions/{id}/recording` | As for browser sessions: records the main slot's video and the audio, as sent. `POST /v1/relay-sessions` takes `"record": true` too. |
 
 ### Calls
 
@@ -90,13 +92,69 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 | `DELETE` | `/v1/calls/{id}` | As for browser sessions. |
 | `GET` | `/v1/calls/{id}/peers/{a\|b}/signaling` | Peer WebSocket. The token must belong to that peer (`403` otherwise); the API token is not a peer. |
 
+### Recordings
+
+A recording keeps a session's stream as it was sent to its viewers: see
+[recording.md](recording.md). Recording is off unless `GLASS_RECORDING_DIR` is
+set. All routes take the API token only.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/recordings` | Every recording, newest first: `{"recordings":[...]}`. |
+| `GET` | `/v1/recordings/{id}` | One recording: `{"id","sessionId","sessionKind","videoCodec","audio","file","timeline","startedAt","stoppedAt"?,"stopReason"?,"bytes","durationMs","gaps","active"}`. `stopReason` is `api`, `session_closed`, `max_size`, `max_duration`, `disk_low`, `write_error`, `shutdown` or `interrupted`; `gaps` counts the times the disk fell behind and video was dropped until the next keyframe. |
+| `GET` | `/v1/recordings/{id}/file` | The media, `video/webm` or `video/x-matroska`, with range requests. `409` (`recording_active`) while it runs. |
+| `GET` | `/v1/recordings/{id}/timeline` | The recording's timeline (below), `application/x-ndjson`, while it runs too: it only grows. |
+| `DELETE` | `/v1/recordings/{id}` | Delete the file, its timeline and its record. `204`; `409` while it runs. |
+| `POST` | `/v1/recordings/{id}/play` | Play a finished recording back as a session (below): `201 {id, signalingUrl, protocolVersion, sourceType: "playback", capabilities, codec, durationMs, recording, linksExpireAt?}`. Optional body `{"linkExpiresIn"}`. `409` (`recording_active`) while it runs. Rate limited as session creation. |
+
+**Playback sessions.** A viewer joins a playback session as any session:
+its `signalingUrl` watches and controls it (`producesInput`); a link
+minted with `consumesMedia` alone only watches. It plays from the start
+once a viewer's media is up, and is told its state (`playback` signaling
+message) and the recording's timeline events as it passes them
+(`timeline`). Nothing is re-encoded: a seek lands on the keyframe at or
+before its target, the bitrate is what was recorded, and when a viewer
+asks for a keyframe (a viewer joining, or one that lost packets) every
+viewer goes back to the last one, at most once in 3 s. With no viewer
+left it waits.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/playback-sessions` | Every playback session, as `GET /v1/sessions`. |
+| `GET` / `DELETE` | `/v1/playback-sessions/{id}` | As for browser sessions. |
+| `GET` | `/v1/playback-sessions/{id}/signaling` | Viewer WebSocket; the API token, the session's own link or a minted link. |
+| `POST` | `/v1/playback-sessions/{id}/connections` | Mint a link (`consumesMedia`, and `producesInput` for control). |
+| `DELETE` | `/v1/playback-sessions/{id}/connections/{linkId}` | Revoke a link. |
+| `POST` | `/v1/playback-sessions/{id}/control` | `{"action": "play" \| "pause" \| "seek", "positionMs"?}`. `202`; `400` for an unknown action or a position past the end. API token only. |
+
+**The timeline** is one JSON object a line, `{"t", "type", ...}`, `t` in
+milliseconds on the media's clock (0 is the first picture; what happened
+before it is at 0), in order. It holds what the logs may hold: IDs,
+origins, kinds, positions, sizes, counts. Never typed or pasted text, a
+key's value, a URL past its origin, or a dialog's message.
+
+| `type` | Fields |
+|---|---|
+| `start` | `sessionKind`, `videoCodec`, `audio` |
+| `stop` | `reason` (as `stopReason`) |
+| `join`, `leave` | `connectionId`, `producer`; `join`: `caps`, `resumed`; `leave`: `reason` (`left`, `dropped`, `revoked`) |
+| `input` | `connectionId` (`api` for the API's own), `kind`: `move` (at most one a connection every 50 ms), `button_down`, `button_up`, `scroll`, `key_down`, `key_up`, `touch_start`, `touch_move`, `touch_end`, `touch_cancel`, `navigate` (with `origin`), `back`, `forward`, `refresh`, `viewport`, `paste`, `copy`, `dialog_answer`, `other`; and any of `x`, `y`, `deltaX`, `deltaY`, `button`, `width`, `height` the event had |
+| `floor` | `connectionId`, or null when no one has the page |
+| `navigation` | `origin`, `count` (browser sessions) |
+| `load` | `loads` |
+| `dialog` | `open`; when it opens, `dialogType` (`alert`, `confirm`, `prompt`, `beforeunload`) |
+| `popup` | `count` |
+| `size` | `width`, `height`: the picture's size, from each keyframe that changes it |
+| `gap` | `gaps`: the disk fell behind and video was dropped up to here |
+| `events_dropped` | `count`: events past 512 held before the first picture |
+
 ### Session-creation fields
 
 - `capabilities`: what this session's source can do: `video`, `navigation`,
   `viewport`, `clipboard`, `pauseResume`, `mobileEmulation`, and
   `inputActions` (the exact input `type`s the source accepts). Unknown keys are
   additions, not errors.
-- `sourceType`: `"browser"`, `"relay"` or `"call"`.
+- `sourceType`: `"browser"`, `"relay"`, `"call"` or `"playback"`.
 - `videoCodec` (relay, call): `"h264"` or `"vp8"`, the host's default
   codec. Producers and call peers must send it.
 - `contentHint` (browser): the hint in effect, `"detail"` or `"motion"`:
@@ -166,9 +224,14 @@ the code. A body may carry more fields beside these two (`floor_taken`'s
 | `no_page`, `stale_ref`, `no_dialog`, `dialog_open` | 409 | Page routes: no page; a node reference from an earlier snapshot; no dialog open; a dialog blocks the page. |
 | `floor_taken` | 409 | Another connection has the page (input mode `floor`); the body also carries `holder`. |
 | `no_file_chooser` | 409 | Files uploaded when no file chooser is waiting for them. |
+| `recording_off` | 409 | A recording route, or `"record": true`, with no `GLASS_RECORDING_DIR` set. |
+| `already_recording`, `not_recording` | 409 | Start on a session already recording; stop on one that is not. |
+| `recording_active` | 409 | A recording's file fetched or deleted while it still runs. |
 | `too_large` | 413 | A file, a batch or the session's uploads over their limit. |
 | `rate_limited` | 429 | Too many requests or inputs from this client; see `Retry-After`. |
 | `internal_error` | 500 | A fault in the runtime; the detail is in its log, never in the body. |
+| `recording_limit` | 503 | `GLASS_RECORDING_MAX_ACTIVE` recordings already run. |
+| `disk_low` | 507 | Under 512 MB free where recordings are kept. |
 | `at_capacity`, `hard_cap_reached`, `shutting_down`, `unavailable` | 503 | No session slot; no hardware headroom (the message names the CPU, memory, the GPU or its encoder); the runtime is stopping; not available on this session now, or tickets unavailable. |
 | `source_failed` | (signaling only) | The session's browser stopped; the session has ended. Sent in the signaling `error` message, never by an HTTP route. |
 
@@ -280,6 +343,9 @@ then **the offer**; the client answers.
 | `connection_left` | `connectionId` | Owner only. |
 | `slot_state` | `slots: {name: "empty"\|"live"\|"stalled"}` | Relay only. Once after `offer`, then on every change. |
 | `new_tab_request` | `url` | Browser only: the page tried to open a popup or tab. |
+| `recording` | `active: boolean` | Whether the session is being recorded: once right after `offer` (on or off), then on every change. Sent to every connection whatever its capabilities, and on a relay session to its producers too (after the `answer`). `@glass/client` fires it as `recording` (`GlassProducer` too). See [Recordings](#recordings). |
+| `playback` | `playing: boolean`, `positionMs`, `durationMs`, `ended: boolean` | Playback sessions only: on connect, on every change, and once a second while playing. `@glass/client` fires it as `playback` (`playbackState()`). |
+| `timeline` | `event: {t, type, ...}` | Playback sessions only: one event of the recording's timeline, as playback passes its time. `@glass/client` fires it as `timeline`. |
 | `clock_probe` | `id` | Clock calibration before the DataChannel opens. Reply `clock_probe_reply`. |
 | `error` | `code`, `error` | The source failed for good (`code` is `source_failed`; `error` is a sentence for people). Glass closes the socket next with `1011`; don't reconnect. |
 
@@ -313,6 +379,7 @@ page's CSS pixels.
 
 | `type` | `data` | Notes |
 |---|---|---|
+| `playback` | `action: "play" \| "pause" \| "seek"`, `positionMs?: number` | A playback session's controls (see [Recordings](#recordings)): from a connection with `producesInput`. A seek lands on the recording's keyframe at or before `positionMs`. |
 | `mousemove` | `x`, `y`, `dragging` | |
 | `mousedown`, `mouseup` | `x`, `y`, `button?` (`left`\|`right`\|`middle`), `modifiers?`, `clickCount?` | `clickCount` is the browser's own `MouseEvent.detail`. |
 | `scroll` | `deltaY`, `deltaX?`, `modifiers?` | Dispatched as a real wheel event. |

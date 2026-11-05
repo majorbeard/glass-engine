@@ -240,6 +240,11 @@ a session created with `"inspect": true`. See
   context (cookies, local storage, cache), which is wiped when the session
   ends. Browser processes are reused across sessions; their storage is not.
 
+## Recording
+
+A session can be recorded and played back; every viewer is told. See
+[recording.md](../recording.md).
+
 ## Limits worth knowing
 
 - **Sites that block cloud IP addresses.** Some sites (major video

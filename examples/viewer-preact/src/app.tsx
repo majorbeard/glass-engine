@@ -7,6 +7,7 @@ import { BrowserHeader } from "./components/BrowserHeader";
 import { CustomLoader } from "./components/CustomLoader";
 import { ErrorScreen } from "./components/ErrorScreen";
 import { WelcomeView } from "./components/WelcomeView";
+import { PlaybackBar } from "./components/PlaybackBar";
 import { DialogPrompt, DownloadPrompts, HijackedUrlPrompt, MicPrompt, UploadPrompt } from "./components/Prompts";
 import { API_TOKEN, GLASS_ADDR } from "./config";
 import { useGlassSession } from "./hooks/useGlassSession";
@@ -60,7 +61,8 @@ export function App() {
     fileChooserMultiple, setFileChooserMultiple, uploading, setUploading, uploadError, setUploadError,
     micAccessOrigin, setMicAccessOrigin, micError, setMicError, micGranting, setMicGranting,
   } = session;
-  const { fps, perfStats } = useStatsStream(sessionId, session.linkToken);
+  // A playback session has no statistics stream (it encodes nothing).
+  const { fps, perfStats } = useStatsStream(session.playback ? null : sessionId, session.linkToken);
   const closeContextMenu = useCallback(() => setContextMenu({ show: false, x: 0, y: 0 }), []);
   const { handleNavigate, handleNavigateBack, handleNavigateForward, handleRefresh } = useNavigation({
     client,
@@ -367,6 +369,23 @@ export function App() {
                   ) : (
                     <CustomLoader />
                   )}
+                </div>
+              )}
+              {isConnected && session.playback && (
+                <PlaybackBar
+                  state={session.playback}
+                  canControl={session.producesInput}
+                  onControl={(action, positionMs) => session.client?.controlPlayback(action, positionMs)}
+                />
+              )}
+              {isConnected && session.recording && (
+                <div
+                  class="absolute top-4 right-4 z-30 flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/70 text-white text-sm shadow"
+                  role="status"
+                  title="This session is being recorded"
+                >
+                  <span class="w-2.5 h-2.5 rounded-full bg-red-500" aria-hidden="true" />
+                  Recording
                 </div>
               )}
               {isConnected && session.sourceStalled && (

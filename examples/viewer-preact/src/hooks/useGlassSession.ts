@@ -8,6 +8,7 @@ import {
   LINK_REVOKED_MESSAGE,
   type GlassClient,
   type GlassDialog,
+  type GlassPlaybackState,
   type GlassRosterEntry,
   type GlassSession,
 } from "@glass/client";
@@ -132,6 +133,11 @@ export function useGlassSession(notify: Notify) {
   // Relay watch links: the producer feeding the main slot dropped or went
   // silent (docs/protocol.md, slot_state). The frozen last frame stays up.
   const [sourceStalled, setSourceStalled] = useState(false);
+  // Whether the session is being recorded (the "recording" event): the
+  // engine tells every viewer, and this viewer shows it.
+  const [recording, setRecording] = useState(false);
+  // A playback session's state (the "playback" event); null otherwise.
+  const [playback, setPlayback] = useState<GlassPlaybackState | null>(null);
   // Bumped to force the session-lifecycle effect below to re-run and create
   // a brand new session - the SDK's own reconnectLoop already handles a
   // recoverable drop (same session ID, held for reconnect server-side), but
@@ -288,6 +294,12 @@ export function useGlassSession(notify: Notify) {
       });
       c.on("dialog", (d) => {
         if (!cancelled) setPageDialog(d.open && !d.inPicture ? d : null);
+      });
+      c.on("recording", (active) => {
+        if (!cancelled) setRecording(active);
+      });
+      c.on("playback", (state) => {
+        if (!cancelled) setPlayback(state);
       });
       c.on("disconnected", () => {
         if (!cancelled) setIsConnected(false);
@@ -515,6 +527,8 @@ export function useGlassSession(notify: Notify) {
     isOwner,
     connections,
     sourceStalled,
+    recording,
+    playback,
     sessionEpoch,
   };
 }

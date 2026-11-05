@@ -102,6 +102,12 @@ export function answerDialog(c: ClientCore, accept: boolean, text?: string): voi
   transport.sendInput(c, "dialog_answer", text === undefined ? { accept } : { accept, text });
 }
 
+// See GlassClient.controlPlayback.
+export function controlPlayback(c: ClientCore, action: "play" | "pause" | "seek", positionMs?: number): void {
+  if (!drops.allowed(c, "playback")) return;
+  transport.sendInput(c, "playback", positionMs === undefined ? { action } : { action, positionMs });
+}
+
 // See GlassClient.dispatchKeyEvent.
 export function dispatchKeyEvent(c: ClientCore, keyEvent: KeyEvent): void {
   const modifiers =

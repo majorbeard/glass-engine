@@ -4,7 +4,7 @@
 
 import type { GlassClientOptions, GlassClientEventMap } from "./index";
 import { DEFAULT_RECONNECT_DELAYS_MS, DEFAULT_MAX_RECONNECT_ATTEMPTS, originOf } from "./internal";
-import type { GlassDialog, GlassRosterEntry, GlassSlotState } from "./types";
+import type { GlassDialog, GlassPlaybackState, GlassRosterEntry, GlassSlotState } from "./types";
 import { InputLatencyTracker } from "./input_latency";
 import type { ReceiverCounters } from "./input_latency";
 import { EncodedStreamChecker } from "./encoded_stream_check";
@@ -106,6 +106,12 @@ export class ClientCore {
   // Who has the page in input mode "floor", from input_floor; null when no
   // one has it, and always null in mode "free". Reset with _connectionId.
   _floorHolder: string | null = null;
+  // Whether the session is being recorded, from the recording message the
+  // engine sends on connect and on every change. Reset with _connectionId.
+  _recording = false;
+  // A playback session's state, from the playback message; null for any
+  // other session. Reset with _connectionId.
+  _playback: GlassPlaybackState | null = null;
   // The page's dialog, from the dialog message; null when none is open.
   // Reset with _connectionId: a reconnect is sent the open one again.
   _dialog: GlassDialog | null = null;
