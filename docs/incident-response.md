@@ -108,7 +108,12 @@ outlives the secret. If tickets are not used at all, unset
 
 ## The TURN secret leaked
 
-On the TURN server (coturn with `use-auth-secret`, as in
+With Glass's [built-in relay](deployment.md#turn) (`GLASS_TURN=embedded`), set
+a new `GLASS_TURN_SECRET` in `/etc/glass/env`, or remove it to have Glass make
+a new one at every start, and recreate the container. Every relay opened with
+the old secret ends with the old container.
+
+On a TURN server of your own (coturn with `use-auth-secret`, as in
 [deployment.md](deployment.md#turn)), with a new secret:
 
 ```sh

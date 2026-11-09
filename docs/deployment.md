@@ -3,11 +3,16 @@
 Running Glass anywhere other than your own laptop. The short version:
 
 1. Run the Docker image with an API token, Glass's seccomp profile (Chrome's
-   sandbox needs it), a restart policy and enough shared memory, its API
-   bound to this host only.
-2. Put a TLS proxy in front, and open **TCP 443** (and 80, for the
-   certificate) **and UDP 50000**, nothing else (see [Ports](#ports)).
-3. Add TURN if viewers or producers are on mobile or corporate networks.
+   sandbox needs it), a restart policy and enough shared memory.
+2. Let Glass serve HTTPS itself (`GLASS_TLS=auto`, or `GLASS_DOMAIN` with a
+   name of your own), and run its own TURN relay (`GLASS_TURN=embedded`) for
+   viewers and producers on mobile or corporate networks.
+3. Open **TCP 443, UDP 50000, and UDP and TCP 3478**, nothing else (see
+   [Ports](#ports)).
+
+Your own TLS proxy and TURN server still work in place of either: see
+[behind your own proxy](#behind-your-own-proxy) and
+[your own TURN server](#your-own-turn-server).
 
 ## Docker
 
@@ -31,8 +36,9 @@ docker run -d --name glass \
   --tmpfs /home/glass/.local:rw,nosuid,nodev,size=64m,uid=1000,gid=1000,mode=0700 \
   --memory=6g --pids-limit=4096 \
   --shm-size=2g \
-  -p 127.0.0.1:8080:8080 \
+  -p 443:443 -p 80:80 \
   -p 50000:50000/udp \
+  -p 3478:3478/udp -p 3478:3478/tcp \
   -v glass-cache:/home/glass/.cache/glass \
   --env-file /etc/glass/env \
   ghcr.io/majorbeard/glass:<version>
@@ -48,7 +54,20 @@ with `/etc/glass/env` (mode `0600`):
 ```sh
 GLASS_API_TOKEN=<openssl rand -hex 32>
 GLASS_LICENSE_KEY=<your license key, if any>
+GLASS_TLS=auto
+# or, with a name of your own that points at this host, in place of GLASS_TLS:
+# GLASS_DOMAIN=glass.example.com
+GLASS_TURN=embedded
 ```
+
+Glass gets a certificate for the host from Let's Encrypt and serves the API
+and signaling over HTTPS on 443 ([TLS](#tls)), and relays for clients that
+can't reach UDP 50000 directly ([TURN](#turn)). Port 80 only redirects to
+HTTPS; leave it out if you don't want that.
+
+Behind your own TLS proxy instead, leave out `GLASS_TLS` and `GLASS_TURN` and
+the 443, 80 and 3478 ports, and publish the API to this host only:
+`-p 127.0.0.1:8080:8080`.
 
 Or with Compose:
 
@@ -71,8 +90,11 @@ services:
     pids_limit: 4096
     shm_size: "2gb"
     ports:
-      - "127.0.0.1:8080:8080"
+      - "443:443"
+      - "80:80"
       - "50000:50000/udp"
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
     volumes:
       - glass-cache:/home/glass/.cache/glass
     env_file: /etc/glass/env
@@ -127,7 +149,8 @@ volumes:
 - **Stopping.** Glass drains within 8 s of `SIGTERM` (Docker waits 10 s by
   default), closing sessions and browsers cleanly.
 - **Health checks.** `/healthz` is liveness; `/readyz` is readiness (it
-  returns `503` until a browser answers). The image's own health check uses
+  returns `503` until a browser answers, and with Glass's own TLS until it
+  has its certificate). The image's own health check uses
   `/readyz`, and counts failures only after a 15-minute start period, to
   allow for a first start's downloads on a slow link; it reports healthy as
   soon as a check passes.
@@ -190,11 +213,17 @@ Open these to the internet, and nothing else:
 
 | Traffic | Port | |
 |---|---|---|
-| HTTPS API and signaling | **TCP 443**, on the TLS proxy ([TLS](#tls)) | Plus TCP 80 if the proxy gets its certificate by HTTP (Caddy does). |
+| HTTPS: the API, signaling, and TURN over TLS | **TCP 443** | Glass's own ([TLS](#tls), `GLASS_TLS_ADDR`), or your proxy's. |
+| Redirect to HTTPS | TCP 80 | Optional with Glass's own TLS. A proxy that gets its certificate over HTTP (Caddy does) needs it. |
 | WebRTC media and data | **UDP 50000** (`GLASS_WEBRTC_UDP_PORT`) | Every peer connection shares this one port. |
-| TURN, if you run it on this host | UDP and TCP 3478, TCP 5349, UDP 49152–65535 | See [TURN](#turn). |
+| TURN | **UDP and TCP 3478**, with Glass's relay (`GLASS_TURN_ADDR`) | A TURN server of your own needs its own ports: see [TURN](#your-own-turn-server). |
 
-Glass's own HTTP port (TCP 8080, `GLASS_ADDR`) stays on this host:
+With Glass's own TLS, its plain HTTP port (TCP 8080, `GLASS_ADDR`) listens on
+the container's own loopback only, and answers health checks, `/v1/info` and
+`/v1/metrics` and nothing else: there is nothing to publish, and a
+`-p 8080:8080` by mistake exposes nothing.
+
+Behind your own proxy, that port carries the API, and stays on this host:
 `-p 127.0.0.1:8080:8080`, so only the proxy reaches it. Never open it to
 the internet: it is plain HTTP, and session links carry their token in the
 URL, so anyone on the path could read and reuse them. On a private network
@@ -272,7 +301,72 @@ symmetric NAT (common on mobile carriers) or firewalls that block UDP. For
 those clients, a TURN server relays the traffic. If your users are on phones
 or corporate networks, you need one.
 
-Configure it for Glass with a secret shared with the TURN server:
+### Built in
+
+```sh
+GLASS_TURN=embedded
+```
+
+Glass runs a TURN relay itself, on UDP and TCP 3478 (`GLASS_TURN_ADDR`), and,
+with Glass's own [TLS](#built-in), over TLS on 443 beside the API. Each
+client is handed its own credential on the signaling connection, as with a
+TURN server of your own (below), and up to three ways in:
+
+- `turn:<host>:3478?transport=udp`
+- `turn:<host>:3478?transport=tcp`
+- `turns:<name>:443?transport=tcp`, with Glass's own TLS only
+
+`<host>` is the certificate's name, or else the public address. Browsers
+prefer UDP; a client on a network that blocks UDP uses TCP, and one on a
+network that allows only HTTPS uses TLS on 443, by itself.
+
+- **It relays to Glass only.** A credential opens relays to Glass's own media
+  port and nowhere else, so none of the peer rules below are needed.
+- **Limits:** 12 relays per credential, 64 per client address and 2,000 in
+  all, and a cap on the requests its UDP port answers a second.
+  [Monitoring](monitoring.md) shows when one is reached.
+- **`GLASS_TURN_SECRET` is optional.** Unset, Glass makes a new one at every
+  start; set, it survives restarts.
+- **Its own process.** The relay runs in a process of its own inside the
+  container, which Glass starts again if it ends. That keeps a crash in the
+  relay from taking the engine down. It isn't a sandbox: the relay shares the
+  container's user, network and resource limits. To give relaying a budget
+  of its own, run a TURN server of your own instead.
+- **A leaked credential** lets its holder open relays to Glass's media port
+  for its lifetime (`GLASS_TURN_CREDENTIAL_TTL_HOURS`, 24 by default) and
+  keep them open past it, within the limits above. It opens no session. To
+  end them all at once, set a new `GLASS_TURN_SECRET` and recreate the
+  container.
+- **Not with** `GLASS_TURN_URLS`, nor the deprecated
+  `GLASS_WEBRTC_UDP_PORT_MIN`/`_MAX`: Glass refuses to start, saying which.
+
+Tested in Chrome and Firefox, over IPv4.
+
+#### Firefox and TURN over TLS
+
+Firefox ignores a `turns:` server whose URL holds an IP address. With
+`GLASS_TLS=auto` and a certificate for the address, every `turns:` URL Glass
+hands out does, so a Firefox viewer on a network that allows only HTTPS can't
+connect. Chrome can. With `GLASS_DOMAIN`, Firefox relays over TLS too. On any
+other network Firefox uses 3478 and isn't affected.
+
+#### Relaying over TCP
+
+A connection relayed over TCP or TLS carries video less well on a lossy link
+than one over UDP: with packet loss in a test, it ran at 0.6 to 0.85 Mbit/s
+against UDP's 8, and its freezes lasted longer. Browsers try UDP first, so
+only clients that can't use it are relayed over TCP.
+
+#### A host with several addresses
+
+On a host with several network interfaces, where a reply can leave by a
+different one than its request came in on, a client may get no UDP relay and
+fall back to TCP. Bind the relay to the address clients reach:
+`GLASS_TURN_ADDR=<address>:3478`.
+
+### Your own TURN server
+
+Configure Glass with a secret shared with the TURN server:
 
 ```sh
 GLASS_TURN_URLS=turn:turn.example.com:3478,turns:turn.example.com:5349
@@ -356,8 +450,67 @@ minutes. They're fine for a smoke test, not for users.
 
 ## TLS
 
-Glass speaks plain HTTP and WebSocket. A page served over HTTPS can't talk
-to it (browsers block mixed content), so put a reverse proxy in front.
+A page served over HTTPS can talk to Glass only over HTTPS (browsers block
+mixed content), and session links carry their token in the URL, so reach
+Glass over TLS. Glass can serve it itself, or sit behind your own proxy.
+
+### Built in
+
+```sh
+GLASS_TLS=auto
+```
+
+Glass gets a certificate from Let's Encrypt for the host's public address
+(the address itself; if that can't be had, its `nip.io` name, then its
+`sslip.io` one) and serves the API, signaling and TURN over TLS on TCP 443.
+With a name of your own that points at the host, set `GLASS_DOMAIN` instead:
+
+```sh
+GLASS_DOMAIN=glass.example.com
+```
+
+That name only, with no fallback. Prefer a name of your own in production:
+it outlives an address change, and Firefox needs one to
+[relay over TLS](#firefox-and-turn-over-tls).
+
+- **The certificate is validated over 443,** so open it before the first
+  start. Port 80 only redirects plain HTTP to HTTPS
+  (`GLASS_TLS_HTTP_ADDR=off` turns it off).
+- **Keep the `glass-cache` volume.** The certificate is kept there. Without
+  it every new container asks for a new one, and Let's Encrypt issues 5 a
+  week for the same name. Glass warns at start, and `glass doctor` says so.
+- **Renewal is automatic.** A certificate for an address lasts about 6 days
+  and is renewed with about 2 left; one for a name lasts longer. A failed try
+  is retried after a pause growing from 1 minute to 1 hour, and the valid
+  certificate keeps serving meanwhile.
+- **Status.** `/readyz` returns `503` until the first certificate. `/readyz`
+  and `/v1/info` (`security.tls`) give its state, name and expiry, the kind
+  of the last error and the next try; `glass doctor` prints them.
+- **Let's Encrypt's terms.** Getting a certificate this way accepts the
+  [Let's Encrypt Subscriber Agreement](https://letsencrypt.org/repository/).
+  `GLASS_TLS_EMAIL`, optional, gives them an address to write to about it.
+- **A fixed public address.** On a cloud host, give the machine one (an AWS
+  Elastic IP, for example): with `GLASS_TLS=auto`, a new address needs a new
+  certificate, and links handed out before the change stop working.
+
+Glass refuses to start, saying how to fix it, with:
+
+- TLS and no `GLASS_API_TOKEN` (`GLASS_INSECURE_LOCAL_DEV` doesn't change this);
+- `GLASS_TLS=auto` and `GLASS_DOMAIN` together, or a `GLASS_DOMAIN` that isn't
+  a bare host name;
+- `GLASS_PUBLIC_URL` with `GLASS_TLS=auto`, or with `GLASS_DOMAIN` but other
+  than `https://` and that name.
+
+A host with no public address can't get a certificate this way: `auto` says
+so, and names `GLASS_DOMAIN`.
+
+Clients reach Glass directly, so `GLASS_TRUSTED_PROXIES` and
+`GLASS_PUBLIC_URL` (below) aren't needed.
+
+### Behind your own proxy
+
+Without `GLASS_TLS` or `GLASS_DOMAIN`, Glass speaks plain HTTP and WebSocket
+on `GLASS_ADDR`; put a reverse proxy in front.
 [Caddy](https://caddyserver.com) gets and renews certificates by itself:
 
 ```text
@@ -607,8 +760,9 @@ docker run --rm ghcr.io/majorbeard/glass:<version> seccomp-profile   # the secco
 ```
 
 `glass session` manages a running instance. Inside the container it sends
-the container's own `GLASS_API_TOKEN` (the first, when several are listed);
-elsewhere, set `GLASS_API_TOKEN` and pass `--addr`:
+the container's own `GLASS_API_TOKEN` (the first, when several are listed),
+and, with Glass's own TLS on, reaches the API over the container's loopback by
+itself; elsewhere, set `GLASS_API_TOKEN` and pass `--addr`:
 
 ```sh
 docker exec glass glass session list                  # running sessions, relay sessions and calls; no links

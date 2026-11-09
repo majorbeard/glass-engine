@@ -93,7 +93,9 @@ a browser that runs inside the container.
 
 [docs/getting-started.md](docs/getting-started.md) walks through the same
 setup with an API token, and adds a relay producer and a call.
-[docs/deployment.md](docs/deployment.md) covers running Glass on a server.
+[docs/deployment.md](docs/deployment.md) covers running Glass on a server,
+where one container serves HTTPS and relays TURN itself (`GLASS_TLS=auto`,
+`GLASS_TURN=embedded`).
 
 ## Using the SDK
 
