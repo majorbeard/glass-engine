@@ -87,6 +87,25 @@ to the license limit regardless of load. Nothing crashes, but on an
 overloaded host the last session to arrive can take tens of seconds to show a
 picture.
 
+## Keep a reserve for floods
+
+When Glass serves TLS itself and runs its embedded relay, it is the first thing
+a stranger's traffic reaches. Its limits hold, and refusing costs CPU the
+encoders then don't have. What a flood can take is bounded, and this is what it
+measured, on AWS c6g (Graviton, arm64), from the engine's own work:
+
+| Flood | Cost |
+|---|---|
+| UDP packets at the relay | About 5 µs a packet; about one core at 200,000 packets a second, where its read loop tops out |
+| New TLS connections | About 1.1 ms a handshake; about 1.1 cores at the engine's limit of 1,000 new connections a second |
+| Idle connections held open | About 50 KB of memory each with TLS, about 10 KB without; at most 8,192 a process, fewer under a low descriptor limit |
+| Relay allocations | About 9 KB each, at most 2,000 |
+
+**On a host running both, keep about 2 cores spare** for a flood of each at
+once. On x86 the same work took about half the time. These figures leave out the
+kernel's own work on the packets, so the reserve is a minimum. [Monitoring](monitoring.md)
+shows when a flood is drawing on it.
+
 ## Other host requirements
 
 - **Disk:** leave room for at least two image versions (about 1.1 GB each)

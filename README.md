@@ -232,6 +232,7 @@ What is being built next. None of it exists yet, and there are no dates.
 | [Protocol](docs/protocol.md) | Integrators | HTTP API, signaling and DataChannel messages |
 | [Architecture](docs/architecture.md) | Everyone | How media and input move through the engine |
 | [Deployment](docs/deployment.md) | Operators | Ports, NAT, TURN, TLS, auth, Docker |
+| [Monitoring and attacks](docs/monitoring.md) | Operators | What Glass is refusing and why; is my server being attacked; metrics for Prometheus |
 | [Incident response](docs/incident-response.md) | Operators | A leaked link, token or secret: what to do; rotation schedule |
 | [Performance](docs/performance.md) | Everyone | What Glass measured, on what, and how |
 | [Sizing](docs/sizing.md) | Operators | Capacity, memory, instance choice |
