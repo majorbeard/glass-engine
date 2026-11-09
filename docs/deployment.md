@@ -201,6 +201,10 @@ URL, so anyone on the path could read and reuse them. On a private network
 with no proxy, publish it to that network only (`-p <private-ip>:8080:8080`)
 and keep it off the internet in the firewall and the cloud security group.
 
+A monitoring port (`GLASS_MONITOR_ADDR`), if you set one, is plain HTTP too:
+publish it to a private address only. See
+[monitoring.md](monitoring.md#the-monitoring-port).
+
 Opening only the TCP port is the most common mistake: signaling works, and
 the connection then hangs at ICE `checking` forever. Open UDP 50000 in
 Docker (`-p 50000:50000/udp`), the host firewall **and** the cloud security
@@ -584,7 +588,10 @@ docker logs glass 2>&1 | grep '\[Audit\]'
 `link` is a link's ID, not the link (`own` for a session's own link,
 `api` for the API token), and `client` is the salted hash above: the
 stream holds no token and no URL. A steady rise in `*.refused` lines is
-the one worth an alert: someone is trying tokens or links.
+the one worth an alert: someone is trying tokens or links. The refusals at the
+engine's own limits, and how to tell what they mean, are in
+[monitoring.md](monitoring.md#is-my-server-being-attacked); `GET /v1/metrics`
+counts every one, the suppressed ones too.
 
 ## The `glass` CLI
 

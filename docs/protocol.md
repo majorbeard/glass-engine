@@ -39,7 +39,8 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 |---|---|---|
 | `GET` | `/healthz` | `200 {"status":"ok"}` whenever the process is up. |
 | `GET` | `/readyz` | `200` when at least one pooled browser answers, else `503`. Body: `{"status","browsers":{…},"diskFreeMB":{…},"diskLow"}`. Disk fields are informational. |
-| `GET` | `/v1/info` | `{"sessions":{"active","relayActive","callActive","capacity"},"capacity":{"licensedMax","configuredCap","effectiveCeiling","hardCapEnabled","currentCpuPercent",…},"license":{"tier","sessionLimit"},"protocolVersion","uptimeSeconds","codecs":{"available","default"},"build":{…},"security":{…}}`. `build` and `security` are described in [deployment.md](deployment.md#monitoring-what-runs). `codecs` lists the video codecs a browser session may ask for, and the one it gets without asking. `license.tier` is the tier actually in effect; `capacity.effectiveCeiling` is how many sessions can be admitted right now. |
+| `GET` | `/v1/info` | `{"sessions":{"active","relayActive","callActive","capacity"},"capacity":{"licensedMax","configuredCap","effectiveCeiling","hardCapEnabled","currentCpuPercent",…},"license":{"tier","sessionLimit"},"protocolVersion","uptimeSeconds","codecs":{"available","default"},"build":{…},"security":{…}}`. `build` and `security` are described in [deployment.md](deployment.md#monitoring-what-runs). `codecs` lists the video codecs a browser session may ask for, and the one it gets without asking. `license.tier` is the tier actually in effect; `capacity.effectiveCeiling` is how many sessions can be admitted right now. `pressure` is what the engine refused and dropped over the last minute, part by part: see [monitoring.md](monitoring.md#the-summary-pressure-in-v1info). |
+| `GET` | `/v1/metrics` | The same counts in Prometheus text format (`text/plain; version=0.0.4`), the API token only. See [monitoring.md](monitoring.md#metrics-get-v1metrics). |
 
 ### Browser sessions
 
@@ -189,8 +190,10 @@ Frames are dropped before they are encoded, never after, so every encoded
 frame is sent to the viewers and a drop never needs a keyframe to recover. The
 encoder can also skip frames on its own to keep to its bitrate; those are not
 counted here. The object carries more fields (transport, input latency,
-memory, `encoderBackend`, `audio` when audio is on); new fields are
-additions, not errors.
+memory, `encoderBackend`, `audio` when audio is on, and `cpuPressure` for a
+browser session: its capture level, its size, and why it last stepped down for
+CPU, as [monitoring.md](monitoring.md#a-session-stepping-down-cpupressure) describes);
+new fields are additions, not errors.
 
 ### Errors
 
