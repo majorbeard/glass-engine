@@ -67,15 +67,30 @@ change between releases.
 | `GLASS_WEBRTC_UDP_BATCH_INTERVAL_US` | `500` | With batching on, the longest a packet waits for its batch, in microseconds. |
 | `GLASS_WEBRTC_NAT_1TO1_IPS` | discovered | Public address(es) to advertise, comma-separated. By default Glass discovers its public address through STUN at startup. See [deployment.md](deployment.md#public-address-and-nat). |
 | `GLASS_STUN_URLS` | Google public STUN | Comma-separated STUN URLs (`stun:` or `stuns:`). Glass refuses to start on one it can't parse, and `glass doctor` fails the check. |
-| `GLASS_TURN_URLS` | unset | Comma-separated TURN/TURNS URLs, each `turn:<host>:<port>` or `turns:<host>:<port>`. Glass refuses to start on one it can't parse (a missing `turn:` is the usual slip), and `glass doctor` fails the check. Needs `GLASS_TURN_SECRET`, or both `GLASS_TURN_USERNAME` and `GLASS_TURN_CREDENTIAL`: without a credential no session could connect, so Glass refuses to start and `glass doctor` fails the check. |
+| `GLASS_TURN` | unset | `embedded`: Glass runs a TURN relay itself, on UDP and TCP 3478 and, with Glass's own TLS, over TLS on 443, relaying only to its own media port. Not with `GLASS_TURN_URLS`. See [deployment.md](deployment.md#turn). |
+| `GLASS_TURN_ADDR` | `:3478` | Listen address of that relay, on UDP and TCP. Set it to the address clients reach on a host with several network interfaces. |
+| `GLASS_TURN_URLS` | unset | A TURN server of your own: comma-separated TURN/TURNS URLs, each `turn:<host>:<port>` or `turns:<host>:<port>`. Glass refuses to start on one it can't parse (a missing `turn:` is the usual slip), and `glass doctor` fails the check. Needs `GLASS_TURN_SECRET`, or both `GLASS_TURN_USERNAME` and `GLASS_TURN_CREDENTIAL`: without a credential no session could connect, so Glass refuses to start and `glass doctor` fails the check. |
 | `GLASS_WEBRTC_ALLOW_PRIVATE_PEERS` | `false` | Accept ICE candidates a client sends at private, loopback or link-local addresses (or mDNS `.local` names). Off, they are dropped, so a link holder can't point Glass's connectivity checks into your network; clients on a private network still connect from the packets they send, and a TURN server on the same private network keeps working. Turn it on only if clients on your private network fail to connect without it. `GLASS_INSECURE_LOCAL_DEV` implies it. |
-| `GLASS_TURN_SECRET` | unset | Secret shared with your TURN server (coturn's `use-auth-secret`). Set, Glass issues every connection its own short-lived TURN credential, for itself and for the client. See [deployment.md](deployment.md#turn). |
+| `GLASS_TURN_SECRET` | unset | Secret shared with your TURN server (coturn's `use-auth-secret`), or the built-in relay's. Set, Glass issues every connection its own short-lived TURN credential, for itself and for the client. With `GLASS_TURN=embedded` it is optional: unset, Glass makes a new one at every start. See [deployment.md](deployment.md#turn). |
 | `GLASS_TURN_CREDENTIAL_TTL_HOURS` | `24` | How long an issued TURN credential lasts. |
 | `GLASS_TURN_USERNAME`, `GLASS_TURN_CREDENTIAL` | unset | A fixed TURN credential, for Glass's own side only: it is never given to clients. Ignored when `GLASS_TURN_SECRET` is set. |
 | `GLASS_CORS_ORIGINS` | unset | Extra browser origins allowed, exact match, comma-separated. Loopback and private-network origins are always allowed. |
 | `GLASS_TRUSTED_PROXIES` | loopback | IPs or CIDRs of reverse proxies whose `X-Forwarded-For` and `X-Forwarded-Host` are trusted. |
 | `GLASS_PUBLIC_URL` | the request's own host | The address viewers reach Glass at, such as `https://glass.example.com`: the host and scheme of the signaling URLs Glass hands out. Set it behind a proxy that rewrites `Host`. See [deployment.md](deployment.md#the-address-viewers-are-given). |
 | `GLASS_WEBRTC_UDP_PORT_MIN`, `_MAX` | unset | Deprecated per-connection port range; used only when set without `GLASS_WEBRTC_UDP_PORT`. |
+
+## TLS
+
+Glass's own HTTPS, in place of a proxy of your own. See
+[deployment.md](deployment.md#tls).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GLASS_TLS` | unset | `auto`: Glass gets a certificate for the host's public address from Let's Encrypt (the address, then its `nip.io` name, then its `sslip.io` one) and serves HTTPS itself. Unset, it serves plain HTTP behind your own proxy. Needs `GLASS_API_TOKEN`. |
+| `GLASS_DOMAIN` | unset | A host name of your own for the certificate, in place of `GLASS_TLS=auto`; it must already point at this host. |
+| `GLASS_TLS_EMAIL` | unset | An address Let's Encrypt may write to about the certificate. Optional. |
+| `GLASS_TLS_ADDR` | `:443` | Listen address for HTTPS, and TURN over TLS with the built-in relay. |
+| `GLASS_TLS_HTTP_ADDR` | `:80` | Listen address for the redirect from HTTP to HTTPS; `off` turns it off. Publishing it is optional. |
 
 ## Hosted browser
 

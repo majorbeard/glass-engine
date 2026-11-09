@@ -48,6 +48,25 @@ In practice, **upload bandwidth is the limit** for relay deployments. A 1 Gbit/s
 link carries about 500 viewers at 2 Mbit/s, at a fraction of a small
 instance's CPU.
 
+## Viewers through the built-in TURN relay
+
+With `GLASS_TURN=embedded` ([deployment.md](deployment.md#turn)), a viewer
+that can't reach UDP 50000 directly is relayed by Glass itself. Measured on
+AWS c6g (Graviton, arm64), viewers of one hosted browser session at about
+1.2 Mbit/s each, from 1 to 8 viewers:
+
+| Resource | Cost |
+|---|---|
+| CPU, a direct viewer | About **12 millicores** a viewer of a shared session, beside the session's own encoding (about 0.67 of a core on a moving page). |
+| CPU, relaying | About **6–8 millicores per relayed Mbit/s** on top, over UDP, TCP and TLS alike: 130 to 160 Mbit/s a core. Over TLS, Glass's own TLS adds about 4 millicores per Mbit/s more. |
+| CPU, the relay unused | None measurable. |
+| Memory | About 2 MB for the relay's own process, beyond what it shares with the engine; about 9 KB per relay a client holds open. |
+| Network | The same as a direct viewer: the relay hands each packet to Glass inside the host, so a relayed viewer crosses the host's link once. |
+
+The encoder leads: relaying a viewer costs a few percent of encoding the
+session it watches. Past 8 viewers the figures are extrapolated; measure your
+own.
+
 ## Connections and idle sessions
 
 Signaling connections and sessions that aren't streaming are cheap: about
