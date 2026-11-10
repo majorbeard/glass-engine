@@ -103,6 +103,10 @@ any session. That link can watch and control playback; a link minted with
 `consumesMedia` alone can only watch. Playback starts once a viewer's media is
 up, and waits when no viewer is left.
 
+A recording of a session nobody joined is listed with an empty file. Playing it,
+or any file with nothing that can be played, answers `409` with the code
+`recording_unplayable` (from v0.1.114; `500` before).
+
 ```ts
 const client = createGlassClient({ signalingUrl });
 client.on("videoTrack", (stream) => (video.srcObject = stream));
