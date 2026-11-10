@@ -112,8 +112,9 @@ The viewer reports its size on connect and on every resize; Glass resizes the
 browser to match. When the viewer is a phone, it reports that too, and Glass
 turns on mobile emulation (touch, mobile viewport, and the phone's own user
 agent), so sites serve their mobile layout. `mountGlassViewer` does this
-automatically; with a custom renderer, call `sendInitialViewport()` before
-connecting and `setViewport()` afterwards.
+automatically; with a custom renderer, call `sendInitialViewport()` when the
+client emits `connected` (it is dropped if sent before the connection is
+open), and `setViewport()` whenever the size changes after that.
 
 On phones, Glass also sends the positions of text fields on the page, so the
 viewer can raise the on-screen keyboard when the user taps one.
