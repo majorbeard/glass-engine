@@ -106,7 +106,7 @@ set. All routes take the API token only.
 | `GET` | `/v1/recordings/{id}/file` | The media, `video/webm` or `video/x-matroska`, with range requests. `409` (`recording_active`) while it runs. |
 | `GET` | `/v1/recordings/{id}/timeline` | The recording's timeline (below), `application/x-ndjson`, while it runs too: it only grows. |
 | `DELETE` | `/v1/recordings/{id}` | Delete the file, its timeline and its record. `204`; `409` while it runs. |
-| `POST` | `/v1/recordings/{id}/play` | Play a finished recording back as a session (below): `201 {id, signalingUrl, protocolVersion, sourceType: "playback", capabilities, codec, durationMs, recording, linksExpireAt?}`. Optional body `{"linkExpiresIn"}`. `409` (`recording_active`) while it runs. Rate limited as session creation. |
+| `POST` | `/v1/recordings/{id}/play` | Play a finished recording back as a session (below): `201 {id, signalingUrl, protocolVersion, sourceType: "playback", capabilities, codec, durationMs, recording, linksExpireAt?}`. Optional body `{"linkExpiresIn"}`. `409` (`recording_active`) while it runs; `409` (`recording_unplayable`) when its file holds nothing that can be played, as an empty one. Rate limited as session creation. |
 
 **Playback sessions.** A viewer joins a playback session as any session:
 its `signalingUrl` watches and controls it (`producesInput`); a link
@@ -229,7 +229,8 @@ the code. A body may carry more fields beside these two (`floor_taken`'s
 | `no_file_chooser` | 409 | Files uploaded when no file chooser is waiting for them. |
 | `recording_off` | 409 | A recording route, or `"record": true`, with no `GLASS_RECORDING_DIR` set. |
 | `already_recording`, `not_recording` | 409 | Start on a session already recording; stop on one that is not. |
-| `recording_active` | 409 | A recording's file fetched or deleted while it still runs. |
+| `recording_active` | 409 | A recording's file fetched, played or deleted while it still runs. |
+| `recording_unplayable` | 409 | A recording played whose file holds nothing that can be played: empty (nobody joined the recorded session), cut short before any media, or with no video Glass can send. |
 | `too_large` | 413 | A file, a batch or the session's uploads over their limit. |
 | `rate_limited` | 429 | Too many requests or inputs from this client; see `Retry-After`. |
 | `internal_error` | 500 | A fault in the runtime; the detail is in its log, never in the body. |
