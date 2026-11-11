@@ -67,6 +67,20 @@ The encoder leads: relaying a viewer costs a few percent of encoding the
 session it watches. Past 8 viewers the figures are extrapolated; measure your
 own.
 
+## Glass's relay on its own host
+
+`glass turn` ([deployment.md](deployment.md#glasss-relay-on-its-own-host)),
+measured on AWS c6i.xlarge (x86), relaying 1 to 8 viewers over UDP at about
+1.1 Mbit/s each:
+
+| Resource | Cost |
+|---|---|
+| CPU | About **5.5–7.5 millicores per relayed Mbit/s**, falling as viewers are added. |
+| Memory | About 26 MB for the process, plus about 9 KB per relay a client holds open. |
+| Network | Each relayed viewer crosses the relay's link twice, in from the engine and out to the viewer. |
+
+Past 8 viewers the figures are extrapolated; measure your own.
+
 ## Connections and idle sessions
 
 Signaling connections and sessions that aren't streaming are cheap: about
