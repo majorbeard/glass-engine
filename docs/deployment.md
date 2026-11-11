@@ -216,7 +216,7 @@ Open these to the internet, and nothing else:
 | HTTPS: the API, signaling, and TURN over TLS | **TCP 443** | Glass's own ([TLS](#tls), `GLASS_TLS_ADDR`), or your proxy's. |
 | Redirect to HTTPS | TCP 80 | Optional with Glass's own TLS. A proxy that gets its certificate over HTTP (Caddy does) needs it. |
 | WebRTC media and data | **UDP 50000** (`GLASS_WEBRTC_UDP_PORT`) | Every peer connection shares this one port. |
-| TURN | **UDP and TCP 3478**, with Glass's relay (`GLASS_TURN_ADDR`) | A TURN server of your own needs its own ports: see [TURN](#your-own-turn-server). |
+| TURN | **UDP and TCP 3478**, with Glass's relay (`GLASS_TURN_ADDR`) | Glass's relay on a host of its own, or a TURN server of your own, needs its own ports: see [TURN](#turn). |
 
 With Glass's own TLS, its plain HTTP port (TCP 8080, `GLASS_ADDR`) listens on
 the container's own loopback only, and answers health checks, `/v1/info` and
@@ -331,7 +331,7 @@ network that allows only HTTPS uses TLS on 443, by itself.
   container, which Glass starts again if it ends. That keeps a crash in the
   relay from taking the engine down. It isn't a sandbox: the relay shares the
   container's user, network and resource limits. To give relaying a budget
-  of its own, run a TURN server of your own instead.
+  of its own, run it on its own ([below](#glasss-relay-on-its-own-host)).
 - **A leaked credential** lets its holder open relays to Glass's media port
   for its lifetime (`GLASS_TURN_CREDENTIAL_TTL_HOURS`, 24 by default) and
   keep them open past it, within the limits above. It opens no session. To
@@ -359,10 +359,96 @@ only clients that can't use it are relayed over TCP.
 
 #### A host with several addresses
 
-On a host with several network interfaces, where a reply can leave by a
-different one than its request came in on, a client may get no UDP relay and
-fall back to TCP. Bind the relay to the address clients reach:
-`GLASS_TURN_ADDR=<address>:3478`.
+The relay listens for UDP on each of the host's addresses and answers from
+the one a request came to, so a host with several network interfaces needs
+nothing set. An address that appears after the relay starts isn't listened
+on until the container is recreated; the log says so once. To listen on one
+address only, set `GLASS_TURN_ADDR=<address>:3478`.
+
+### Glass's relay on its own host
+
+`glass turn` runs Glass's relay and nothing else, for engines on other hosts.
+It is the same relay as `GLASS_TURN=embedded`, with its own CPU, memory and
+network budget, apart from the engines', and one relay can serve several
+engines.
+
+On the relay's host, in `turn.env` (readable by you only):
+
+```sh
+# The engines' own secret: they issue the credentials the relay checks.
+GLASS_TURN_SECRET=<openssl rand -hex 32>
+# The engines it relays to: host[:port], their media port, 50000 if left out.
+GLASS_TURN_PEERS=engine-a.example.com,engine-b.example.com:51000
+# TURN over TLS on 443, with a certificate from Let's Encrypt; or GLASS_TLS=auto.
+GLASS_DOMAIN=turn.example.com
+```
+
+The relay takes one UDP port per relayed viewer, from a range of thousands,
+so it runs with the host's network rather than published ports. The image's
+user can't bind 443 there, so first let unprivileged processes bind it, on
+this host only:
+
+```sh
+echo 'net.ipv4.ip_unprivileged_port_start=443' | sudo tee /etc/sysctl.d/60-glass-turn.conf
+sudo sysctl --system
+```
+
+Then:
+
+```sh
+docker run -d --name glass-turn --restart unless-stopped --network host \
+  --read-only --cap-drop=ALL --security-opt no-new-privileges \
+  --memory=512m --pids-limit=256 \
+  -v glass-turn-certs:/home/glass/.cache/glass \
+  --env-file turn.env ghcr.io/majorbeard/glass turn
+```
+
+The volume keeps the certificate across restarts. Without TURN over TLS, the
+sysctl isn't needed.
+
+On each engine, the relay as a TURN server of its own:
+
+```sh
+GLASS_TURN_URLS=turn:turn.example.com:3478?transport=udp,turn:turn.example.com:3478?transport=tcp,turns:turn.example.com:443?transport=tcp
+GLASS_TURN_SECRET=<the same secret>
+```
+
+`docker run --rm --env-file turn.env ghcr.io/majorbeard/glass turn --check`
+prints what the relay would do, and binds nothing.
+
+- **Name each engine by the address it reaches the relay from.** Across the
+  internet that is its public address, or a name for it. The relay refuses
+  traffic from an engine's other addresses, so an engine listed by its
+  private address alone never connects. Names are looked up again every 5
+  seconds, and a name that stops resolving keeps its last answer.
+- **It relays to those engines only**, and to their media port only, so none
+  of the peer rules of a TURN server of your own are needed. Its limits are
+  the built-in relay's.
+- **Relay sockets.** Each relayed viewer holds one UDP port in
+  `GLASS_TURN_RELAY_PORTS` (49152-65535 by default, at least 2,000 ports),
+  and the engines send to it. Open that range to the engines' addresses
+  only, not to the internet.
+- **Ports for clients:** UDP and TCP 3478 (`GLASS_TURN_ADDR`), and TCP 443
+  for TURN over TLS (`GLASS_TLS_ADDR`). Let's Encrypt checks the certificate
+  on 443 too, so keep it open to everyone.
+- **Its public address** comes from `GLASS_WEBRTC_NAT_1TO1_IPS`, or else from
+  STUN (`GLASS_STUN_URLS`). The relay refuses to start without one.
+- **Firefox** needs a name in the `turns:` URL, as with the built-in relay
+  ([above](#firefox-and-turn-over-tls)): use `GLASS_DOMAIN`.
+- **Monitoring.** With `GLASS_MONITOR_ADDR` and `GLASS_API_TOKEN`, the relay
+  answers `/healthz`, `/readyz` (ready once TURN over TLS has its
+  certificate) and, with the token, `/v1/metrics`: its counts and the
+  certificate's state. Publish that port to a private address only. Its log
+  carries the built-in relay's `turn.*` audit lines
+  ([monitoring.md](monitoring.md)).
+- **Beside an engine on the same host,** use `GLASS_TURN=embedded`. Run
+  `glass turn` there only to give relaying limits of its own. The engine
+  holds 443, and Let's Encrypt checks a certificate only there, so leave
+  `GLASS_TLS` and `GLASS_DOMAIN` unset: that relay serves UDP and TCP only.
+
+Tested in Chrome and Firefox, over UDP, TCP and TLS, over IPv4, with the
+relay and the engine on separate hosts. Its cost is in
+[sizing.md](sizing.md#glasss-relay-on-its-own-host).
 
 ### Your own TURN server
 
