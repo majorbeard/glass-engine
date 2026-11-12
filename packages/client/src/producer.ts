@@ -44,10 +44,23 @@ export interface ProducerStats {
   rttMs: number | null;
   /** From remote-inbound-rtp; null when the browser doesn't report it (0 is a real value). */
   packetsLost: number | null;
+  /**
+   * With simulcast, each layer the browser sends, smallest first; null with one encoding. The
+   * fields above then describe the largest layer, and uploadBitrateKbps all of them together.
+   */
+  layers: ProducerLayerStats[] | null;
   /** Battery Status API, where the browser has it. */
   battery: { level: number; charging: boolean } | null;
   /** Network Information API, where the browser has it. */
   network: { type: string | null; effectiveType: string | null; downlinkMbps: number | null } | null;
+}
+
+export interface ProducerLayerStats {
+  rid: string;
+  width: number | null;
+  height: number | null;
+  framesPerSecond: number | null;
+  bitrateKbps: number;
 }
 
 export interface GlassProducerOptions {
@@ -71,8 +84,23 @@ export interface GlassProducerOptions {
   // ICE servers. Without them the engine's are used (sent first on the
   // produce connection), else a public STUN server.
   iceServers?: RTCIceServer[];
-  /** Cap on the video sender's bitrate in kbps (default 1000; 0 = uncapped). Keep it below the uplink's capacity. */
+  /**
+   * Cap on the video sender's bitrate in kbps (default 1000; 0 = uncapped). Keep it below the uplink's capacity.
+   * With simulcast it caps the full-size layer only: the smaller layers add their own (about 150 and 350
+   * kbit/s at 720p), so the upload is the cap plus those. A higher cap sharpens the full layer on a good
+   * link but makes the browser's simulcast fragile on a weak one: in Chrome, with the uplink squeezed, a
+   * cap of 1500 lost every layer at 500 kbit/s of uplink and 2000 at 900, while the default 1000 held at both.
+   */
   maxBitrateKbps?: number;
+  /**
+   * Send the video as several layers of the same picture (simulcast), so Glass can send viewers a smaller
+   * one while the full one is not arriving steadily (every viewer of a session gets the same layer):
+   * three (quarter, half and full size) for a camera 540 high or more, two (half and full)
+   * for one 360 high or more, and one below that. Off by default: it costs the device about a quarter more
+   * upload and an encoder per layer. The session must be a simulcast one; when this producer creates the
+   * session, it asks for one.
+   */
+  simulcast?: boolean;
   /** Chromium's starting-bitrate hint in kbps (default min(500, cap)). Other browsers ignore it. */
   startBitrateKbps?: number;
   /** Re-establish the connection after a drop (default true). */
@@ -254,7 +282,7 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
   }
 
   private async createSession(): Promise<{ created: CreatedSession; produceUrl: string }> {
-    const created = await createRelaySession(this.opts.serverUrl!, this.opts.apiToken, this.opts.slots);
+    const created = await createRelaySession(this.opts.serverUrl!, this.opts.apiToken, this.opts.slots, this.opts.simulcast);
     const produceUrl = created.produceUrls?.[this.slot] ?? (this.slot === "main" ? created.produceUrl : undefined);
     if (!produceUrl) throw new FatalError(`the created session has no slot "${this.slot}"`);
     return { created, produceUrl };
@@ -396,9 +424,7 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
     try {
       const videoTrack = stream.getVideoTracks()[0];
       if (!videoTrack) throw new FatalError("the stream has no video track");
-      const encoding: RTCRtpEncodingParameters = { maxFramerate: 30 };
-      if (this.maxBitrateKbps > 0) encoding.maxBitrate = Math.round(this.maxBitrateKbps * 1000);
-      const encodings = [encoding];
+      const encodings = sendEncodings(this.opts.simulcast ? videoTrack.getSettings?.().height : undefined, this.maxBitrateKbps);
       let transceiver: RTCRtpTransceiver;
       try {
         transceiver = pc.addTransceiver(videoTrack, { direction: "sendonly", streams: [stream], sendEncodings: encodings });
@@ -520,15 +546,18 @@ function sessionIdFromProduceUrl(produceUrl: string): string | null {
   return m?.[1] ? decodeURIComponent(m[1]) : null;
 }
 
-async function createRelaySession(serverUrl: string, apiToken?: string, slots?: string[]): Promise<CreatedSession> {
+async function createRelaySession(serverUrl: string, apiToken?: string, slots?: string[], simulcast?: boolean): Promise<CreatedSession> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), CREATE_SESSION_TIMEOUT_MS);
   const headers: Record<string, string> = {};
   if (apiToken) headers["Authorization"] = `Bearer ${apiToken}`;
   let body: string | undefined;
-  if (slots && slots.length > 0) {
+  const request: { slots?: string[]; simulcast?: boolean } = {};
+  if (slots && slots.length > 0) request.slots = slots;
+  if (simulcast) request.simulcast = true;
+  if (Object.keys(request).length > 0) {
     headers["Content-Type"] = "application/json";
-    body = JSON.stringify({ slots });
+    body = JSON.stringify(request);
   }
   let res: Response;
   try {
@@ -566,14 +595,37 @@ function lockCodec(transceiver: RTCRtpTransceiver, codec: "h264" | "vp8") {
   transceiver.setCodecPreferences(matching);
 }
 
-/** Cap the video sender's bitrate; see GlassProducerOptions.maxBitrateKbps. */
+/**
+ * The video's encodings: one, or with simulcast (a camera height given) the layers that height takes,
+ * smallest first. The cap goes on the full-size one.
+ */
+export function sendEncodings(simulcastHeight: number | undefined, maxKbps: number): RTCRtpEncodingParameters[] {
+  const layers: { rid?: string; scale: number }[] =
+    simulcastHeight === undefined || simulcastHeight < 360
+      ? [{ scale: 1 }]
+      : simulcastHeight < 540
+        ? [{ rid: "h", scale: 2 }, { rid: "f", scale: 1 }]
+        : [{ rid: "q", scale: 4 }, { rid: "h", scale: 2 }, { rid: "f", scale: 1 }];
+  return layers.map((l) => {
+    const e: RTCRtpEncodingParameters = { maxFramerate: 30 };
+    if (l.rid) {
+      e.rid = l.rid;
+      e.scaleResolutionDownBy = l.scale;
+    }
+    if (l.scale === 1 && maxKbps > 0) e.maxBitrate = Math.round(maxKbps * 1000);
+    return e;
+  });
+}
+
+/** Cap the video sender's full-size encoding; see GlassProducerOptions.maxBitrateKbps. */
 async function applyBitrateCap(sender: RTCRtpSender, maxKbps: number): Promise<void> {
   if (!(maxKbps > 0)) return;
   try {
     const params = sender.getParameters();
-    const first = params.encodings?.[0] ?? {};
-    first.maxBitrate = Math.round(maxKbps * 1000);
-    params.encodings = [first, ...(params.encodings?.slice(1) ?? [])];
+    const encodings = params.encodings?.length ? params.encodings : [{}];
+    const full = encodings.findIndex((e) => !(e.scaleResolutionDownBy && e.scaleResolutionDownBy > 1));
+    encodings[full < 0 ? encodings.length - 1 : full]!.maxBitrate = Math.round(maxKbps * 1000);
+    params.encodings = encodings;
     await sender.setParameters(params);
   } catch {
     // Best effort: sendEncodings already carried the cap where supported.
@@ -606,6 +658,7 @@ function getNetworkInfo(): ProducerStats["network"] {
 function startStatsPolling(pc: RTCPeerConnection, onStats: (stats: ProducerStats) => void): () => void {
   let prevBytesSent: number | null = null;
   let prevTimestamp: number | null = null;
+  const prevByRid = new Map<string, { bytes: number; at: number }>();
   let stopped = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -621,13 +674,32 @@ function startStatsPolling(pc: RTCPeerConnection, onStats: (stats: ProducerStats
       let rttMs: number | null = null;
       let packetsLost: number | null = null;
       let sourceFps: number | null = null;
+      const layers: ProducerLayerStats[] = [];
+      let largest = -1;
       report.forEach((stat: any) => {
         if (stat.type === "outbound-rtp" && stat.kind === "video") {
-          framesSent = stat.framesSent ?? framesSent;
-          frameWidth = stat.frameWidth ?? frameWidth;
-          frameHeight = stat.frameHeight ?? frameHeight;
-          bytesSent = stat.bytesSent ?? bytesSent;
+          // One row per layer with simulcast: the upload is all of them, the rest the largest one's.
+          bytesSent += stat.bytesSent ?? 0;
           timestamp = stat.timestamp ?? timestamp;
+          if ((stat.frameHeight ?? 0) >= largest) {
+            largest = stat.frameHeight ?? 0;
+            framesSent = stat.framesSent ?? framesSent;
+            frameWidth = stat.frameWidth ?? frameWidth;
+            frameHeight = stat.frameHeight ?? frameHeight;
+          }
+          if (stat.rid) {
+            const prev = prevByRid.get(stat.rid);
+            const at = stat.timestamp ?? 0;
+            const bytes = stat.bytesSent ?? 0;
+            layers.push({
+              rid: stat.rid,
+              width: stat.frameWidth ?? null,
+              height: stat.frameHeight ?? null,
+              framesPerSecond: stat.framesPerSecond ?? null,
+              bitrateKbps: prev && at > prev.at ? Math.max(0, ((bytes - prev.bytes) * 8) / (at - prev.at)) : 0,
+            });
+            prevByRid.set(stat.rid, { bytes, at });
+          }
         } else if (stat.type === "remote-inbound-rtp" && stat.kind === "video") {
           packetsLost = stat.packetsLost ?? packetsLost;
           if (typeof stat.roundTripTime === "number") rttMs = stat.roundTripTime * 1000;
@@ -653,6 +725,7 @@ function startStatsPolling(pc: RTCPeerConnection, onStats: (stats: ProducerStats
           frameHeight,
           rttMs,
           packetsLost,
+          layers: layers.length > 0 ? layers.sort((a, b) => (a.height ?? 0) - (b.height ?? 0)) : null,
           battery: await getBatteryInfo(),
           network: getNetworkInfo(),
         });

@@ -72,9 +72,9 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 
 | Method | Path | Response |
 |---|---|---|
-| `POST` | `/v1/relay-sessions` | `201` with `{id, signalingUrl, produceUrl, videoCodec, protocolVersion, sourceType, capabilities, linksExpireAt?}`, plus `slots` and `produceUrls` when the body declares `{"slots": [...]}`. Optional `"linkExpiresIn"` for every link it returns. `429` past [the creation rate limit](#rate-limits). |
+| `POST` | `/v1/relay-sessions` | `201` with `{id, signalingUrl, produceUrl, videoCodec, protocolVersion, sourceType, capabilities, linksExpireAt?}`, plus `slots` and `produceUrls` when the body declares `{"slots": [...]}`. Optional `"linkExpiresIn"` for every link it returns. `"simulcast": true` takes the producer's video as up to three layers ([Simulcast](sources/producers.md#simulcast-smaller-layers-for-a-weak-uplink)); the response then has `"simulcast": true`; with more than one slot, `400`. `429` past [the creation rate limit](#rate-limits). |
 | `GET` | `/v1/relay-sessions` | Every running relay session, as `GET /v1/sessions`. |
-| `GET` | `/v1/relay-sessions/{id}` | As for browser sessions. |
+| `GET` | `/v1/relay-sessions/{id}` | As for browser sessions. A simulcast session adds `simulcast`: `{codec, chosen, layers, viewers, keyframeRequests}`. `layers`: `[{layer, rid, kbps, arriving, usable}]`, numbered as they arrived (`usable`: arriving steadily); `chosen`: the layer viewers get, `-1` before any. `viewers`: per viewer `{layer, target, switches, waitedMs, clockFallbacks, keyframeRequests}`. `keyframeRequests`: Glass's requests to the producer by reason (`viewer-forwarder`, `viewer-joined`, `viewer-pli`, `recording`, `session`, `held-back`), each `{asked, sent}`; at most two are sent a second. |
 | `DELETE` | `/v1/relay-sessions/{id}` | As for browser sessions. |
 | `GET` | `/v1/relay-sessions/{id}/signaling` | Viewer WebSocket. The `signalingUrl` is a watch link; the producer's link may watch too. |
 | `GET` | `/v1/relay-sessions/{id}/produce` | Producer WebSocket. Only with a link minted to produce (the `produceUrl`, or a grant with `producesMedia`) or the API token; any other link is `403`. `409` while the slot has another producer. |

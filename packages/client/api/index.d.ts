@@ -165,6 +165,11 @@ interface ProducerStats {
     rttMs: number | null;
     /** From remote-inbound-rtp; null when the browser doesn't report it (0 is a real value). */
     packetsLost: number | null;
+    /**
+     * With simulcast, each layer the browser sends, smallest first; null with one encoding. The
+     * fields above then describe the largest layer, and uploadBitrateKbps all of them together.
+     */
+    layers: ProducerLayerStats[] | null;
     /** Battery Status API, where the browser has it. */
     battery: {
         level: number;
@@ -176,6 +181,13 @@ interface ProducerStats {
         effectiveType: string | null;
         downlinkMbps: number | null;
     } | null;
+}
+interface ProducerLayerStats {
+    rid: string;
+    width: number | null;
+    height: number | null;
+    framesPerSecond: number | null;
+    bitrateKbps: number;
 }
 interface GlassProducerOptions {
     /** What to send: its first video track, and its first audio track if it has one. The caller owns it. */
@@ -196,8 +208,23 @@ interface GlassProducerOptions {
     produceUrl?: string;
     /** ICE servers for this producer's own peer connection. Default: a public STUN server. */
     iceServers?: RTCIceServer[];
-    /** Cap on the video sender's bitrate in kbps (default 1000; 0 = uncapped). Keep it below the uplink's capacity. */
+    /**
+     * Cap on the video sender's bitrate in kbps (default 1000; 0 = uncapped). Keep it below the uplink's capacity.
+     * With simulcast it caps the full-size layer only: the smaller layers add their own (about 150 and 350
+     * kbit/s at 720p), so the upload is the cap plus those. A higher cap sharpens the full layer on a good
+     * link but makes the browser's simulcast fragile on a weak one: in Chrome, with the uplink squeezed, a
+     * cap of 1500 lost every layer at 500 kbit/s of uplink and 2000 at 900, while the default 1000 held at both.
+     */
     maxBitrateKbps?: number;
+    /**
+     * Send the video as several layers of the same picture (simulcast), so Glass can send viewers a smaller
+     * one while the full one is not arriving steadily (every viewer of a session gets the same layer):
+     * three (quarter, half and full size) for a camera 540 high or more, two (half and full)
+     * for one 360 high or more, and one below that. Off by default: it costs the device about a quarter more
+     * upload and an encoder per layer. The session must be a simulcast one; when this producer creates the
+     * session, it asks for one.
+     */
+    simulcast?: boolean;
     /** Chromium's starting-bitrate hint in kbps (default min(500, cap)). Other browsers ignore it. */
     startBitrateKbps?: number;
     /** Re-establish the connection after a drop (default true). */
@@ -413,6 +440,7 @@ export {
     LINK_EXPIRED_MESSAGE,
     LINK_REVOKED_MESSAGE,
     type NavigationState,
+    type ProducerLayerStats,
     type ProducerSession,
     type ProducerState,
     type ProducerStats,

@@ -546,8 +546,11 @@ export function mountGlassViewer(
       debounceTimer = null;
       const { width, height } = computeViewport(); // settled measurement
       if (!significantChange(width, height)) return;
+      // Recorded only when sent: a size measured before the input channel is
+      // open stays unsent, so the next measurement sends it.
+      if (!client.isConnected()) return;
       lastSent = { width, height };
-      if (client.isConnected()) client.setViewport(width, height);
+      client.setViewport(width, height);
     }, VIEWPORT_DEBOUNCE_MS);
   };
 
@@ -609,7 +612,10 @@ export function mountGlassViewer(
   // CSS px in that instant, then ~384 (confirmed correct) moments later -
   // every measurement API agreed with itself at each instant, just
   // disagreed between instants. Correcting that without breaking the
-  // ordering above is the ResizeObserver's job below, not this function's.
+  // ordering above is the ResizeObserver's job, and, for a first reading
+  // that is wrong when the stage never resizes afterwards, a settled
+  // re-measure scheduled here: one more message, sent only if the size has
+  // really changed.
   const declareViewport = () => {
     const { width, height } = computeViewport();
     client.sendInitialViewport(
@@ -620,9 +626,16 @@ export function mountGlassViewer(
       isMobile ? getUserAgentClientHints() : undefined
     );
     lastSent = { width, height };
+    scheduleViewport();
   };
   const offConnected = client.on("connected", declareViewport);
-  if (client.isConnected()) declareViewport();
+  // Declared at mount whatever the connection's state. The declaration goes
+  // over the signaling socket and needs no input channel: gating it on
+  // isConnected(), which waits for the input channel too, lost it whenever
+  // the viewer mounted between "connected" and that channel's opening. If
+  // signaling isn't open yet, the client drops it, and "connected" declares
+  // again.
+  declareViewport();
 
   return {
     video,
