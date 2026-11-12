@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GlassProducer, type ProducerState } from "./producer";
+import { GlassProducer, sendEncodings, type ProducerState } from "./producer";
 
 // GlassProducer's connection lifecycle against fake WebSocket and
 // RTCPeerConnection objects the test drives by hand. A producer must resume the same session after a drop, and only replace it
@@ -64,9 +64,19 @@ class FakePeerConnection {
   addEventListener(type: string, fn: (e: any) => void) {
     (this.listeners[type] ??= []).push(fn);
   }
-  addTransceiver() {
+  transceiverInits: any[] = [];
+  // What the sender's parameters were last set to, as the browser would hold them.
+  senderParams: any = { encodings: [{}] };
+  addTransceiver(_track: unknown, init?: any) {
+    this.transceiverInits.push(init);
+    if (init?.sendEncodings) this.senderParams = { encodings: init.sendEncodings.map((e: any) => ({ ...e })) };
     return {
-      sender: { getParameters: () => ({ encodings: [{}] }), setParameters: async () => {} },
+      sender: {
+        getParameters: () => ({ encodings: this.senderParams.encodings.map((e: any) => ({ ...e })) }),
+        setParameters: async (p: any) => {
+          this.senderParams = p;
+        },
+      },
       setCodecPreferences: () => {},
     };
   }
@@ -400,6 +410,95 @@ describe("GlassProducer", () => {
     FakeWebSocket.instances[0]!.serverClose(4404);
     await expect(started).rejects.toThrow("session not found or expired");
     expect(p.state).toBe("error");
+  });
+
+  // Simulcast: the layers follow the camera's size, as the reference sender's table does,
+  // and the bitrate cap stays on the full-size layer.
+  it("picks its simulcast layers from the camera's height", () => {
+    const rids = (h: number | undefined) => sendEncodings(h, 1000).map((e) => e.rid ?? "-");
+    expect(rids(undefined)).toEqual(["-"]);
+    expect(rids(1080)).toEqual(["q", "h", "f"]);
+    expect(rids(720)).toEqual(["q", "h", "f"]);
+    expect(rids(540)).toEqual(["q", "h", "f"]);
+    expect(rids(480)).toEqual(["h", "f"]);
+    expect(rids(360)).toEqual(["h", "f"]);
+    expect(rids(240)).toEqual(["-"]);
+    const three = sendEncodings(720, 1500);
+    expect(three.map((e) => e.scaleResolutionDownBy)).toEqual([4, 2, 1]);
+    expect(three.map((e) => e.maxBitrate)).toEqual([undefined, undefined, 1500000]);
+    expect(sendEncodings(undefined, 1000)).toEqual([{ maxFramerate: 30, maxBitrate: 1000000 }]);
+    expect(sendEncodings(720, 0).every((e) => e.maxBitrate === undefined)).toBe(true);
+  });
+
+  function cameraStream(height: number) {
+    return {
+      getVideoTracks: () => [{ kind: "video", stop: vi.fn(), getSettings: () => ({ width: (height * 16) / 9, height }) }],
+      getAudioTracks: () => [],
+    } as unknown as MediaStream;
+  }
+
+  it("sends simulcast only when asked, and asks for a simulcast session", async () => {
+    const off = new GlassProducer({ stream: cameraStream(720), serverUrl: "https://glass" });
+    const started = off.start();
+    await connectAttempt(0);
+    await started;
+    expect(FakePeerConnection.instances[0]!.transceiverInits[0].sendEncodings).toHaveLength(1);
+    expect(fetchMock.mock.calls[0]![1].body).toBeUndefined();
+    off.stop();
+
+    const on = new GlassProducer({ stream: cameraStream(720), serverUrl: "https://glass", simulcast: true, maxBitrateKbps: 2500 });
+    const startedOn = on.start();
+    await connectAttempt(1);
+    await startedOn;
+    const pc = FakePeerConnection.instances[1]!;
+    expect(pc.transceiverInits[0].sendEncodings.map((e: any) => e.rid)).toEqual(["q", "h", "f"]);
+    expect(JSON.parse(fetchMock.mock.calls[1]![1].body)).toEqual({ simulcast: true });
+    // Once connected the cap is set again on the sender: on the full-size layer, the others untouched.
+    await vi.waitFor(() => expect(pc.senderParams.encodings[2].maxBitrate).toBe(2500000));
+    expect(pc.senderParams.encodings[0].maxBitrate).toBeUndefined();
+    expect(pc.senderParams.encodings[1].maxBitrate).toBeUndefined();
+    on.stop();
+  });
+
+  it("asks for simulcast alongside its slots", async () => {
+    const p = new GlassProducer({ stream: cameraStream(360), serverUrl: "https://glass", simulcast: true, slots: ["main"] });
+    const started = p.start();
+    await connectAttempt(0);
+    await started;
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toEqual({ slots: ["main"], simulcast: true });
+    expect(FakePeerConnection.instances[0]!.transceiverInits[0].sendEncodings.map((e: any) => e.rid)).toEqual(["h", "f"]);
+    p.stop();
+  });
+
+  // With simulcast the browser reports one outbound row per layer: the upload is all of them, the
+  // frame fields the largest one's, and each layer is listed, smallest first.
+  it("reports each simulcast layer and the upload of all of them", async () => {
+    const p = new GlassProducer({ stream: cameraStream(720), serverUrl: "https://glass", simulcast: true });
+    const stats: any[] = [];
+    p.on("stats", (s) => stats.push(s));
+    const started = p.start();
+    await connectAttempt(0);
+    await started;
+    let at = 1000;
+    const rows = (k: number) =>
+      new Map([
+        ["f", { type: "outbound-rtp", kind: "video", rid: "f", frameWidth: 1280, frameHeight: 720, framesPerSecond: 30, framesSent: 90 * k, bytesSent: 312500 * k, timestamp: at }],
+        ["q", { type: "outbound-rtp", kind: "video", rid: "q", frameWidth: 320, frameHeight: 180, framesPerSecond: 30, framesSent: 91 * k, bytesSent: 18750 * k, timestamp: at }],
+        ["h", { type: "outbound-rtp", kind: "video", rid: "h", frameWidth: 640, frameHeight: 360, framesPerSecond: 30, framesSent: 92 * k, bytesSent: 62500 * k, timestamp: at }],
+      ]);
+    const pc = FakePeerConnection.instances[0]!;
+    let k = 1;
+    pc.getStats = async () => rows(k) as any;
+    await vi.advanceTimersByTimeAsync(2100);
+    k = 2;
+    at = 2000;
+    await vi.advanceTimersByTimeAsync(2100);
+    const last = stats[stats.length - 1];
+    expect(last.layers.map((l: any) => l.rid)).toEqual(["q", "h", "f"]);
+    expect(last.layers.map((l: any) => Math.round(l.bitrateKbps))).toEqual([150, 500, 2500]);
+    expect(Math.round(last.uploadBitrateKbps)).toBe(3150);
+    expect([last.frameWidth, last.frameHeight, last.framesSent]).toEqual([1280, 720, 180]);
+    p.stop();
   });
 
   it("needs a server URL or a produce URL", () => {

@@ -60,6 +60,7 @@ export type {
   ProducerSession,
   ProducerState,
   ProducerStats,
+  ProducerLayerStats,
 } from "./producer";
 
 export type {
