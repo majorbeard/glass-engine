@@ -238,7 +238,7 @@ producer.stop();
 | `slot` | `"main"` | Which slot this producer fills. |
 | `iceServers` | Glass's | As for `GlassClient`. The producer waits up to 2 s for Glass's before it offers. |
 | `maxBitrateKbps` | `1000` | Video bitrate cap; keep it below the uplink. `0` is uncapped. With `simulcast`, it caps the full-size layer only; the smaller ones add about 500 kbps at 720p. |
-| `simulcast` | `false` | Send the video as several layers of the same picture, so viewers get a smaller one while the full one isn't arriving steadily. See [Simulcast](sources/producers.md#simulcast-smaller-layers-for-a-weak-uplink). |
+| `simulcast` | `false` | Send the video as several layers of the same picture, so viewers get a smaller one while the full one isn't arriving steadily. Measure it before using it: so far it has done worse than one stream on a phone with a thin uplink. See [Simulcast](sources/producers.md#simulcast-several-layers-of-the-same-picture). |
 | `startBitrateKbps` | `min(500, cap)` | Starting bitrate hint (Chromium only). |
 | `reconnect` | `true` | Recover from drops. |
 | `resumeWindowMs` | `45000` | How long to resume the same session before starting a new one (only when the producer created it). |

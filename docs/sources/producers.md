@@ -103,13 +103,22 @@ Viewers learn each slot's state from `slot_state` (`slotStateChanged` in the
 SDK): `live`, `stalled` (the producer dropped or stopped sending; the last frame
 stays on screen) or `empty`.
 
-### Simulcast: smaller layers for a weak uplink
+### Simulcast: several layers of the same picture
 
-A producer on a weak uplink (a phone on a mobile network) can send its
-video as up to three layers of the same picture, at different sizes.
-When the full-size layer stops arriving steadily, Glass sends viewers a
-smaller one instead of a frozen picture, and moves them back up when the
-full one is steady again. Create the session with:
+Simulcast is opt-in and off by default. A producer can send its video
+as up to three layers of the same picture, at different sizes. When the
+full-size layer stops arriving steadily, Glass sends viewers a smaller
+one, and moves them back up when the full one is steady again.
+
+**Measure it on your own producers before you turn it on.** So far it
+has cost more than it helped on a phone with a thin uplink. An Android
+phone (Chrome, hardware H.264) streamed better without it on the same
+links: frozen 0.2% of the time against 6% on Wi-Fi, and 0.3% against
+5% on mobile data, with a larger picture. Three layers need more uplink
+than one stream, and on a link near that edge the browser keeps turning
+its full layer on and off. Improving this is open work.
+
+Create the session with:
 
 ```json
 { "simulcast": true }
@@ -133,7 +142,7 @@ below).
   viewers are typically moved within 2 to 3 seconds; back up takes 4 to
   16 seconds after the uplink recovers, mostly the browser's own climb.
 - **It costs the device more upload** (about a quarter more at 720p) and an
-  encoder per layer. Keep it off for producers on good links.
+  encoder per layer.
 - **Keep the full layer's cap modest.** A browser's simulcast gets fragile
   on a weak uplink when the full layer may use a lot: in Chrome, with the
   uplink squeezed, a cap of 1500 kbps lost every layer at 500 kbps of
@@ -202,7 +211,7 @@ WebRTC receiver, and your sender must respond to it like one:
 - **NACK:** resend lost packets.
 - **PLI:** produce a keyframe when asked. Glass asks every 3 s, and also when a
   viewer joins or can't decode (at most once per 500 ms). A
-  [simulcast](#simulcast-smaller-layers-for-a-weak-uplink) session makes no
+  [simulcast](#simulcast-several-layers-of-the-same-picture) session makes no
   periodic request.
 - **Congestion feedback (TWCC):** adapt your bitrate to it. A sender without a
   congestion controller won't degrade gracefully when the network gets worse.
@@ -271,6 +280,6 @@ Viewers use `createGlassClient` with the relay session's `signalingUrl` (or a
 minted watch-only one). Relay sessions have no navigation or page input.
 Per-viewer quality is not available yet: every viewer receives the stream as
 the producer sends it, or, in a
-[simulcast](#simulcast-smaller-layers-for-a-weak-uplink) session, the same
+[simulcast](#simulcast-several-layers-of-the-same-picture) session, the same
 layer of it (see the Direction section of the
 [README](../../README.md#direction)).
