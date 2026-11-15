@@ -9,7 +9,7 @@ A source can be:
 | Source | What it is | Create it with |
 |---|---|---|
 | **Hosted browser** | A Chrome that Glass runs for you, on a display of its own. Viewers see it and drive it: mouse, keyboard, touch, scroll, navigation, clipboard, files, audio and microphone. | `POST /v1/sessions` |
-| **Relay producer** | Anything that can send WebRTC video: a phone camera, a desktop capture, a hardware encoder, your own app. Glass forwards its stream to viewers without decoding it. One session can hold several producers. | `POST /v1/relay-sessions` |
+| **Relay producer** | Anything that can send WebRTC video: a phone camera, a desktop capture, a hardware encoder, your own app. Glass forwards its stream to viewers without decoding it. One session can hold several producers, and with simulcast (opt-in) each viewer gets the layer its own link carries. | `POST /v1/relay-sessions` |
 | **Two-party call** | Two peers, each sending and receiving video and audio through Glass. | `POST /v1/calls` |
 
 Whatever the source, the session model is the same: a session has
@@ -172,9 +172,9 @@ their publishers when it starts:
 - **OpenH264:** OpenH264 Video Codec provided by Cisco Systems, Inc., from
   Cisco, under Cisco's binary licence (reproduced in the image at
   `/usr/share/doc/glass/licenses/openh264/BINARY_LICENSE.txt`). To leave it
-  out, set `GLASS_OPENH264_MODE=off` with `GLASS_VP8_SHIM_MODE=on` or
-  `GLASS_AV1_SHIM_MODE=on`; Glass then downloads nothing from Cisco and
-  encodes VP8 or AV1. See
+  out, set `GLASS_OPENH264_MODE=off` with `GLASS_VP8_SHIM_MODE=on` (AV1 may
+  be added, but VP8 is required); Glass then downloads nothing from Cisco and
+  encodes VP8, or AV1 for the sessions that ask for it. See
   [docs/configuration.md](docs/configuration.md#encoding).
 
 ## Built on
@@ -209,9 +209,6 @@ says where.
 
 What is being built next. None of it exists yet, and there are no dates.
 
-- **Per-viewer quality for relay streams.** Producers send several quality
-  layers (simulcast); Glass picks one per viewer from that viewer's own
-  bandwidth, so one slow viewer doesn't lower quality for everyone.
 - **Streams across several Glass nodes.** A node near a viewer pulls a stream
   from the node that owns it and serves it locally.
 - **Device agents.** Small apps that publish a computer's or phone's screen

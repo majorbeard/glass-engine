@@ -28,7 +28,9 @@ major version of everything on this page. It is currently **1**.
 ## HTTP API
 
 When `GLASS_API_TOKEN` is set, every `/v1/*` request needs
-`Authorization: Bearer <token>`, except the WebSocket, stats and file routes,
+`Authorization: Bearer <token>`, or `?token=<token>` for a client that can't
+set a header. `GLASS_API_TOKEN` may list several tokens, comma-separated, to
+rotate one without downtime ([deployment.md](deployment.md#authentication)). The exceptions are the WebSocket, stats and file routes,
 which accept the per-session `?token=` from the URLs Glass returns, and
 `POST /v1/tickets`, which takes a [session ticket](#session-tickets) instead.
 `/healthz` and `/readyz` are always open.
@@ -50,7 +52,7 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 | `POST` | `/v1/tickets` | Redeem a [session ticket](#session-tickets): `{"ticket": "…"}`. Creates one browser session; `201` as `POST /v1/sessions`, plus `watchUrls`. Takes no API token. Exists only when `GLASS_TICKET_SECRET` is set. `429` past [the ticket rate limit](#rate-limits), which every attempt counts toward. `503` (`unavailable`) when Glass can't read or write its record of used tickets (see the `jti` claim). |
 | `GET` | `/v1/sessions` | Every running browser session, oldest first: `{"sessions": [...]}`, each as `GET /v1/sessions/{id}` plus `connections` (how many are connected now). Never a link. API token only. |
 | `GET` | `/v1/sessions/{id}` | `{id, state: "pending"\|"active"\|"closed", createdAt, connectedAt?, codec?, inputMode?}`, or `404`. |
-| `DELETE` | `/v1/sessions/{id}` | `204`, or `404`. |
+| `DELETE` | `/v1/sessions/{id}` | `204`, or `404`. With `?connectionId=<id>` it closes only that connection, and the session only if it was the last one; `@glass/client` sends this when its page unloads. |
 | `GET` | `/v1/sessions/{id}/signaling` | WebSocket upgrade. |
 | `POST` | `/v1/sessions/{id}/connections` | Mint a grant. Body: any of `consumesMedia`, `producesMedia`, `producesInput` (booleans), and `expiresIn` (seconds, `0` for never; see [link expiry](#link-expiry)). `201 {signalingUrl, connectionCapabilities, linkId, expiresAt?}`; `linkId` names the link for revoking it. `consumesInput` is reserved: `400`. |
 | `DELETE` | `/v1/sessions/{id}/connections/{linkId}` | Revoke one link: it admits nothing again, a reconnect included, and every connection that joined with it is closed with `4403`. The session goes on for everyone else. `204` (also when already revoked); `404` for an unknown session or link; `400` for the session's own link (close the session instead). API token only. `linkId` is the one the link was minted with, or the first 16 hex digits of the SHA-256 of the link's `token` (`glass session revoke <URL>` works it out). |
@@ -72,12 +74,12 @@ which accept the per-session `?token=` from the URLs Glass returns, and
 
 | Method | Path | Response |
 |---|---|---|
-| `POST` | `/v1/relay-sessions` | `201` with `{id, signalingUrl, produceUrl, videoCodec, protocolVersion, sourceType, capabilities, linksExpireAt?}`, plus `slots` and `produceUrls` when the body declares `{"slots": [...]}`. Optional `"linkExpiresIn"` for every link it returns. `"simulcast": true` takes the producer's video as up to three layers ([Simulcast](sources/producers.md#simulcast-several-layers-of-the-same-picture)); the response then has `"simulcast": true`; with more than one slot, `400`. `429` past [the creation rate limit](#rate-limits). |
+| `POST` | `/v1/relay-sessions` | `201` with `{id, signalingUrl, produceUrl, videoCodec, protocolVersion, sourceType, capabilities, linksExpireAt?}`, plus `slots` and `produceUrls` when the body declares more than one slot (`{"slots": [...]}`; one slot keeps the single-slot shape, and more than `GLASS_MAX_STREAM_SLOTS`, default 4, is `400`). Optional `"linkExpiresIn"` for every link it returns; `"record": true` starts recording, and the response then carries `recording`. `"simulcast": true` takes the producer's video as up to three layers ([Simulcast](sources/producers.md#simulcast-several-layers-of-the-same-picture)); the response then has `"simulcast": true`; with more than one slot, `400`. `429` past [the creation rate limit](#rate-limits). |
 | `GET` | `/v1/relay-sessions` | Every running relay session, as `GET /v1/sessions`. |
-| `GET` | `/v1/relay-sessions/{id}` | As for browser sessions. A simulcast session adds `simulcast`: `{codec, chosen, layers, viewers, keyframeRequests}`. `layers`: `[{layer, rid, kbps, arriving, usable}]`, numbered as they arrived (`usable`: arriving steadily); `chosen`: the layer viewers get, `-1` before any. `viewers`: per viewer `{layer, target, switches, waitedMs, clockFallbacks, keyframeRequests}`. `keyframeRequests`: Glass's requests to the producer by reason (`viewer-forwarder`, `viewer-joined`, `viewer-pli`, `recording`, `session`, `held-back`), each `{asked, sent}`; at most two are sent a second. |
+| `GET` | `/v1/relay-sessions/{id}` | As for browser sessions. A simulcast session adds `simulcast`: `{codec, chosen, layers, viewers, keyframeRequests, producerUplinkKbps?, layersWanted?}`. `layers`: `[{layer, rid, kbps, arriving, usable, lossPercent, steadyMs, width?, height?}]`, numbered as they arrived; `usable`: arriving steadily; `steadyMs`: how long it has arrived without a gap; `lossPercent`: packets missing over the last 2 s; `width` and `height` once the producer has reported them. `chosen`: the layer recordings take, the largest any viewer is on or moving to (with no viewer, the best one arriving steadily); `-1` before any. `viewers`: per viewer `{layer, target, switches, waitedMs, clockFallbacks, keyframeRequests, lateKeyframeStarts, probes, probesWon, estimateKbps?, congested?, ackedKbps?, layerBelow?, lastProbe?}`: `layer` is the one it gets now and `target` the one it is moving to, each chosen from that viewer's own link; `estimateKbps` its link's bandwidth estimate; `congested` whether its link shows congestion now, and `ackedKbps` what the link delivered; `layerBelow` is `running` or `not running`, whether the layer below its own is being sent, so that a move down lands at once; `probes` and `probesWon` count its tries at the next layer up, and `lastProbe` `{rateKbps, resultKbps, usable, congested}` is the latest. `keyframeRequests`: Glass's requests to the producer by reason (`viewer-forwarder`, `viewer-joined`, `viewer-pli`, `recording`, `session`, `held-back`), each `{asked, sent}`; at most two are sent a second. `producerUplinkKbps` and `layersWanted` appear once the producer sends `producer_report`: its own estimate of its uplink, and the layers Glass last asked it to send. More fields may be added; treat unknown ones as additions. |
 | `DELETE` | `/v1/relay-sessions/{id}` | As for browser sessions. |
 | `GET` | `/v1/relay-sessions/{id}/signaling` | Viewer WebSocket. The `signalingUrl` is a watch link; the producer's link may watch too. |
-| `GET` | `/v1/relay-sessions/{id}/produce` | Producer WebSocket. Only with a link minted to produce (the `produceUrl`, or a grant with `producesMedia`) or the API token; any other link is `403`. `409` while the slot has another producer. |
+| `GET` | `/v1/relay-sessions/{id}/produce` | Producer WebSocket (messages in [sources/producers.md](sources/producers.md#connecting)). Only with a link minted to produce (the `produceUrl`, or a grant with `producesMedia`) or the API token; any other link is `403`. `409` while the slot has another producer. |
 | `POST` | `/v1/relay-sessions/{id}/connections` | Mint a grant; the response has `produceUrl` only when `producesMedia` was requested. `expiresIn` as for browser sessions. A non-empty `slots` field is reserved: `400`. |
 | `DELETE` | `/v1/relay-sessions/{id}/connections/{linkId}` | Revoke one link, as for browser sessions: the `signalingUrl` (a watch link), a producer's link, or one minted later. |
 | `GET` | `/v1/relay-sessions/{id}/stats/stream` | Server-Sent Events. The API token only. |
@@ -238,13 +240,14 @@ the code. A body may carry more fields beside these two (`floor_taken`'s
 | `disk_low` | 507 | Under 512 MB free where recordings are kept. |
 | `at_capacity`, `hard_cap_reached`, `shutting_down`, `unavailable` | 503 | No session slot; no hardware headroom (the message names the CPU, memory, the GPU or its encoder); the runtime is stopping; not available on this session now, or tickets unavailable. |
 | `source_failed` | (signaling only) | The session's browser stopped; the session has ended. Sent in the signaling `error` message, never by an HTTP route. |
+| `session_not_resumable` | (signaling only) | A reconnect found a session that cannot resume; the session has ended. Sent in the signaling `error` message. |
 
 ### WebSocket close codes
 
 | Code | Sent by | Meaning |
 |---|---|---|
 | `1000` | Client | Deliberate leave. The connection ends; no reconnect grace. |
-| `4001` | Glass | Relay producer sent no media. Held for grace; resume. |
+| `4001` | Glass | Relay producer sent no media for `GLASS_RELAY_STALL_CLOSE_MS` (10 s by default), or none within `GLASS_RELAY_FIRST_MEDIA_GRACE_MS` of connecting. Held for grace; resume. Its slot reads `stalled` to viewers from `GLASS_RELAY_STALL_THRESHOLD_MS` (2 s). |
 | `4401` | Glass | The link has expired: it admits no new connection ([link expiry](#link-expiry)). Don't retry; get a new link. |
 | `4403` | Glass | The link was revoked: this connection is closed, and the link admits nothing again. Don't retry; get a new link. |
 | `4404` | Glass | The session doesn't exist (never created, closed or expired). Don't retry. |
@@ -351,7 +354,7 @@ then **the offer**; the client answers.
 | `playback` | `playing: boolean`, `positionMs`, `durationMs`, `ended: boolean` | Playback sessions only: on connect, on every change, and once a second while playing. `@glass/client` fires it as `playback` (`playbackState()`). |
 | `timeline` | `event: {t, type, ...}` | Playback sessions only: one event of the recording's timeline, as playback passes its time. `@glass/client` fires it as `timeline`. |
 | `clock_probe` | `id` | Clock calibration before the DataChannel opens. Reply `clock_probe_reply`. |
-| `error` | `code`, `error` | The source failed for good (`code` is `source_failed`; `error` is a sentence for people). Glass closes the socket next with `1011`; don't reconnect. |
+| `error` | `error`, `code?` | A message from Glass; `error` is a sentence for people. Only two codes end the session: `source_failed` (the browser stopped for good; Glass closes the socket next with `1011`) and `session_not_resumable` (a reconnect found a session that cannot resume). After either, don't reconnect. Any other `error` leaves the connection and its reconnect as they are. A failed connection sends no `error`: Glass closes the socket, holds the session for the reconnect grace, and the client reconnects. Before v0.1.118, Glass also sent a code-less `error` there and for a `navigate` the source can't do, and `@glass/client` took every `error` as final. |
 
 ### Client → Glass
 
@@ -359,8 +362,8 @@ then **the offer**; the client answers.
 |---|---|---|
 | `answer` | `sdp` | Answer to the offer. |
 | `ice-candidate` | `candidate` | Trickled ICE. |
-| `initial_viewport` | `width`, `height`, `isMobile?`, `userAgent?` | Browser only, right after connect. `isMobile: true` turns on mobile emulation with the given user agent. |
-| `navigate` | `sdp` (holds the URL) | Browser only, owner only. Same as the DataChannel `navigate`; the field name is historical. |
+| `initial_viewport` | `width`, `height`, `isMobile?`, `userAgent?`, `userAgentData?` | Browser only, right after connect, from a connection with input (ignored from a watch-only one, since it resizes the shared page); it spends the `set_viewport` rate budget. `isMobile: true` turns on mobile emulation with the given user agent; `userAgentData` (`{brands: [{brand, version}], mobile, platform}`) sets the client hints that go with it. |
+| `navigate` | `sdp` (holds the URL) | Browser only, owner only. Same as the DataChannel `navigate`; the field name is historical. On a source that can't navigate it is reported as dropped input (`unsupported`). |
 | `request_input`, `release_input` | none | Ask for or give up control. |
 | `grant_input`, `revoke_input` | `connectionId` | Owner only. |
 | `mic_granted`, `mic_denied` | none | Answer to `MicAccessRequested`. |

@@ -26,7 +26,7 @@ const producer = new GlassProducer({
   maxBitrateKbps: 1000,  // keep below the uplink
 });
 producer.on("state", (state, detail) => console.log(state, detail));
-producer.on("stats", (s) => console.log(s.uploadBitrateKbps, s.frameWidth));
+producer.on("stats", (s) => console.log(s.uploadBitrateKbps, s.frameWidth, s.encoder));
 await producer.start();
 ```
 
@@ -100,23 +100,28 @@ The response then also has `slots` and `produceUrls`, one per slot;
   with audio gets `audio_not_supported_multi_slot`.
 
 Viewers learn each slot's state from `slot_state` (`slotStateChanged` in the
-SDK): `live`, `stalled` (the producer dropped or stopped sending; the last frame
-stays on screen) or `empty`.
+SDK): `live`, `stalled` or `empty`. A slot is `stalled` when its producer
+dropped, or has sent no media for 2 s (`GLASS_RELAY_STALL_THRESHOLD_MS`); the
+last frame stays on screen, and the slot is `live` again as soon as media
+arrives. A producer silent for 10 s (`GLASS_RELAY_STALL_CLOSE_MS`) is
+disconnected so that it reconnects (see [Disconnecting and
+reconnecting](#disconnecting-and-reconnecting)).
 
 ### Simulcast: several layers of the same picture
 
 Simulcast is opt-in and off by default. A producer can send its video
-as up to three layers of the same picture, at different sizes. When the
-full-size layer stops arriving steadily, Glass sends viewers a smaller
-one, and moves them back up when the full one is steady again.
+as up to three layers of the same picture, at different sizes, and Glass
+gives each viewer the layer its own link carries: a viewer on a slow link
+gets a smaller picture without lowering anyone else's.
 
-**Measure it on your own producers before you turn it on.** So far it
-has cost more than it helped on a phone with a thin uplink. An Android
-phone (Chrome, hardware H.264) streamed better without it on the same
-links: frozen 0.2% of the time against 6% on Wi-Fi, and 0.3% against
-5% on mobile data, with a larger picture. Three layers need more uplink
-than one stream, and on a link near that edge the browser keeps turning
-its full layer on and off. Improving this is open work.
+**Measure it on your own producers before you turn it on.** In v0.1.117,
+when every viewer got the same layer, it cost more than it helped on a
+phone with a thin uplink: an Android phone (Chrome, hardware H.264)
+streamed better without it on the same links, frozen 0.2% of the time
+against 6% on Wi-Fi, and 0.3% against 5% on mobile data. Since v0.1.118,
+each viewer has a layer of its own and the producer sends only the layers
+viewers need, which is what simulcast is for: viewers on different links.
+That has not been measured on phones yet.
 
 Create the session with:
 
@@ -132,15 +137,26 @@ below).
 
 - **One slot only.** A body with both `simulcast` and more than one slot
   gets `400`.
-- **Every viewer gets the same layer**: the best one arriving steadily.
-  A layer chosen per viewer, from each viewer's own link, is not
-  available yet.
-- **Glass moves viewers off a layer** that has sent nothing for half a
-  second, and onto one only after it has arrived steadily for three
-  seconds. Each move needs a keyframe of the new layer, so a viewer may
-  see a short freeze, usually under a second. When the full layer stops,
-  viewers are typically moved within 2 to 3 seconds; back up takes 4 to
-  16 seconds after the uplink recovers, mostly the browser's own climb.
+- **Each viewer gets its own layer**, from its own link. A viewer moves
+  down only while its link shows congestion, to a layer the link can
+  carry. It moves up once its bandwidth estimate has covered the next
+  layer with a quarter to spare for 3 s, and not within 10 s of a move
+  down; a viewer whose estimate falls short of the next layer is probed
+  toward it, so that the estimate can grow. Each move needs a keyframe of
+  the new layer, so a viewer may see a short freeze, usually under a
+  second.
+- **A layer counts once it arrives steadily**: Glass moves no one onto a
+  layer until it has arrived steadily for 3 s, and moves everyone off one
+  that has sent nothing for half a second.
+- **The producer sends only the layers viewers need**, when it sends
+  `producer_report` (`GlassProducer` does): the layers viewers are on, and
+  the one below each of them, so that a move down lands at once. A second
+  layer is asked for only once the producer's uplink has had room for
+  both for 5 s; a layer no viewer needs is turned off after 5 s.
+  `GlassProducer` turns off the layers Glass doesn't ask for, which saves
+  the device's upload and encoders. A producer that sends no report
+  sends every layer, as before.
+- **A recording takes the largest layer any viewer is on.**
 - **It costs the device more upload** (about a quarter more at 720p) and an
   encoder per layer.
 - **Keep the full layer's cap modest.** A browser's simulcast gets fragile
@@ -158,12 +174,14 @@ below).
   it grows the picture again, which can take minutes however much
   bandwidth there is. Viewers keep the smaller layers meanwhile. This is
   the browser's own behaviour. A producer that reconnects starts afresh at
-  full size.
+  full size; Glass doesn't disconnect a producer that keeps sending.
 
-`GET /v1/relay-sessions/{id}` reports what arrives, in a `simulcast`
-block: each layer's rate and whether it is arriving, the layer viewers
-are on, and how many keyframe requests Glass made (see
-[Protocol](../protocol.md)).
+`GET /v1/relay-sessions/{id}` reports what arrives and what each viewer
+gets, in a `simulcast` block: each layer's rate, loss and whether it is
+arriving; each viewer's layer, the layer it is moving to, its link's
+estimate and whether it is congested; the producer's own uplink estimate
+and the layers asked of it; and the keyframe requests Glass made (see
+[Protocol](../protocol.md#relay-sessions)).
 
 **Your own producer** sends one video track with several encodings, each
 with an `a=rid` in its offer (`a=simulcast:send`), as browsers do:
@@ -195,6 +213,9 @@ Open a WebSocket to the produce URL. **The producer offers first**:
 | ← Glass | `answer` | `sdp` |
 | ← Glass | `ice-candidate` | `candidate` |
 | ← Glass | `error` | `code`, `message` |
+| ← Glass | `recording` | `active`: whether the session is being recorded, after the `answer` and on each change |
+| → Glass | `producer_report` | Simulcast, optional: `uplinkKbps` (the browser's `availableOutgoingBitrate`), `layers: [{rid, active, width, height}]` |
+| ← Glass | `layers_wanted` | Simulcast, to a producer that reports: `rids`, the layers to send; turn the others off |
 
 Wait for the WebSocket's `open` event and for `ice_config` before sending
 the offer: `ice_config` carries the TURN credential for this connection
@@ -247,7 +268,9 @@ at the produce URL; the first producer is unaffected.
 |---|---|
 | You close with `1000` | Deliberate stop. The slot is freed at once. |
 | Any other ending | The slot is held for the reconnect grace (60 s by default). Resume on the **same** produce URL. |
-| Glass closes with `4001` | You sent no media for 2 s after starting, or none within 10 s of connecting. The slot is held; resume. |
+| Glass closes with `4001` | You sent no media for 10 s (`GLASS_RELAY_STALL_CLOSE_MS`), or none within 10 s of connecting (`GLASS_RELAY_FIRST_MEDIA_GRACE_MS`). The slot is held; resume. |
+| Glass closes with `4401` | The produce link has expired. Don't resume; get a new link. |
+| Glass closes with `4403` | The produce link was revoked. Don't resume; get a new link. |
 | Glass closes with `4404` | The session is gone. Don't resume. |
 
 A producer should reconnect on its own. `GlassProducer` does this:
@@ -263,8 +286,8 @@ A producer should reconnect on its own. `GlassProducer` does this:
    The session ID and every viewer's link stay valid.
 4. If resuming hasn't worked after about 45 s and you created the session,
    create a new one and tell your viewers the new link.
-5. Treat camera denied, `401`/`403` on session creation, and `codec_mismatch`
-   as fatal.
+5. Treat camera denied, `401`/`403` on session creation, `codec_mismatch`,
+   and a close with `4401` or `4403` as fatal.
 6. Retry at once, without waiting out the backoff, when the app returns to the
    foreground or the network comes back.
 
@@ -278,8 +301,6 @@ it. See [recording.md](../recording.md).
 
 Viewers use `createGlassClient` with the relay session's `signalingUrl` (or a
 minted watch-only one). Relay sessions have no navigation or page input.
-Per-viewer quality is not available yet: every viewer receives the stream as
-the producer sends it, or, in a
-[simulcast](#simulcast-several-layers-of-the-same-picture) session, the same
-layer of it (see the Direction section of the
-[README](../../README.md#direction)).
+Every viewer receives the stream as the producer sends it, or, in a
+[simulcast](#simulcast-several-layers-of-the-same-picture) session, the layer
+its own link carries.

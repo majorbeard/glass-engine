@@ -26,6 +26,8 @@ or `createGlassSession(baseUrl, apiToken, { inspect: true })`. The session's
 `capabilities.inspect` says whether its source can be inspected at all (the
 hosted browser can).
 
+- On a session created without `inspect`, every `/page` route answers `403`
+  with `"code": "inspect_off"`; with no page loaded yet, `409` (`no_page`).
 - Every `/page` route takes the **API token** only. A session's own URL, or a
   viewer's grant, never opens it: inspection is for your backend, not for the
   people watching.
@@ -98,8 +100,10 @@ POST /v1/sessions/{id}/page/query
 
 The snapshot's nodes that match a role, a name, or both (the name is a
 case-insensitive substring unless `"exact": true`), without their children.
-`scope` defaults to `page` here; `values` and `maxResults` (default 50) as
-above.
+`scope` defaults to `page` here, and `values` as above. `maxResults` caps
+the matches (50 by default, at most 500). The answer is
+`{"matches": [...], "scope", "truncated"}`: `matches` is never `null`, and
+`truncated` is set, as for a snapshot, when the tree it searched was cut short.
 
 ## Primitives
 

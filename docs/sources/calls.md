@@ -30,6 +30,13 @@ carries that peer's identity: it only works for its own peer, and only one
 connection holds it at a time. There is no unscoped URL for a call. A call
 nobody joins is closed after 10 minutes.
 
+The peer links stop admitting new connections after the server's link
+lifetime (24 h by default); a body `{"linkExpiresIn": <seconds>}` sets it
+for this call (`0` for never), and the response then carries
+`linksExpireAt`. A peer whose link has expired is closed with `4401` and
+can't rejoin with it. See
+[protocol.md](../protocol.md#link-expiry).
+
 `GET /v1/calls/{id}` reports its state; `DELETE /v1/calls/{id}` ends it.
 
 ## Joining
@@ -72,6 +79,8 @@ credential for this peer's connection when Glass mints them
 sends none; offer once the socket opens instead.
 
 - Send video in the call's `videoCodec`, and optionally one Opus audio track.
+  Glass doesn't check a peer's offer for it, as it does a relay producer's:
+  there is no `codec_mismatch` on a call, so make sure of the codec yourself.
 - A peer that joins first sees a silent, black remote track until the other
   peer arrives. No renegotiation is needed when it does.
 - Glass sends WebSocket pings; a peer must answer within 30 s or it is treated

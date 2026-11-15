@@ -16,6 +16,10 @@ import {
 } from "./index";
 import { DEFAULT_RECONNECT_DELAYS_MS, SESSION_NOT_FOUND_MESSAGE, SIGNALING_TIMEOUT_MS, PEER_TIMEOUT_MS, DISCONNECTED_GRACE_MS } from "./internal";
 
+// Signaling `error` codes after which the session cannot continue, so the
+// client closes instead of reconnecting (docs/protocol.md, "error").
+const SESSION_OVER_CODES = new Set(["source_failed", "session_not_resumable"]);
+
 // See GlassClient.connect.
 export async function connect(c: ClientCore): Promise<void> {
   c.userClosed = false;
@@ -130,8 +134,13 @@ export function establish(c: ClientCore): Promise<void> {
       try {
         const signal = JSON.parse(event.data);
         if (signal.type === "error") {
+          // Only a code that says the session is over ends it; any other
+          // error is a report, and the session (or its reconnect) goes on.
           const reason: string = signal.error || "server reported an error";
-          c.serverTerminalError = reason;
+          if (SESSION_OVER_CODES.has(signal.code)) {
+            c.sessionGone = reason;
+            c.serverTerminalError = reason;
+          }
           c.emit("error", reason);
           return;
         }

@@ -15,8 +15,15 @@ export interface ProducerHandle {
 }
 
 export interface StartProducerOptions {
-  /** Base HTTP(S) URL of the Glass server, e.g. "http://192.168.1.20:8080". */
-  serverUrl: string;
+  /** Base HTTP(S) URL of the Glass server, e.g. "http://192.168.1.20:8080". Not needed with produceUrl. */
+  serverUrl?: string;
+  /**
+   * A produce link for a session your backend created (its produceUrl): the phone then needs no API
+   * token, only this one session's link.
+   */
+  produceUrl?: string;
+  /** Send the camera as simulcast layers; see GlassProducerOptions.simulcast. */
+  simulcast?: boolean;
   /** GLASS_API_TOKEN, if the server requires one. */
   apiToken?: string;
   /** TURN server for this phone's own peer connection. Entered at runtime: it's credential material. */
@@ -34,6 +41,10 @@ export interface StartProducerOptions {
   onStats?: (stats: ProducerStats) => void;
 }
 
+// 720p where the camera has it: a phone's default for `video: true` is often 640x480, which gives simulcast
+// two layers instead of three.
+const VIDEO: MediaTrackConstraints = { width: { ideal: 1280 }, height: { ideal: 720 } };
+
 // Synchronous on purpose: the caller gets a working stop() before the camera prompt or any network
 // work starts, so Stop pressed during setup aborts it.
 export function startProducer(options: StartProducerOptions): ProducerHandle {
@@ -49,9 +60,9 @@ export function startProducer(options: StartProducerOptions): ProducerHandle {
       // getUserMedia rejects the whole call if any requested kind fails, so a missing or denied mic
       // falls back to video only instead of refusing to stream.
       try {
-        camera = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        camera = await navigator.mediaDevices.getUserMedia({ video: VIDEO, audio: true });
       } catch {
-        camera = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        camera = await navigator.mediaDevices.getUserMedia({ video: VIDEO, audio: false });
       }
       if (stopped) return releaseCamera();
       options.onLocalStream(camera);
@@ -67,7 +78,9 @@ export function startProducer(options: StartProducerOptions): ProducerHandle {
       producer = new GlassProducer({
         stream: camera,
         serverUrl: options.serverUrl,
+        produceUrl: options.produceUrl,
         apiToken: options.apiToken,
+        simulcast: options.simulcast,
         iceServers,
         maxBitrateKbps: options.maxBitrateKbps,
         startBitrateKbps: options.startBitrateKbps,

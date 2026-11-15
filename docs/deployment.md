@@ -165,10 +165,21 @@ On a host with an NVIDIA GPU, give the container the GPU and NVIDIA's
 capture and encoding libraries:
 
 ```sh
-docker run -d --name glass --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all   --restart unless-stopped --shm-size=2g -p 127.0.0.1:8080:8080 -p 50000:50000/udp   -v glass-cache:/home/glass/.cache/glass --env-file /etc/glass/env   ghcr.io/majorbeard/glass:<version>
+docker run -d --name glass \
+  --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all \
+  --restart unless-stopped \
+  --security-opt seccomp=/etc/glass/seccomp.json \
+  --security-opt no-new-privileges \
+  --cap-drop=ALL --cap-add=SYS_CHROOT \
+  --shm-size=2g \
+  -p 127.0.0.1:8080:8080 -p 50000:50000/udp \
+  -v glass-cache:/home/glass/.cache/glass \
+  --env-file /etc/glass/env \
+  ghcr.io/majorbeard/glass:<version>
 ```
 
-Nothing else is needed: with `GLASS_CAPTURE` unset, Glass picks the `nvidia`
+The seccomp profile and capabilities are the same as for any host (above);
+without them Glass refuses to start. Nothing else is needed for the GPU: with `GLASS_CAPTURE` unset, Glass picks the `nvidia`
 capture method, Chrome draws on the GPU, and the GPU encodes every session.
 `glass doctor` (`docker exec glass docker-entrypoint.sh doctor`) shows the
 method chosen and why any above it was refused. See
@@ -183,7 +194,7 @@ no token is set and it listens on anything other than loopback. The ways out:
 | Setting | When |
 |---|---|
 | `GLASS_API_TOKEN=<random>` | Always, for anything reachable from another machine. |
-| `GLASS_ADDR=127.0.0.1:8080` | Binary install, local use only. |
+| `GLASS_ADDR=127.0.0.1:8080` | Glass run outside Docker, local use only. In a container it makes Glass unreachable: Docker forwards ports to the container's own address. |
 | `-p 127.0.0.1:8080:8080` plus `GLASS_INSECURE_LOCAL_DEV=true` | Docker, local use only. Inside the container Glass must listen on all interfaces; the `-p` binding keeps it local. |
 
 `GLASS_API_TOKEN` and `GLASS_LICENSE_KEY` are unrelated secrets. Never use
@@ -308,7 +319,7 @@ GLASS_TURN=embedded
 ```
 
 Glass runs a TURN relay itself, on UDP and TCP 3478 (`GLASS_TURN_ADDR`), and,
-with Glass's own [TLS](#built-in), over TLS on 443 beside the API. Each
+with Glass's own [TLS](#tls), over TLS on 443 beside the API. Each
 client is handed its own credential on the signaling connection, as with a
 TURN server of your own (below), and up to three ways in:
 
@@ -567,7 +578,7 @@ it outlives an address change, and Firefox needs one to
   week for the same name. Glass warns at start, and `glass doctor` says so.
 - **Renewal is automatic.** A certificate for an address lasts about 6 days
   and is renewed with about 2 left; one for a name lasts longer. A failed try
-  is retried after a pause growing from 1 minute to 1 hour, and the valid
+  is retried after a pause growing from 2 minutes to 1 hour, and the valid
   certificate keeps serving meanwhile.
 - **Status.** `/readyz` returns `503` until the first certificate. `/readyz`
   and `/v1/info` (`security.tls`) give its state, name and expiry, the kind
@@ -679,7 +690,8 @@ rather than trusting your configuration:
 "build": {"version": "v0.1.95", "built": "2026-10-27", "ageDays": 3, "stale": false, "chrome": "156.0.8078.47"},
 "security": {"apiAuth": "on", "apiTokens": 1, "chromeSandbox": "on", "egressFilter": true,
              "tickets": true, "turnCredentials": "minted", "linkTTLHours": 24,
-             "rateLimits": {"createPerMinute": 120, "ticketPerMinute": 10}}
+             "rateLimits": {"createPerMinute": 120, "ticketPerMinute": 10},
+             "tls": "off: plain HTTP behind your proxy", "relay": "off"}
 ```
 
 - **`stale`** turns true when the image is more than 14 days old. A release
@@ -690,6 +702,11 @@ rather than trusting your configuration:
   `off: running as root` / `off: no usable sandbox` when
   `GLASS_ALLOW_NO_SANDBOX` let it run without one.
 - **`apiAuth`** is `on` with a token, otherwise why it is off.
+- **`turnCredentials`** is `embedded` (Glass's own relay), `minted` (a shared
+  secret), `static` (a fixed pair for Glass's own side) or `none`.
+- **`tls`** is Glass's own TLS: its certificate's state when on (see
+  [TLS](#tls)), else `off: plain HTTP behind your proxy`. **`relay`** is the
+  embedded relay's state, or `off`.
 - Everything is a state or a count: no token, secret or link.
 
 
@@ -821,6 +838,7 @@ docker logs glass 2>&1 | grep '\[Audit\]'
 | `producer.started`, `producer.stopped` | A relay producer, by `slot`. |
 | `control.granted`, `control.released`, `control.revoked` | Control of the page changed hands. |
 | `auth.refused`, `link.refused`, `ticket.refused` | A request with no or a wrong API token, a link that expired, was revoked or used, a ticket refused. |
+| `recording.started`, `recording.stopped`, `recording.played`, `recording.fetched`, `recording.deleted` | A recording began or ended (with why), was played back, downloaded or deleted. |
 | `auth.retiring-token` | A token you are retiring was used (at most hourly). |
 | `audit.suppressed` | More than 30 refusals of one kind in a minute: the rest are counted here. |
 
@@ -856,4 +874,8 @@ docker exec glass glass session get <id>
 docker exec glass glass session close <id>
 docker exec glass glass session revoke '<link URL>'   # end one link; its session goes on
 docker exec glass glass session revoke --relay <id> <link id>
+docker exec glass glass session create                # a browser session; prints the response, its link included
+docker exec glass glass version
 ```
+
+Flags go after the subcommand and before its arguments: `glass session get --addr https://glass.example.com <id>`.

@@ -24,8 +24,7 @@ takes the first that works on the host, checked at start):
 `glass doctor` and the start log show which method `auto` chose and why each
 one above it wasn't usable. A session falls back to the screencast by itself
 if its display can't start, or if its viewport outgrows the display
-(`GLASS_DISPLAY_MAX_VIEWPORT`, 2560x1440 by default; 2560x1600 at most with
-`nvidia`). Set `GLASS_CAPTURE=screencast` to keep the screencast for every
+(2560x1440; 2560x1600 at most with `nvidia`). Set `GLASS_CAPTURE=screencast` to keep the screencast for every
 session: it uses less memory per session (see [sizing.md](../sizing.md)) and
 the headless browser.
 
@@ -49,9 +48,13 @@ curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
   "sourceType": "browser",
   "capabilities": {
     "video": true, "navigation": true, "viewport": true, "clipboard": true,
-    "pauseResume": true, "mobileEmulation": true,
+    "pauseResume": true, "mobileEmulation": true, "inspect": true,
     "inputActions": ["back", "forward", "keydown", "keyup", "mousedown", "…"]
-  }
+  },
+  "contentHint": "detail",
+  "codec": "h264",
+  "inputMode": "floor",
+  "inspect": false
 }
 ```
 
@@ -64,6 +67,11 @@ Send `{"audioInput": true}` as the body to get a browser that can receive the
 viewer's microphone (see [Microphone](#microphone)), and `"contentHint":
 "detail"` or `"motion"` to choose what the session protects when bitrate or
 CPU is short: the size (text, interfaces) or the frame rate (video, games).
+The body also takes `codec` (`h264`, `vp8` or `av1`; one this host can't serve
+is `400`), `inputMode` (`floor` or `free`, see
+[concepts.md](../concepts.md#several-people-in-control)), `inspect`,
+`record` and `linkExpiresIn`; each is in
+[protocol.md](../protocol.md#browser-sessions).
 
 A session outlives its viewer's page: a reload or a closed tab holds it for
 the reconnect grace (60 s by default) with its page hidden, and the same
@@ -127,13 +135,13 @@ viewer can raise the on-screen keyboard when the user taps one.
 | Wheel | Horizontal and vertical, with modifiers, at the cursor position. On a display, in whole wheel steps, as a mouse wheel sends them. |
 | Keyboard | `key`, `code` and modifiers, as the viewer's browser reports them. On a display, a character is typed as the viewer typed it, whatever its keyboard layout. |
 | Touch | Up to 5 touch points, as real touch events. |
+| Gamepad | Mapped to keyboard and mouse input by the viewer (`gamepadMapping` option). |
 
 On a display the mouse, wheel and keyboard are the display's own input
 devices, so the page can't tell them from a local user's: Chrome scrolls a
 wheel step itself without waiting for the page, and modifier combinations
 such as Shift+wheel behave as they do locally. Touch, and all input on the
 screencast, go through Chrome's input events.
-| Gamepad | Mapped to keyboard and mouse input by the viewer (`gamepadMapping` option). |
 
 Input is accepted only from a connection that holds `producesInput`
 ([concepts.md](../concepts.md#owner-and-control-handoff)). With several
@@ -155,7 +163,11 @@ curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
 
 It accepts the same `type` and `data` as the DataChannel input messages in
 [protocol.md](../protocol.md#datachannel-input-client--glass) and answers
-`202`.
+`202`. It goes straight to the page, whoever has control, unless the body
+also has `"floor": true`: then it waits like one more person in control, up to
+`"wait"` ms (2000 by default, at most 10000) for whoever has the page to
+pause, and answers `409` (`floor_taken`) if they don't. `429` means too fast;
+a `navigate` to a refused address is `400` (`navigation_not_allowed`).
 
 ## Clipboard
 
@@ -172,7 +184,9 @@ When a page downloads a file, Glass saves it on the server and emits
 `downloadReady(filename, guid)`. Nothing lands on the viewer's device unless
 your app acts on it: show a prompt, and on the user's click open
 `client.downloadUrl(guid)`. A download nobody collects is deleted after
-10 minutes. At most 5 downloads per session can be in progress at once. A
+10 minutes. At most 5 downloads per session can be in progress or waiting
+to be collected at once; a sixth is refused until one is collected or
+expires. A
 PDF is downloaded too, not opened in Chrome's PDF viewer.
 
 ## Uploads

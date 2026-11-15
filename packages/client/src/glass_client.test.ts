@@ -89,14 +89,14 @@ describe("connect", () => {
     client.disconnect();
   });
 
-  it("rejects and closes on a signaling error message", async () => {
+  it("rejects and closes on a signaling error that ends the session", async () => {
     const client = new GlassClient({ signalingUrl: URL, reconnect: false });
     const closed = vi.fn();
     client.on("closed", closed);
     const done = client.connect();
     const ws = FakeWebSocket.last();
     ws.open();
-    ws.receive({ type: "error", error: "session ended: boom" });
+    ws.receive({ type: "error", code: "source_failed", error: "session ended: boom" });
     ws.drop(1000);
     await expect(done).rejects.toThrow();
     expect(closed).toHaveBeenCalledWith("session ended: boom");
@@ -345,6 +345,63 @@ describe("reconnect", () => {
     FakeWebSocket.last().drop(CLOSE_LINK_EXPIRED);
     await flush();
     expect(closed).toHaveBeenCalledWith(LINK_EXPIRED_MESSAGE);
+  });
+
+  // An `error` without a final code is a report, not the end of the
+  // session. The engine says "reconnecting" before it closes a connection
+  // whose transport failed, and holds the session for the reconnect.
+  it("reconnects after the engine reports a lost transport", async () => {
+    const { client, ws } = await connected({ reconnect: { maxAttempts: 3, delaysMs: [10] } });
+    const events: string[] = [];
+    client.on("error", (m: string) => events.push(`error ${m}`));
+    client.on("reconnecting", (n: number, max: number) => events.push(`reconnecting ${n}/${max}`));
+    client.on("closed", (r: string) => events.push(`closed ${r}`));
+    ws.receive({ type: "error", error: "connection lost (failed), reconnecting..." });
+    ws.drop(1006);
+    await flush();
+    expect(events).toEqual(["error connection lost (failed), reconnecting...", "reconnecting 1/3"]);
+    client.disconnect();
+  });
+
+  it("still reconnects after an earlier error that left the session running", async () => {
+    const { client, ws } = await connected({ reconnect: { maxAttempts: 3, delaysMs: [10] } });
+    const events: string[] = [];
+    client.on("reconnecting", (n: number, max: number) => events.push(`reconnecting ${n}/${max}`));
+    client.on("closed", (r: string) => events.push(`closed ${r}`));
+    ws.receive({ type: "error", error: "navigation not supported by this source" });
+    await flush();
+    ws.drop(1006);
+    await flush();
+    expect(events).toEqual(["reconnecting 1/3"]);
+    client.disconnect();
+  });
+
+  it("closes without retrying on an error whose code ends the session", async () => {
+    const { client, ws } = await connected({ reconnect: { maxAttempts: 5, delaysMs: [10] } });
+    const closed = vi.fn();
+    client.on("closed", closed);
+    const sockets = FakeWebSocket.instances.length;
+    ws.receive({ type: "error", code: "source_failed", error: "the browser stopped" });
+    ws.drop(1011);
+    await flush();
+    expect(closed).toHaveBeenCalledWith("the browser stopped");
+    expect(FakeWebSocket.instances).toHaveLength(sockets);
+  });
+
+  it("stops retrying when a reconnect attempt is told the session can't resume", async () => {
+    const { client, ws } = await connected({ reconnect: { maxAttempts: 5, delaysMs: [10] } });
+    const closed = vi.fn();
+    client.on("closed", closed);
+    ws.drop(1006);
+    const attempt = FakeWebSocket.last();
+    attempt.open();
+    attempt.receive({ type: "error", code: "session_not_resumable", error: "session cannot be resumed" });
+    attempt.drop(1006);
+    await flush();
+    const sockets = FakeWebSocket.instances.length;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(closed).toHaveBeenCalledWith("session cannot be resumed");
+    expect(FakeWebSocket.instances).toHaveLength(sockets);
   });
 
   it("closes without retrying when the link is revoked mid-session", async () => {

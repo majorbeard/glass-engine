@@ -28,7 +28,12 @@ interface GlassConnectionGrant {
     signalingUrl: string;
     connectionCapabilities: GlassConnectionCapabilities;
     produceUrl?: string;
+    linkId: string;
+    expiresAt?: string;
 }
+type GlassGrantRequest = Partial<GlassConnectionCapabilities> & {
+    expiresIn?: number;
+};
 interface GlassRosterEntry {
     connectionId: string;
     producesInput: boolean;
@@ -170,6 +175,10 @@ interface ProducerStats {
      * fields above then describe the largest layer, and uploadBitrateKbps all of them together.
      */
     layers: ProducerLayerStats[] | null;
+    /** The video encoder the browser reports (its encoderImplementation), null when it doesn't say. */
+    encoder: string | null;
+    /** Whether that encoder is a hardware one (the browser's powerEfficientEncoder), null when it doesn't say. */
+    hardwareEncoder: boolean | null;
     /** Battery Status API, where the browser has it. */
     battery: {
         level: number;
@@ -352,7 +361,7 @@ declare const SUPPORTED_PROTOCOL_VERSION = 1;
 declare function createGlassSession(baseUrl?: string, apiToken?: string, options?: boolean | GlassCreateSessionOptions): Promise<GlassSession>;
 declare function redeemGlassTicket(ticket: string, baseUrl?: string): Promise<GlassSession>;
 declare function deleteGlassSession(id: string, baseUrl?: string, apiToken?: string): void;
-declare function mintConnectionGrant(sessionId: string, capabilities: Partial<GlassConnectionCapabilities>, baseUrl?: string, apiToken?: string): Promise<GlassConnectionGrant>;
+declare function mintConnectionGrant(sessionId: string, capabilities: GlassGrantRequest, baseUrl?: string, apiToken?: string): Promise<GlassConnectionGrant>;
 declare class GlassClient extends Emitter<GlassClientEventMap> {
     constructor(options: GlassClientOptions);
     connect(): Promise<void>;
@@ -418,6 +427,7 @@ export {
     type GlassContentHint,
     type GlassCreateSessionOptions,
     type GlassDialog,
+    type GlassGrantRequest,
     type GlassInputDrop,
     type GlassInputDropCode,
     type GlassInputMode,
