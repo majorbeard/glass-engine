@@ -5,6 +5,7 @@
 import { Emitter } from "./emitter";
 import { withStartBitrate } from "./sdp";
 import { errorDetail } from "./internal";
+import { LayerControl } from "./layers";
 
 export type ProducerState =
   | "idle"
@@ -49,6 +50,10 @@ export interface ProducerStats {
    * fields above then describe the largest layer, and uploadBitrateKbps all of them together.
    */
   layers: ProducerLayerStats[] | null;
+  /** The video encoder the browser reports (its encoderImplementation), null when it doesn't say. */
+  encoder: string | null;
+  /** Whether that encoder is a hardware one (the browser's powerEfficientEncoder), null when it doesn't say. */
+  hardwareEncoder: boolean | null;
   /** Battery Status API, where the browser has it. */
   battery: { level: number; charging: boolean } | null;
   /** Network Information API, where the browser has it. */
@@ -395,9 +400,11 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
       resolveClosed({ fatal, detail, gone });
     };
 
+    let layerControl: LayerControl | undefined;
     const teardown = (resumable: boolean) => {
       if (disconnectTimer) clearTimeout(disconnectTimer);
       stopStats();
+      layerControl?.stop();
       try {
         if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
           ws.close(resumable ? CLOSE_RESUMABLE : CLOSE_STOPPED, resumable ? "producer reconnecting" : "producer stopped");
@@ -425,6 +432,10 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
       const videoTrack = stream.getVideoTracks()[0];
       if (!videoTrack) throw new FatalError("the stream has no video track");
       const encodings = sendEncodings(this.opts.simulcast ? videoTrack.getSettings?.().height : undefined, this.maxBitrateKbps);
+      // With simulcast, the full-size layer alone to begin with: Glass asks for a smaller one
+      // when a viewer needs it and the uplink has room (layers.ts).
+      const layered = encodings.length > 1;
+      if (layered) for (const e of encodings) e.active = !(e.scaleResolutionDownBy && e.scaleResolutionDownBy > 1);
       let transceiver: RTCRtpTransceiver;
       try {
         transceiver = pc.addTransceiver(videoTrack, { direction: "sendonly", streams: [stream], sendEncodings: encodings });
@@ -443,6 +454,11 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
       }
       const socket = new WebSocket(url);
       ws = socket;
+      if (layered) {
+        layerControl = new LayerControl(pc, transceiver.sender, videoTrack, (m) => {
+          if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(m));
+        });
+      }
 
       const wsOpen = new Promise<void>((resolve, reject) => {
         socket.addEventListener("open", () => resolve(), { once: true });
@@ -463,7 +479,12 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
         if (s === "connected") {
           if (disconnectTimer) clearTimeout(disconnectTimer);
           disconnectTimer = undefined;
-          void applyBitrateCap(transceiver.sender, this.maxBitrateKbps);
+          if (layerControl) {
+            void layerControl.run(() => applyBitrateCap(transceiver.sender, this.maxBitrateKbps));
+            layerControl.start();
+          } else {
+            void applyBitrateCap(transceiver.sender, this.maxBitrateKbps);
+          }
           onConnected();
         } else if (s === "failed" || s === "closed") {
           drop(false, `peer connection ${s}`);
@@ -473,7 +494,7 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
       });
 
       socket.addEventListener("message", (event) => {
-        let msg: { type: string; sdp?: string; candidate?: RTCIceCandidateInit; code?: string; message?: string; iceServers?: RTCIceServer[]; active?: boolean };
+        let msg: { type: string; sdp?: string; candidate?: RTCIceCandidateInit; code?: string; message?: string; iceServers?: RTCIceServer[]; active?: boolean; rids?: unknown };
         try {
           msg = JSON.parse(event.data);
         } catch {
@@ -487,6 +508,8 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
           void pc.addIceCandidate(msg.candidate);
         } else if (msg.type === "recording") {
           this.emit("recording", msg.active === true);
+        } else if (msg.type === "layers_wanted" && Array.isArray(msg.rids)) {
+          void layerControl?.apply(msg.rids.filter((r): r is string => typeof r === "string"));
         } else if (msg.type === "error") {
           // Retrying can't fix codec_mismatch; it can fix producer_not_connected and the rest.
           const detail = `${msg.code ?? "error"}${msg.message ? `: ${msg.message}` : ""}`;
@@ -676,6 +699,8 @@ function startStatsPolling(pc: RTCPeerConnection, onStats: (stats: ProducerStats
       let sourceFps: number | null = null;
       const layers: ProducerLayerStats[] = [];
       let largest = -1;
+      let encoder: string | null = null;
+      let hardwareEncoder: boolean | null = null;
       report.forEach((stat: any) => {
         if (stat.type === "outbound-rtp" && stat.kind === "video") {
           // One row per layer with simulcast: the upload is all of them, the rest the largest one's.
@@ -683,6 +708,8 @@ function startStatsPolling(pc: RTCPeerConnection, onStats: (stats: ProducerStats
           timestamp = stat.timestamp ?? timestamp;
           if ((stat.frameHeight ?? 0) >= largest) {
             largest = stat.frameHeight ?? 0;
+            encoder = stat.encoderImplementation ?? encoder;
+            if (typeof stat.powerEfficientEncoder === "boolean") hardwareEncoder = stat.powerEfficientEncoder;
             framesSent = stat.framesSent ?? framesSent;
             frameWidth = stat.frameWidth ?? frameWidth;
             frameHeight = stat.frameHeight ?? frameHeight;
@@ -726,6 +753,8 @@ function startStatsPolling(pc: RTCPeerConnection, onStats: (stats: ProducerStats
           rttMs,
           packetsLost,
           layers: layers.length > 0 ? layers.sort((a, b) => (a.height ?? 0) - (b.height ?? 0)) : null,
+          encoder,
+          hardwareEncoder,
           battery: await getBatteryInfo(),
           network: getNetworkInfo(),
         });

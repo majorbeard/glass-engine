@@ -28,6 +28,14 @@ deleteGlassSession(id, baseUrl?, apiToken?): void
 mintConnectionGrant(sessionId, capabilities, baseUrl?, apiToken?): Promise<GlassConnectionGrant>
 ```
 
+`mintConnectionGrant` mints another link to a browser session:
+`capabilities` is a `GlassGrantRequest`, the connection's capabilities
+(`{ consumesMedia: true }` for watch-only) and optionally `expiresIn`, how
+long the link admits new connections in seconds (`0` for never). The grant
+carries the link's `signalingUrl`, its `linkId` (to revoke it) and
+`expiresAt` when it expires. Relay-session links are minted with the HTTP
+API ([protocol.md](protocol.md#relay-sessions)).
+
 `createGlassSession`'s third argument is either `true` (the
 microphone-capable browser, as before) or an options object,
 `GlassCreateSessionOptions`: `{ audioInput?: boolean, contentHint?: "detail" | "motion", codec?: "h264" | "vp8" | "av1", inputMode?: "floor" | "free", inspect?: boolean, linkExpiresIn?: number }`.
@@ -94,7 +102,9 @@ await client.connect();
 | `reconnect` | `true` | `false`, or `{ maxAttempts: 8, delaysMs: [1000, 2000, 4000, 8000, 16000] }`. The first retry is immediate. |
 | `repairWait` | `true` | On a long, lossy path (a round trip over 200 ms with packets being resent), let the browser hold video for about one round trip so a resent packet arrives in time, instead of freezing for a round trip at every loss. Never engages on a short or loss-free path; while engaged, the picture runs that much further behind. `false` keeps the lowest delay on every path. See [performance.md](performance.md#long-lossy-paths). |
 | `statsIntervalMs` | off | Emit a `stats` event at this interval. |
-| `deleteSessionOnClose` | `false` | Delete the session when this client disconnects. Needs `sessionBaseUrl` and `apiToken`: development only. |
+| `deleteSessionOnClose` | `true` when `sessionId` is set, else `false` | Delete the session when this client disconnects. Needs `apiToken` (the delete is best effort, and fails without it): development only. |
+| `sessionBaseUrl` | the origin of `signalingUrl` | Where the session's HTTP API is, for that delete. |
+| `apiToken` | none | The API token, for that delete. Development only: never ship it to a browser. |
 
 ### Connection
 
@@ -109,8 +119,9 @@ await client.connect();
 | `videoTrack(stream)` | The media stream (video, plus audio when the session has it). |
 | `connected`, `disconnected` | Transport up or down. |
 | `reconnecting(attempt, maxAttempts)` | A retry is scheduled. |
-| `closed(reason)` | Final: the session ended, doesn't exist (`4404`), the link expired (`4401`, reason `LINK_EXPIRED_MESSAGE`), the link was revoked (`4403`, reason `LINK_REVOKED_MESSAGE`), or retries ran out. |
-| `error(message)` | A non-fatal error from Glass (for example, the encoder failed). |
+| `closed(reason)` | Final: the session ended (Glass reported its source failed, or that it can't resume), doesn't exist (`4404`), the link expired (`4401`, reason `LINK_EXPIRED_MESSAGE`), the link was revoked (`4403`, reason `LINK_REVOKED_MESSAGE`), or retries ran out. |
+| `error(message)` | A message from Glass. When it ends the session, `closed` follows with the same text; otherwise the connection, and any reconnect, go on. Before v0.1.118 every one was taken as the end of the session. |
+| `inputLatency(sample)` | One input's time from send to the picture showing it (`kind`, `ms`, `continuous` for a drag or scroll); `inputLatencyStats()` gives the median and 95th percentile so far. |
 | `stats(stats)` | RTT, throughput, jitter buffer, decoded and dropped frames. |
 
 ### A session's lifetime
@@ -238,14 +249,16 @@ producer.stop();
 | `slot` | `"main"` | Which slot this producer fills. |
 | `iceServers` | Glass's | As for `GlassClient`. The producer waits up to 2 s for Glass's before it offers. |
 | `maxBitrateKbps` | `1000` | Video bitrate cap; keep it below the uplink. `0` is uncapped. With `simulcast`, it caps the full-size layer only; the smaller ones add about 500 kbps at 720p. |
-| `simulcast` | `false` | Send the video as several layers of the same picture, so viewers get a smaller one while the full one isn't arriving steadily. Measure it before using it: so far it has done worse than one stream on a phone with a thin uplink. See [Simulcast](sources/producers.md#simulcast-several-layers-of-the-same-picture). |
+| `simulcast` | `false` | Send the video as several layers of the same picture, so each viewer gets the one its own link carries. The producer reports its uplink and layers to Glass about once a second and turns off the layers no viewer needs. Measure it before using it. See [Simulcast](sources/producers.md#simulcast-several-layers-of-the-same-picture). |
 | `startBitrateKbps` | `min(500, cap)` | Starting bitrate hint (Chromium only). |
 | `reconnect` | `true` | Recover from drops. |
 | `resumeWindowMs` | `45000` | How long to resume the same session before starting a new one (only when the producer created it). |
 
 `stats` reports source frame rate, upload bitrate, frames sent, resolution,
-RTT, packets lost, and battery and network information where the browser
-provides them. With `simulcast`, `layers` lists each layer the browser is
+RTT, packets lost, the video encoder the browser reports (`encoder`) and
+whether it is a hardware one (`hardwareEncoder`), and battery and network
+information where the browser provides them; each is `null` when the browser
+doesn't say. With `simulcast`, `layers` lists each layer the browser is
 sending (`ProducerLayerStats`: `rid`, size, frame rate and bitrate); the
 upload bitrate is their sum. The reconnect behavior is described in
 [sources/producers.md](sources/producers.md#disconnecting-and-reconnecting).

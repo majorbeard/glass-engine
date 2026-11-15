@@ -16,9 +16,10 @@ you URLs to connect to it:
 | Hosted browser | `POST /v1/sessions` | `signalingUrl` |
 | Relay | `POST /v1/relay-sessions` | `signalingUrl` for viewers, `produceUrl` (one per slot) for producers |
 | Call | `POST /v1/calls` | `peerAUrl`, `peerBUrl` |
+| Playback | `POST /v1/recordings/{id}/play` | `signalingUrl`, to watch a [recording](recording.md) |
 
 Every response also carries `protocolVersion`, `sourceType` (`"browser"`,
-`"relay"`, `"call"`) and, for browser and relay sessions, `capabilities`: what
+`"relay"`, `"call"`, `"playback"`) and, for browser and relay sessions, `capabilities`: what
 this source can do (video, navigation, viewport, clipboard, the input actions it
 accepts). A client reads `capabilities` instead of guessing from the source type.
 
@@ -203,7 +204,7 @@ the old one can't be resumed.
   viewers' bandwidth: when a viewer's path can't carry what's captured,
   frames are dropped before they're encoded, never after, so every encoded
   frame is sent to the viewer. Relay streams are forwarded as the producer sent
-  them.
+  them; with simulcast, each viewer gets the layer its own link carries.
 
 The wire-level detail is in [protocol.md](protocol.md), and the path media takes
 through the engine is in [architecture.md](architecture.md).

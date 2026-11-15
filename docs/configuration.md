@@ -28,6 +28,8 @@ change between releases.
 | `GLASS_INSECURE_LOCAL_DEV` | `false` | Allow no token on a non-loopback address. Local Docker development only. |
 | `GLASS_ALLOW_NO_SANDBOX` | `false` | Run Chrome without its sandbox where the sandbox cannot start (as root, or in a container without Glass's seccomp profile) instead of refusing to start. Removes a layer of defense against a hostile page. See [deployment.md](deployment.md#hardening). |
 | `GLASS_LICENSE_KEY` | unset (Free) | Your license key. Checked at startup and periodically; an unreachable license server is retried for about 30 s at startup, and a paid tier is kept for 7 days from its last successful check. `GET /v1/info` shows the tier in effect. |
+| `GLASS_LICENSE_REVALIDATE_INTERVAL_MS` | `3600000` (1 hour) | How often a paid tier is checked again. Negative turns the checks off. |
+| `GLASS_LICENSE_REVALIDATE_FAILURE_GRACE_MS` | 7 days | How long a paid tier is kept while the license server can't be reached, from its last successful check. |
 | `GLASS_LICENSE_CACHE_PATH` | `~/.cache/glass/license-cache.json` | File that keeps the last validated tier (never the key) across restarts. On a persistent volume (the image's `glass-cache` volume covers the default) it also survives re-creating the container. |
 
 ## Capacity
@@ -38,7 +40,10 @@ change between releases.
 | `GLASS_POOL_SIZE` | the session cap | Most browser processes. Lower it to cap browser sessions below the session cap. |
 | `GLASS_POOL_WARM_FLOOR` | `2` | Browsers started at boot and kept ready. `0` starts them on demand. |
 | `GLASS_HARD_CAP_CPU_THRESHOLD_PERCENT` | `85` | Host CPU percent above which new browser sessions are refused. `0` turns CPU admission off. See [sizing.md](sizing.md#admission-under-load). |
+| `GLASS_HARD_CAP_CPU_READMIT_PERCENT` | the threshold minus 10 | Host CPU percent below which admission resumes after it stopped. |
+| `GLASS_HARD_CAP_SAMPLE_INTERVAL_MS` | `3000` | How often host CPU is sampled for admission. |
 | `GLASS_HARD_CAP_SESSION_RESERVE_PERCENT` | one core | CPU each new session reserves until its own load shows. Lower it for light pages. |
+| `GLASS_HARD_CAP_RESERVE_WINDOW_MS` | `20000` | How long a new session's reservation takes to fade, as its own load starts to show. |
 | `GLASS_HARD_CAP_MAX_WAIT_MS` | `3000` | How long a new session waits for CPU headroom before `503`. |
 | `GLASS_MAX_VIEWERS_PER_SESSION` | `50` | Connections one session admits. |
 | `GLASS_MAX_STREAM_SLOTS` | `4` | Named slots one relay session may declare. |
@@ -51,7 +56,8 @@ change between releases.
 | `GLASS_RECONNECT_GRACE_SECONDS` | `60` | How long a dropped connection is held for its client to resume. |
 | `GLASS_PENDING_TTL_SECONDS` | `30` | How long a new browser session waits for its first connection. |
 | `GLASS_RELAY_PENDING_TTL_SECONDS` | `600` | The same, for relay and call sessions. |
-| `GLASS_RELAY_STALL_THRESHOLD_MS` | `2000` | A relay producer silent this long is `stalled`, then disconnected (close code 4001). |
+| `GLASS_RELAY_STALL_THRESHOLD_MS` | `2000` | A relay producer silent this long is `stalled`: its viewers are told the source paused. It is not disconnected for it. |
+| `GLASS_RELAY_STALL_CLOSE_MS` | `10000` | A relay producer silent this long is disconnected (close code 4001) so its client reconnects. Never shorter than the stall threshold. |
 | `GLASS_RELAY_FIRST_MEDIA_GRACE_MS` | `10000` | How long a new producer may take to send its first media. |
 | `GLASS_INPUT_FLOOR_IDLE_MS` | `100` | Input mode `floor`: how long the controller keeps the page after a pointer or touch event. See [concepts.md](concepts.md#several-people-in-control). |
 | `GLASS_INPUT_FLOOR_KEY_IDLE_MS` | `1000` | The same after a key or wheel event. |
@@ -65,6 +71,8 @@ change between releases.
 | `GLASS_WEBRTC_UDP_BUFFER_BYTES` | `16777216` | Read and write buffer asked for on each of those sockets. The host kernel caps it at `net.core.rmem_max` / `wmem_max`; Glass logs the size it got and warns under 5 MB. See [deployment.md](deployment.md#many-connections). |
 | `GLASS_WEBRTC_UDP_BATCH_SIZE` | `0` (off) | Packets a socket sends in one system call (`sendmmsg`, Linux). Off by default: measured, it cost a little loss and latency and gained nothing. Turn it on only if you measure a gain. |
 | `GLASS_WEBRTC_UDP_BATCH_INTERVAL_US` | `500` | With batching on, the longest a packet waits for its batch, in microseconds. |
+| `GLASS_BANDWIDTH_PROBING` | `true` | Probe for bandwidth at a session's start and while a stream sends less than its estimate allows, with a retransmission (RTX) stream. `false` turns it off; sessions then start at 1.5 Mbit/s. |
+| `GLASS_DELAY_DETECTOR` | `trendline` | Which detector judges congestion from packet delay: `trendline` or `kalman`. |
 | `GLASS_WEBRTC_NAT_1TO1_IPS` | discovered | Public address(es) to advertise, comma-separated. By default Glass discovers its public address through STUN at startup. See [deployment.md](deployment.md#public-address-and-nat). |
 | `GLASS_STUN_URLS` | Google public STUN | Comma-separated STUN URLs (`stun:` or `stuns:`). Glass refuses to start on one it can't parse, and `glass doctor` fails the check. |
 | `GLASS_TURN` | unset | `embedded`: Glass runs a TURN relay itself, on UDP and TCP 3478 and, with Glass's own TLS, over TLS on 443, relaying only to its own media port. Not with `GLASS_TURN_URLS`. See [deployment.md](deployment.md#turn). |
@@ -99,7 +107,6 @@ Glass's own HTTPS, in place of a proxy of your own. See
 | Variable | Default | Purpose |
 |---|---|---|
 | `GLASS_CAPTURE` | `auto` | How a session's picture is captured: `auto` (the first method that works on this host, checked at start), `nvidia`, `display-gpu`, `display` or `screencast`. See [sources/browser.md](sources/browser.md#how-the-picture-is-captured). |
-| `GLASS_DISPLAY_MAX_VIEWPORT` | `2560x1440` | The largest viewport a session's display holds (`WxH`); a larger one falls back to the screencast. Each display is made this size. |
 | `GLASS_CHROME_BIN` | found on `PATH`; in Docker `/usr/local/bin/chrome-headless-shell` | Chrome or `chrome-headless-shell` binary. In Docker, the two image paths (`chrome-headless-shell`, `chrome-full`) are downloaded from Google at start; any other path is used as it is and nothing is downloaded. Every capture method but `screencast` needs the full browser, so in Docker the headless shell is replaced by `chrome-full` for them. See [deployment.md](deployment.md#docker). |
 | `GLASS_EGRESS_FILTER` | `true` | Block browser connections to private networks. See [deployment.md](deployment.md#security-posture). |
 | `GLASS_AUDIO_MODE` | off | `on` streams browser audio. |
@@ -118,7 +125,6 @@ itself. See [recording.md](recording.md).
 | `GLASS_RECORDING_MAX_MB` | `2048` | A recording stops at this size. `0` is no limit. |
 | `GLASS_RECORDING_MAX_MINUTES` | `120` | A recording stops after this long. `0` is no limit. |
 | `GLASS_RECORDING_MAX_ACTIVE` | `4` | How many recordings may run at once. `0` is no limit. |
-| `GLASS_RECORDING_KEYFRAME_INTERVAL_MS` | `10000` | The shortest time between keyframes while a session records; longer on a slow link. |
 
 ## Encoding
 
@@ -127,10 +133,10 @@ itself. See [recording.md](recording.md).
 | `GLASS_DEFAULT_CODEC` | `vp8` with `GLASS_VP8_SHIM_MODE=on`, else `h264` | The video codec of a browser session whose request names none: `h264`, `vp8` or `av1`. It must be available, or Glass does not start. A session can ask for its own (`codec`, see [protocol.md](protocol.md)); `GET /v1/info` lists what this host can serve. |
 | `GLASS_VP8_SHIM_MODE` | off | `on` makes VP8 available to browser sessions, and the default codec when `GLASS_DEFAULT_CODEC` is not set. Relay producers and call peers send the default codec. |
 | `GLASS_AV1_SHIM_MODE` | off | `on` makes AV1 available to browser sessions: the sharpest picture at low bitrates, scrolled text above all, for about the CPU of H.264 on a modern host. Not every viewer decodes AV1 (Safari only with AV1 hardware). |
-| `GLASS_OPENH264_MODE` | on | `off` leaves out Cisco's OpenH264 (OpenH264 Video Codec provided by Cisco Systems, Inc.): nothing is downloaded from Cisco at start, and H.264 is not available. Another codec must be (`GLASS_VP8_SHIM_MODE=on` or `GLASS_AV1_SHIM_MODE=on`); GPU encoding is then unused (it encodes H.264). |
+| `GLASS_OPENH264_MODE` | on | `off` leaves out Cisco's OpenH264 (OpenH264 Video Codec provided by Cisco Systems, Inc.): nothing is downloaded from Cisco at start, and H.264 is not available. `GLASS_VP8_SHIM_MODE=on` must be set with it, or Glass does not start; AV1 may be added, but does not replace VP8 there. GPU encoding is then unused (it encodes H.264). |
 | `GLASS_NVENC_SHIM_MAX_SESSIONS` | every session with `nvidia` or `display-gpu`, else `0` | Browser sessions encoded on an NVIDIA GPU. The GPU capture methods encode on the GPU by themselves; with `screencast`, set it to encode there (`0` keeps encoding on the CPU). |
 | `GLASS_OPENH264_SHIM_BIN_PATH`, `GLASS_OPENH264_LIB_PATH` | set in Docker | The H.264 encoder. Required unless `GLASS_OPENH264_MODE=off`; there is no other fallback. |
-| `GLASS_VP8_SHIM_BIN_PATH`, `GLASS_AV1_SHIM_BIN_PATH` | set in Docker | The VP8 and AV1 encoders. |
+| `GLASS_VP8_SHIM_BIN_PATH`, `GLASS_AV1_SHIM_BIN_PATH`, `GLASS_NVENC_SHIM_BIN_PATH` | set in Docker | The VP8, AV1 and NVIDIA GPU encoders. |
 | `GLASS_CONTENT_HINT` | `detail` | What a browser session protects when bitrate or the encoder's CPU is short: `detail` keeps the size and lowers the frame rate (text, interfaces); `motion` keeps the frame rate and lowers the size (video, games). A session can set its own on creation (`contentHint`, see [protocol.md](protocol.md)). |
 | `GLASS_QUALITY_SCALER` | `false` | `true` also adapts the picture when the bitrate can't carry it; `GLASS_CONTENT_HINT` chooses how. |
 | `GLASS_QUALITY_SCALER_MIN_PERCENT` | `37` | Lowest resolution scale the quality scaler may choose, in percent. |
@@ -141,4 +147,13 @@ itself. See [recording.md](recording.md).
 |---|---|---|
 | `GLASS_VERBOSE_LOG` | `false` | Log per-event detail that is normally off. |
 | `GLASS_DEBUG_PPROF` | `false` | Serve Go profiling at `/debug/pprof/`, behind the API token. Keep it off on public hosts. |
-| `GLASS_TELEMETRY_ENABLED` | `false` | Send anonymous engine telemetry. Off unless you turn it on. |
+
+## Settings no longer used
+
+Left in an old environment file, these are ignored with a warning in the log:
+`GLASS_ENCODER_RATE_CONTROL`, `GLASS_FORCE_KEYFRAME_MAX_BACKOFF_MS`,
+`GLASS_FORCE_KEYFRAME_RECOVERY_WINDOW_MS`, `GLASS_MAX_CONCURRENT_SPAWNS`,
+`GLASS_SHED_RECOVERY_QP`, `GLASS_TIER_SWITCH_RECOVERY_MAX_BACKOFF_MS`,
+`GLASS_TIER_SWITCH_RECOVERY_MIN_MS` and `GLASS_TIER_SWITCH_RECOVERY_WINDOW_MS`.
+`GLASS_ENCODER_HW_ACCEL` is refused: Glass does not start while it is set. Remove it;
+GPU encoding is `GLASS_NVENC_SHIM_MAX_SESSIONS` and the GPU capture methods.

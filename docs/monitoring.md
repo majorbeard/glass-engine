@@ -51,7 +51,8 @@ scrape_configs:
 ```
 
 With TLS on in the engine itself, `GLASS_ADDR`'s port on the container's own
-loopback answers the same two routes, for `docker exec` and health checks.
+loopback answers `/healthz` and `/readyz`, and `/v1/info` and `/v1/metrics` with the
+API token, for `docker exec` and health checks.
 
 ## Is my server being attacked?
 
@@ -180,7 +181,7 @@ every one.
 | `net.accept-failed` | `kind` | The process couldn't accept a connection, as when it is out of descriptors |
 | `tls.handshake-failed` | `kind client` | `kind`: `closed`, `timeout`, `unknown-name`, `old-client`, `not-tls`, `client-refused`, `other` |
 | `tls.no-first-byte` | `client` | A TLS connection that sent nothing |
-| `http.plain-request`, `http.unknown-route`, `http.no-session` | `route` | Plain HTTP on the TLS port; a path that doesn't exist; a session that doesn't |
+| `http.plain-request`, `http.unknown-route`, `http.no-session` | `route client` | Plain HTTP on the TLS port; a path that doesn't exist; a session that doesn't |
 | `rate.limited` | `route client` | The API's rate limit |
 | `turn.auth-refused` | `reason method client` | A relay credential refused: `expired`, `malformed` or `wrong-key` |
 | `turn.quota-refused` | `limit client` | An allocation past a limit: `credential`, `client`, `total` |

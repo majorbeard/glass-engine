@@ -19,7 +19,7 @@ npm run api:update
 git diff api/
 ```
 
-Commit the updated files with the change. Every diff here is a
-user-facing change: flag it in the PR description as "glass-engine docs
-need an update" (see `CLAUDE.md`), and treat a removed or narrowed
-export or signature as breaking for anyone on the published package.
+Commit the updated files with the change. Every diff here changes what
+users of `@glass/client` see, so the client docs change with it; treat a
+removed or narrowed export or signature as breaking for anyone on the
+published package.

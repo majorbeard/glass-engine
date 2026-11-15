@@ -16,6 +16,25 @@ const VIEWER_URL_STORAGE_KEY = "glass-producer-viewer-url";
 // Cap on the upload bitrate (kbps). Blank = the producer's default (1000); 0 = uncapped. Set it below the
 // link's real uplink capacity - see GlassProducerOptions.maxBitrateKbps in @glass/client.
 const MAX_BITRATE_STORAGE_KEY = "glass-producer-max-bitrate-kbps";
+const SIMULCAST_STORAGE_KEY = "glass-producer-simulcast";
+
+// A produce link opened as ?produce=<url-encoded produceUrl> (a QR code from your backend, say) fills the
+// field below. It is taken out of the address bar at once and never stored: it is that session's credential.
+// The session a produce link is for, to show beside it (the link's own token is never shown).
+function linkSession(link: string): string | undefined {
+  return /\/relay-sessions\/([^/?#]+)\/produce/.exec(link)?.[1];
+}
+
+function produceLinkFromAddress(): string {
+  const params = new URLSearchParams(location.search);
+  const link = params.get("produce") ?? "";
+  if (link) {
+    params.delete("produce");
+    const rest = params.toString();
+    history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);
+  }
+  return link;
+}
 
 export function App() {
   const [serverUrl, setServerUrl] = useState(() => localStorage.getItem(STORAGE_KEY) ?? "");
@@ -25,6 +44,8 @@ export function App() {
   const [turnCredential, setTurnCredential] = useState(() => localStorage.getItem(TURN_CRED_STORAGE_KEY) ?? "");
   const [viewerUrl, setViewerUrl] = useState(() => localStorage.getItem(VIEWER_URL_STORAGE_KEY) ?? "");
   const [maxBitrate, setMaxBitrate] = useState(() => localStorage.getItem(MAX_BITRATE_STORAGE_KEY) ?? "1000");
+  const [produceUrl, setProduceUrl] = useState(produceLinkFromAddress);
+  const [simulcast, setSimulcast] = useState(() => localStorage.getItem(SIMULCAST_STORAGE_KEY) === "true");
   const [state, setState] = useState<ProducerState>("idle");
   const [detail, setDetail] = useState("");
   const [session, setSession] = useState<{ id: string; signalingUrl: string } | null>(null);
@@ -56,6 +77,9 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(MAX_BITRATE_STORAGE_KEY, maxBitrate);
   }, [maxBitrate]);
+  useEffect(() => {
+    localStorage.setItem(SIMULCAST_STORAGE_KEY, String(simulcast));
+  }, [simulcast]);
 
   // The link a hosted viewer needs to attach to this exact session
   // (examples/viewer-preact's ?attachSessionId=&attachSignalingUrl=
@@ -85,9 +109,9 @@ export function App() {
   useEffect(() => () => handleRef.current?.stop(), []);
 
   const start = async () => {
-    if (!serverUrl) {
+    if (!serverUrl && !produceUrl) {
       setState("error");
-      setDetail("enter a server URL first");
+      setDetail("enter a server URL or a produce link first");
       return;
     }
     setDetail("");
@@ -98,8 +122,11 @@ export function App() {
     // for why: assigning handleRef here, before anything async has run,
     // is what makes a Stop click during setup actually able to reach it.
     handleRef.current = startProducer({
-      serverUrl,
-      apiToken: apiToken || undefined,
+      // A produce link joins that session; otherwise the server URL (and token) create one.
+      serverUrl: produceUrl ? undefined : serverUrl,
+      produceUrl: produceUrl || undefined,
+      apiToken: produceUrl ? undefined : apiToken || undefined,
+      simulcast,
       turnServer: turnUrl
         ? { url: turnUrl, username: turnUsername, credential: turnCredential }
         : undefined,
@@ -175,6 +202,38 @@ export function App() {
         />
       </label>
 
+      <label style={{ display: "block", marginTop: "0.75rem" }}>
+        Produce link (optional: joins a session your backend created, instead of the server URL and token)
+        {produceUrl && (
+          <span style={{ opacity: 0.7 }}> — session {linkSession(produceUrl)?.slice(0, 8) ?? "not recognised"}</span>
+        )}
+        <input
+          type="text"
+          // Not restored by the browser: a link left from an earlier visit would replace the new one.
+          autoComplete="off"
+          name={`produce-${linkSession(produceUrl) ?? "none"}`}
+          value={produceUrl}
+          onInput={(e) => setProduceUrl((e.target as HTMLInputElement).value)}
+          placeholder="wss://glass.example.com/v1/relay-sessions/…/produce?token=…"
+          disabled={isActive}
+          style={{
+            display: "block",
+            width: "100%",
+            padding: "0.5rem",
+            marginTop: "0.25rem",
+            boxSizing: "border-box",
+          }}
+        />
+      </label>
+      <label style={{ display: "block", marginTop: "0.75rem" }}>
+        <input
+          type="checkbox"
+          checked={simulcast}
+          onChange={(e) => setSimulcast((e.target as HTMLInputElement).checked)}
+          disabled={isActive}
+        />{" "}
+        Simulcast (send smaller layers too; the session must be a simulcast one)
+      </label>
       <label style={{ display: "block", marginTop: "0.75rem" }}>
         Viewer URL (for the watch-link QR code, optional)
         <input
@@ -355,6 +414,16 @@ export function App() {
               : ""}
           </div>
           <div>upload: {stats.uploadBitrateKbps.toFixed(0)} kbps</div>
+          {stats.layers?.map((l) => (
+            <div key={l.rid}>
+              layer {l.rid}: {l.width && l.height ? `${l.width}x${l.height}` : "off"} {l.framesPerSecond?.toFixed(0) ?? "—"} fps{" "}
+              {l.bitrateKbps.toFixed(0)} kbps
+            </div>
+          ))}
+          <div>
+            encoder: {stats.encoder ?? "—"}
+            {stats.hardwareEncoder !== null ? (stats.hardwareEncoder ? " (hardware)" : " (software)") : ""}
+          </div>
           <div>rtt: {stats.rttMs !== null ? `${stats.rttMs.toFixed(0)}ms` : "—"}</div>
           <div>
             packets lost: {stats.packetsLost !== null ? stats.packetsLost : "—"}

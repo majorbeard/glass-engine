@@ -460,6 +460,59 @@ describe("GlassProducer", () => {
     on.stop();
   });
 
+  it("starts with the full layer alone, reports its layers, and turns them on and off as Glass asks", async () => {
+    const p = new GlassProducer({ stream: cameraStream(720), serverUrl: "https://glass", simulcast: true });
+    const started = p.start();
+    const ws = await connectAttempt(0);
+    await started;
+    const pc = FakePeerConnection.instances[0]!;
+    expect(pc.transceiverInits[0].sendEncodings.map((e: any) => e.active)).toEqual([false, false, true]);
+
+    // The report: the browser's own uplink estimate, and every layer, smallest first; a layer
+    // that is off has the size it would have.
+    pc.getStats = async () =>
+      new Map<string, any>([
+        ["pair", { type: "candidate-pair", nominated: true, state: "succeeded", availableOutgoingBitrate: 2_400_000 }],
+        ["f", { type: "outbound-rtp", kind: "video", rid: "f", frameWidth: 1280, frameHeight: 720 }],
+      ]) as any;
+    await vi.advanceTimersByTimeAsync(1100);
+    const report = ws.sent.filter((m) => m.type === "producer_report").pop();
+    expect(report).toEqual({
+      type: "producer_report",
+      uplinkKbps: 2400,
+      layers: [
+        { rid: "q", active: false, width: 320, height: 180 },
+        { rid: "h", active: false, width: 640, height: 360 },
+        { rid: "f", active: true, width: 1280, height: 720 },
+      ],
+    });
+
+    // Two layers on: the picture size is kept. One again: the sender's own preference.
+    ws.serverMessage({ type: "layers_wanted", rids: ["h", "f"] });
+    await vi.waitFor(() => expect(pc.senderParams.encodings.map((e: any) => e.active)).toEqual([false, true, true]));
+    expect(pc.senderParams.degradationPreference).toBe("maintain-resolution");
+    ws.serverMessage({ type: "layers_wanted", rids: ["h"] });
+    await vi.waitFor(() => expect(pc.senderParams.encodings.map((e: any) => e.active)).toEqual([false, true, false]));
+    expect(pc.senderParams.degradationPreference).toBe("maintain-framerate");
+    // Names that aren't its own change nothing.
+    ws.serverMessage({ type: "layers_wanted", rids: ["x"] });
+    ws.serverMessage({ type: "layers_wanted", rids: "f" });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(pc.senderParams.encodings.map((e: any) => e.active)).toEqual([false, true, false]);
+    p.stop();
+  });
+
+  it("sends one encoding without simulcast, and no reports", async () => {
+    const p = new GlassProducer({ stream: cameraStream(720), serverUrl: "https://glass" });
+    const started = p.start();
+    const ws = await connectAttempt(0);
+    await started;
+    await vi.advanceTimersByTimeAsync(2100);
+    expect(ws.sent.some((m) => m.type === "producer_report")).toBe(false);
+    expect(FakePeerConnection.instances[0]!.transceiverInits[0].sendEncodings[0].active).toBeUndefined();
+    p.stop();
+  });
+
   it("asks for simulcast alongside its slots", async () => {
     const p = new GlassProducer({ stream: cameraStream(360), serverUrl: "https://glass", simulcast: true, slots: ["main"] });
     const started = p.start();
@@ -482,8 +535,8 @@ describe("GlassProducer", () => {
     let at = 1000;
     const rows = (k: number) =>
       new Map([
-        ["f", { type: "outbound-rtp", kind: "video", rid: "f", frameWidth: 1280, frameHeight: 720, framesPerSecond: 30, framesSent: 90 * k, bytesSent: 312500 * k, timestamp: at }],
-        ["q", { type: "outbound-rtp", kind: "video", rid: "q", frameWidth: 320, frameHeight: 180, framesPerSecond: 30, framesSent: 91 * k, bytesSent: 18750 * k, timestamp: at }],
+        ["f", { type: "outbound-rtp", kind: "video", rid: "f", frameWidth: 1280, frameHeight: 720, framesPerSecond: 30, framesSent: 90 * k, bytesSent: 312500 * k, timestamp: at, encoderImplementation: "hw-encoder", powerEfficientEncoder: true }],
+        ["q", { type: "outbound-rtp", kind: "video", rid: "q", frameWidth: 320, frameHeight: 180, framesPerSecond: 30, framesSent: 91 * k, bytesSent: 18750 * k, timestamp: at, encoderImplementation: "sw-encoder", powerEfficientEncoder: false }],
         ["h", { type: "outbound-rtp", kind: "video", rid: "h", frameWidth: 640, frameHeight: 360, framesPerSecond: 30, framesSent: 92 * k, bytesSent: 62500 * k, timestamp: at }],
       ]);
     const pc = FakePeerConnection.instances[0]!;
@@ -498,6 +551,8 @@ describe("GlassProducer", () => {
     expect(last.layers.map((l: any) => Math.round(l.bitrateKbps))).toEqual([150, 500, 2500]);
     expect(Math.round(last.uploadBitrateKbps)).toBe(3150);
     expect([last.frameWidth, last.frameHeight, last.framesSent]).toEqual([1280, 720, 180]);
+    // The encoder is the largest layer's, as the frame fields are.
+    expect([last.encoder, last.hardwareEncoder]).toEqual(["hw-encoder", true]);
     p.stop();
   });
 

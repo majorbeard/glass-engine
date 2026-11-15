@@ -92,12 +92,15 @@ producer ──RTP──► reassemble frames (no decode) ──► shared track
   feedback, retransmission requests and keyframe requests, so the producer's
   own encoder adapts.
 - Frames are forwarded without decoding or re-encoding. CPU cost per stream is
-  small, and bandwidth dominates.
+  small, and bandwidth dominates. In a simulcast session the producer sends up
+  to three layers, and each viewer is forwarded the one its own link carries,
+  still without decoding.
 - When a viewer joins, Glass asks the producer for a keyframe, so the new
   viewer's picture starts within moments.
 - Each slot of a session is its own stream with its own producer. Glass
   tracks each slot's liveness (`live`, `stalled`, `empty`) from the media
-  actually arriving.
+  actually arriving: a producer silent for 2 s is `stalled` to its viewers, and
+  one silent for 10 s is disconnected so that it reconnects.
 
 ## Calls
 

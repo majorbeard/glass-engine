@@ -49,12 +49,21 @@ export interface GlassConnectionCapabilities {
 // /v1/sessions/{id}/connections - a fresh, capability-scoped signalingUrl
 // for an additional connection to an existing session (e.g. a watch-only
 // link). produceUrl is present only for a relay session's grant, never for a browser
-// session's.
+// session's. linkId names the link for revoking it (DELETE
+// /v1/sessions/{id}/connections/{linkId}); expiresAt is when it stops admitting new
+// connections, absent for a link that never expires.
 export interface GlassConnectionGrant {
   signalingUrl: string;
   connectionCapabilities: GlassConnectionCapabilities;
   produceUrl?: string;
+  linkId: string;
+  expiresAt?: string;
 }
+
+// What mintConnectionGrant asks for: the connection's capabilities, and
+// optionally how long the link admits new connections, in seconds (0 for
+// never; absent, the server's default lifetime). The HTTP body, as is.
+export type GlassGrantRequest = Partial<GlassConnectionCapabilities> & { expiresIn?: number };
 
 // One other connection in the session owner's roster - see
 // docs/protocol.md's Control handoff section (connection_joined/

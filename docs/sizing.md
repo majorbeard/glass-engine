@@ -112,7 +112,9 @@ Glass protects the host itself. A new browser session is admitted only while
 host CPU is below 85% (`GLASS_HARD_CAP_CPU_THRESHOLD_PERCENT`). Each new session
 reserves a core's worth of headroom until its own load shows, so a burst of
 requests can't oversubscribe the host. Refused sessions get `503` after a
-short wait. The check reads the container's CPU limit (`--cpus`), not the
+short wait. Once it has started refusing, Glass admits again only when CPU is
+back below 75% (`GLASS_HARD_CAP_CPU_READMIT_PERCENT`, the threshold minus 10), so
+admission doesn't flap at the line. The check reads the container's CPU limit (`--cpus`), not the
 host's core count.
 
 Turning it off (`GLASS_HARD_CAP_CPU_THRESHOLD_PERCENT=0`) admits sessions up
@@ -146,5 +148,6 @@ shows when a flood is drawing on it.
 - **`/tmp` must allow executables.** A `noexec` `/tmp` stops browsers from
   launching; with Docker's `--tmpfs`, use `--tmpfs /tmp:exec`.
 - **Cloud IP addresses:** see [sources/browser.md](sources/browser.md#limits-worth-knowing).
-- **`/readyz`** reports free disk and shared memory, and Glass logs a warning
-  when either runs low.
+- **`/readyz`** reports free disk where session data is kept and, when Chrome's
+  scratch space is on a filesystem of its own (usually `/dev/shm`), there too;
+  Glass logs a warning when either runs low.

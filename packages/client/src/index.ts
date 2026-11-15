@@ -29,6 +29,7 @@ import type {
   GlassCapabilities,
   GlassConnectionCapabilities,
   GlassConnectionGrant,
+  GlassGrantRequest,
   GlassInputDrop,
   GlassInputDropCode,
   GlassRosterEntry,
@@ -68,6 +69,7 @@ export type {
   GlassCapabilities,
   GlassConnectionCapabilities,
   GlassConnectionGrant,
+  GlassGrantRequest,
   GlassInputDrop,
   GlassInputDropCode,
   GlassRosterEntry,
@@ -437,13 +439,15 @@ export function deleteGlassSession(
 // requestInput() and the resolved license tier admits it (see
 // docs/protocol.md's "Control handoff" section) - minting a grant and
 // requesting input at runtime are two independent mechanisms.
+// `capabilities` may also set `expiresIn`, the link's lifetime in seconds (0 for
+// never); the result names the link (`linkId`) for revoking it.
 //
 // Same dev-convenience/trust-model caveat as createGlassSession: a real app
 // mints grants from its own backend (which already holds whatever auth this
 // call needs), not from a browser bundle carrying apiToken.
 export async function mintConnectionGrant(
   sessionId: string,
-  capabilities: Partial<GlassConnectionCapabilities>,
+  capabilities: GlassGrantRequest,
   baseUrl = "",
   apiToken?: string
 ): Promise<GlassConnectionGrant> {
