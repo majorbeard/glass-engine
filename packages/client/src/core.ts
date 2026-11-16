@@ -4,7 +4,7 @@
 
 import type { GlassClientOptions, GlassClientEventMap } from "./index";
 import { DEFAULT_RECONNECT_DELAYS_MS, DEFAULT_MAX_RECONNECT_ATTEMPTS, originOf } from "./internal";
-import type { GlassDialog, GlassPlaybackState, GlassRosterEntry, GlassSlotState } from "./types";
+import type { GlassConnectionQuality, GlassDialog, GlassPlaybackState, GlassRosterEntry, GlassSlotState } from "./types";
 import { InputLatencyTracker } from "./input_latency";
 import type { ReceiverCounters } from "./input_latency";
 import { EncodedStreamChecker } from "./encoded_stream_check";
@@ -135,6 +135,8 @@ export class ClientCore {
   lastReceiverCounters: ReceiverCounters | null = null;
   // Last slot_state snapshot; empty for non-relay sessions.
   _slotStates: Record<string, GlassSlotState> = {};
+  // Last connection_quality Glass sent; null before the first.
+  _connectionQuality: GlassConnectionQuality | null = null;
   // Coalescing state for locally withheld input; see drops.ts.
   localDrops = new Map<string, { reportedAt: number | null; pending: number }>();
   // Owns createEncodedStreams() against the current receiver - see

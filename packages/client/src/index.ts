@@ -34,6 +34,8 @@ import type {
   GlassInputDropCode,
   GlassRosterEntry,
   GlassSlotState,
+  GlassConnectionQuality,
+  GlassConnectionQualityLevel,
   GlassContentHint,
   GlassCreateSessionOptions,
   GlassVideoCodec,
@@ -74,6 +76,8 @@ export type {
   GlassInputDropCode,
   GlassRosterEntry,
   GlassSlotState,
+  GlassConnectionQuality,
+  GlassConnectionQualityLevel,
   GlassContentHint,
   GlassCreateSessionOptions,
   GlassVideoCodec,
@@ -267,6 +271,10 @@ export type GlassClientEventMap = {
   // paused" over a frozen frame while a producer is stalled. slotStates()
   // already reflects it.
   slotStateChanged: [slots: Record<string, GlassSlotState>];
+  // This connection's quality as Glass measures it (docs/protocol.md, connection_quality): once it is known after
+  // connecting, then on each change, at most every 5 s. Show "poor" ("Your connection is weak") and "lost"
+  // ("Connection lost, reconnecting"); "excellent" and "good" need nothing. connectionQuality() already reflects it.
+  connectionQuality: [quality: GlassConnectionQualityLevel, score: number];
   // Input was dropped: either this client withheld it (drop.local, when the
   // connection has no control or isn't the owner) or Glass discarded it
   // (rate limit, unsupported or invalid event). Coalesced: at most one
@@ -677,6 +685,11 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
   // clicks/keys/taps and for drags/scrolls.
   inputLatencyStats(): InputLatencyStats {
     return statsTrace.inputLatencyStats(this.core);
+  }
+
+  // This connection's last reported quality (see "connectionQuality"); null before the first report.
+  connectionQuality(): GlassConnectionQuality | null {
+    return this.core._connectionQuality ? { ...this.core._connectionQuality } : null;
   }
 
   // Each relay slot's last reported state (see "slotStateChanged"); empty
