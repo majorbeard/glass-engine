@@ -388,6 +388,11 @@ export function App() {
                   Recording
                 </div>
               )}
+              {isConnected && !session.sourceStalled && (session.linkQuality === "poor" || session.linkQuality === "lost") && (
+                <div class="absolute top-4 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-full bg-black/70 text-white text-sm shadow" role="status">
+                  {session.linkQuality === "poor" ? "Your connection is weak" : "Connection lost, reconnecting"}
+                </div>
+              )}
               {isConnected && session.sourceStalled && (
                 <div class="absolute top-4 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-full bg-black/70 text-white text-sm shadow">
                   Source paused, waiting for it to reconnect…

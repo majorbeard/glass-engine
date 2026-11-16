@@ -474,3 +474,19 @@ describe("disconnect", () => {
     expect(later).not.toHaveBeenCalled();
   });
 });
+
+describe("connection quality", () => {
+  it("reports Glass's connection_quality and keeps the last one", async () => {
+    const { client, ws } = await connected();
+    expect(client.connectionQuality()).toBeNull();
+    const got: Array<[string, number]> = [];
+    client.on("connectionQuality", (q: string, score: number) => got.push([q, score]));
+    ws.receive({ type: "connection_quality", quality: "poor", score: 30 });
+    ws.receive({ type: "connection_quality", quality: "weird", score: 1 }); // not a level: ignored
+    ws.receive({ type: "connection_quality", quality: "good", score: 58 });
+    await flush();
+    expect(got).toEqual([["poor", 30], ["good", 58]]);
+    expect(client.connectionQuality()).toEqual({ quality: "good", score: 58 });
+    client.disconnect();
+  });
+});

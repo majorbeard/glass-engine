@@ -113,6 +113,7 @@ await client.connect();
 | `connect()` | Connect; resolves once the WebRTC connection is up. |
 | `disconnect()` | Leave deliberately (close code 1000). Not resumed. |
 | `isConnected()`, `getVideoStream()`, `getStats()` | Current state. |
+| `connectionQuality()` | This connection's last reported quality, `{quality, score}` (`GlassConnectionQuality`), or `null` before the first report. |
 
 | Event | |
 |---|---|
@@ -123,6 +124,7 @@ await client.connect();
 | `error(message)` | A message from Glass. When it ends the session, `closed` follows with the same text; otherwise the connection, and any reconnect, go on. Before v0.1.118 every one was taken as the end of the session. |
 | `inputLatency(sample)` | One input's time from send to the picture showing it (`kind`, `ms`, `continuous` for a drag or scroll); `inputLatencyStats()` gives the median and 95th percentile so far. |
 | `stats(stats)` | RTT, throughput, jitter buffer, decoded and dropped frames. |
+| `connectionQuality(quality, score)` | This connection's quality as Glass measures it: `excellent`, `good`, `poor` (a weak link: a smaller picture, the odd freeze) or `lost` (no media arriving). Once it is known after connecting, then on each change, at most every 5 s. Show `poor` and `lost`; the reference viewer says "Your connection is weak" and "Connection lost, reconnecting". |
 
 ### A session's lifetime
 

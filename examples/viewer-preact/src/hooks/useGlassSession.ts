@@ -133,6 +133,8 @@ export function useGlassSession(notify: Notify) {
   // Relay watch links: the producer feeding the main slot dropped or went
   // silent (docs/protocol.md, slot_state). The frozen last frame stays up.
   const [sourceStalled, setSourceStalled] = useState(false);
+  // This connection's quality as Glass reports it: "poor" and "lost" are shown.
+  const [linkQuality, setLinkQuality] = useState<"excellent" | "good" | "poor" | "lost" | null>(null);
   // Whether the session is being recorded (the "recording" event): the
   // engine tells every viewer, and this viewer shows it.
   const [recording, setRecording] = useState(false);
@@ -269,6 +271,8 @@ export function useGlassSession(notify: Notify) {
       c.on("connected", () => {
         if (cancelled) return;
         autoRetryCountRef.current = 0;
+        // A new connection's quality is reported again once known: the last one's isn't kept.
+        setLinkQuality(null);
         setIsConnected(true);
         setError(null);
         // Attached sessions (watchers of a shared browser session, relay
@@ -324,6 +328,9 @@ export function useGlassSession(notify: Notify) {
       });
       c.on("slotStateChanged", (slots) => {
         if (!cancelled) setSourceStalled(slots.main === "stalled");
+      });
+      c.on("connectionQuality", (quality) => {
+        if (!cancelled) setLinkQuality(quality);
       });
       c.on("inputRequested", () => {
         if (cancelled) return;
@@ -527,6 +534,7 @@ export function useGlassSession(notify: Notify) {
     isOwner,
     connections,
     sourceStalled,
+    linkQuality,
     recording,
     playback,
     sessionEpoch,

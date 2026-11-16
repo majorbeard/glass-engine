@@ -82,6 +82,15 @@ export interface GlassRosterEntry {
 // media and may come back; "empty" means no producer.
 export type GlassSlotState = "empty" | "live" | "stalled";
 
+// This connection's quality as Glass measures it from the video it sends (docs/protocol.md, connection_quality):
+// "excellent" and "good" need nothing shown; "poor" is a weak link (a smaller picture, the odd freeze); "lost" is no
+// media arriving at all. score runs from 0 to 100.
+export type GlassConnectionQualityLevel = "excellent" | "good" | "poor" | "lost";
+export interface GlassConnectionQuality {
+  quality: GlassConnectionQualityLevel;
+  score: number;
+}
+
 // Why an input event was dropped (docs/protocol.md, InputDropped).
 export type GlassInputDropCode =
   | "rate_limited"

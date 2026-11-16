@@ -456,6 +456,15 @@ export async function handleSignal(c: ClientCore, signal: any): Promise<void> {
       case "clock_probe":
         answerClockProbe(c, "signaling", Number(signal.id));
         break;
+      case "connection_quality": {
+        const quality = signal.quality;
+        if (quality === "excellent" || quality === "good" || quality === "poor" || quality === "lost") {
+          const score = Number(signal.score);
+          c._connectionQuality = { quality, score: Number.isFinite(score) ? score : 0 };
+          c.emit("connectionQuality", quality, c._connectionQuality.score);
+        }
+        break;
+      }
       case "slot_state": {
         const fresh: Record<string, GlassSlotState> = {};
         const raw = (signal.slots ?? {}) as Record<string, unknown>;

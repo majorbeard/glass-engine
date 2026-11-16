@@ -40,6 +40,11 @@ interface GlassRosterEntry {
     isOwner: boolean;
 }
 type GlassSlotState = "empty" | "live" | "stalled";
+type GlassConnectionQualityLevel = "excellent" | "good" | "poor" | "lost";
+interface GlassConnectionQuality {
+    quality: GlassConnectionQualityLevel;
+    score: number;
+}
 type GlassInputDropCode = "rate_limited" | "not_authorized" | "owner_only" | "unsupported" | "invalid" | "floor_taken";
 interface GlassInputDrop {
     code: GlassInputDropCode | (string & {});
@@ -331,6 +336,7 @@ type GlassClientEventMap = {
     dialog: [dialog: GlassDialog];
     rosterChanged: [connections: GlassRosterEntry[]];
     slotStateChanged: [slots: Record<string, GlassSlotState>];
+    connectionQuality: [quality: GlassConnectionQualityLevel, score: number];
     inputDropped: [drop: GlassInputDrop];
     inputLatency: [sample: InputLatencySample];
     closed: [reason: string];
@@ -388,6 +394,7 @@ declare class GlassClient extends Emitter<GlassClientEventMap> {
     connections(): GlassRosterEntry[];
     notePresentedFrame(rtpTimestamp: number, expectedDisplayTime: number): void;
     inputLatencyStats(): InputLatencyStats;
+    connectionQuality(): GlassConnectionQuality | null;
     slotStates(): Record<string, GlassSlotState>;
     grantInput(connectionId: string): void;
     revokeInput(connectionId: string): void;
@@ -424,6 +431,8 @@ export {
     type GlassClientOptions,
     type GlassConnectionCapabilities,
     type GlassConnectionGrant,
+    type GlassConnectionQuality,
+    type GlassConnectionQualityLevel,
     type GlassContentHint,
     type GlassCreateSessionOptions,
     type GlassDialog,
