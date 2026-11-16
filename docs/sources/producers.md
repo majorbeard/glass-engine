@@ -150,9 +150,10 @@ below).
   that has sent nothing for half a second.
 - **The producer sends only the layers viewers need**, when it sends
   `producer_report` (`GlassProducer` does): the layers viewers are on, and
-  the one below each of them, so that a move down lands at once. A second
-  layer is asked for only once the producer's uplink has had room for
-  both for 5 s; a layer no viewer needs is turned off after 5 s.
+  the one below each of them, so that a move down lands at once, whatever
+  the producer's uplink: when it can't carry them all, the producer's own
+  encoder cuts its upper layers. A layer no viewer needs is turned off
+  after 5 s.
   `GlassProducer` turns off the layers Glass doesn't ask for, which saves
   the device's upload and encoders. A producer that sends no report
   sends every layer, as before.
