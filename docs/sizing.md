@@ -36,17 +36,24 @@ news site, the CPU split was **Chrome 81%, encoder 15%, the Glass engine 4%**.
 
 ## Relay streams and calls
 
-The engine forwards packets and doesn't decode them. Measured on 8 vCPU (c7g.2xlarge):
+The engine forwards packets and doesn't decode them. Measured on 4 vCPU (c6g.xlarge,
+arm64), each viewer receiving about 1 Mbit/s, producers sending three simulcast layers:
 
 | Resource | Cost |
 |---|---|
-| CPU | About **4–5 millicores per stream-to-viewer** at 30 fps and 1 Mbit/s: 800 simultaneous viewers of streams used about 3.5 of 8 cores. It grows linearly. Under heavy other load, expect up to about 15 millicores. |
+| CPU, per viewer | About **4–5 millicores per viewer** at 1 Mbit/s. 50 streams with 10 viewers each (500 viewers, 510 Mbit/s) used 2.7 of 4 cores. |
+| CPU, per stream | About **7–8 millicores per stream** on top, for the producer's stream coming in: 200 streams with one viewer each used 2.4 cores, about 12 millicores a stream with its viewer. Without simulcast, about 12% less. |
 | Memory | A few MB per stream-to-viewer, mostly the retransmission buffer. |
 | Network | Upload = stream bitrate × viewers. Ten viewers of a 2 Mbit/s stream need 20 Mbit/s out of the host. |
 
-In practice, **upload bandwidth is the limit** for relay deployments. A 1 Gbit/s
-link carries about 500 viewers at 2 Mbit/s, at a fraction of a small
-instance's CPU.
+So a host serving S streams to V viewers in all needs about 7.5 × S + 4.5 × V
+millicores at 1 Mbit/s a viewer: 100 streams to 1,000 viewers about 5.3 cores. It
+grows linearly.
+
+In practice, **upload bandwidth is usually the limit** for relay deployments. A
+1 Gbit/s link carries about 500 viewers at 2 Mbit/s. Check the CPU too: 500
+viewers at 1 Mbit/s took 2.7 of 4 cores; expect the cost per viewer to grow with its
+bitrate (only 1 Mbit/s was measured).
 
 ## Viewers through the built-in TURN relay
 
