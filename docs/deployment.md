@@ -376,6 +376,33 @@ nothing set. An address that appears after the relay starts isn't listened
 on until the container is recreated; the log says so once. To listen on one
 address only, set `GLASS_TURN_ADDR=<address>:3478`.
 
+#### A host that maps its ports
+
+Glass tells clients the port its relay listens on. If the host publishes it
+on another port, tell Glass the public one, and the relay keeps listening
+where it is:
+
+```sh
+docker run ... -p 13478:3478/udp -p 13478:3478/tcp ... -e GLASS_TURN_PUBLIC_PORT=13478 ...
+```
+
+The same applies behind a router's port forward or a Kubernetes NodePort.
+
+Some hosts set the public port only inside the running container, and
+change it when the container restarts. Name the variable that holds it with
+`GLASS_TURN_PORT_FROM` instead, and, if the host also names the public
+address, `GLASS_TURN_HOST_FROM`. RunPod is one: it takes no inbound UDP, so
+clients reach Glass through its relay over TCP. Expose TCP port 3478 and set:
+
+```sh
+GLASS_TURN=embedded
+GLASS_TURN_PORT_FROM=RUNPOD_TCP_PORT_3478
+GLASS_TURN_HOST_FROM=RUNPOD_PUBLIC_IP
+```
+
+Video relayed over TCP carries less well on a lossy link
+([above](#relaying-over-tcp)).
+
 ### Glass's relay on its own host
 
 `glass turn` runs Glass's relay and nothing else, for engines on other hosts.
