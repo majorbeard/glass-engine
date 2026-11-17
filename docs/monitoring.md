@@ -107,7 +107,7 @@ minute, since it started. Figures with `open` and `max` are now.
 | `admission` | Sessions refused for capacity, and sessions stepped down for CPU |
 | `descriptors` | The process's file descriptors against its limit |
 | `relay` | With the embedded relay: its UDP socket's drops (requests over its limits, junk), and refused credentials and peers |
-| `relayAllocations` | With the embedded relay: allocations against its limits (12 per credential, 64 per client address, 2,000 in total) |
+| `relayAllocations` | With the embedded relay: allocations against its limits (12 per credential, 2,000 in total) |
 
 | State | When |
 |---|---|

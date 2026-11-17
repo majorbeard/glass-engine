@@ -226,7 +226,7 @@ Open these to the internet, and nothing else:
 |---|---|---|
 | HTTPS: the API, signaling, and TURN over TLS | **TCP 443** | Glass's own ([TLS](#tls), `GLASS_TLS_ADDR`), or your proxy's. |
 | Redirect to HTTPS | TCP 80 | Optional with Glass's own TLS. A proxy that gets its certificate over HTTP (Caddy does) needs it. |
-| WebRTC media and data | **UDP 50000** (`GLASS_WEBRTC_UDP_PORT`) | Every peer connection shares this one port. |
+| WebRTC media and data | **UDP 50000** (`GLASS_WEBRTC_UDP_PORT`) | Every peer connection shares this one port. Publish it under the same number: Glass tells clients the port it listens on, so to use another, set `GLASS_WEBRTC_UDP_PORT` to it and publish that (`-p 50001:50001/udp`). |
 | TURN | **UDP and TCP 3478**, with Glass's relay (`GLASS_TURN_ADDR`) | Glass's relay on a host of its own, or a TURN server of your own, needs its own ports: see [TURN](#turn). |
 
 With Glass's own TLS, its plain HTTP port (TCP 8080, `GLASS_ADDR`) listens on
@@ -333,9 +333,11 @@ network that allows only HTTPS uses TLS on 443, by itself.
 
 - **It relays to Glass only.** A credential opens relays to Glass's own media
   port and nowhere else, so none of the peer rules below are needed.
-- **Limits:** 12 relays per credential, 64 per client address and 2,000 in
-  all, and a cap on the requests its UDP port answers a second.
-  [Monitoring](monitoring.md) shows when one is reached.
+- **Limits:** 12 relays per credential and 2,000 in all, and a cap on the
+  requests its UDP port answers a second from one address before a relay
+  exists. There is no limit on relays per client address, so many viewers
+  behind one network address (an office, a school) each get theirs.
+  [Monitoring](monitoring.md) shows when a limit is reached.
 - **`GLASS_TURN_SECRET` is optional.** Unset, Glass makes a new one at every
   start; set, it survives restarts.
 - **Its own process.** The relay runs in a process of its own inside the
