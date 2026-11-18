@@ -13,6 +13,8 @@ judge it and repeat it. Where a result has a limit, the limit is next to it.
 | Streaming cost of the engine | **3 to 5 millicores** per 30 fps stream, linear from 50 to 800 streams | AWS c7g.2xlarge |
 | WebGL on a GPU | **43 fps at 1280x720** for one session, where software rendering manages 10 fps at 640x360 with the CPU full | RunPod A40 |
 | GPU encoding | eight light sessions at **19% of the CPU quota instead of 31.5%** (NVENC instead of software H.264) | RunPod A40 |
+| Sessions on one GPU | **16 WebGL sessions or 20 full-screen 2D animations at 60 fps**, every viewer within the frame-rate, freeze and input lines below | RunPod RTX PRO 4500, 32 vCPU |
+| A click to the picture, viewer near the server | **71 to 89 ms** at the median, 95th percentile **92 to 97 ms**, 99th **97 to 110 ms**, one session, 33 ms round trip; 95th percentile 129 to 146 ms with the GPU host full | RunPod RTX PRO 4500 |
 | A click to the picture showing it | **159 to 188 ms** at the median from a 4-vCPU cloud machine to a PC on home 4G (95th percentile 188 to 245 ms), within about 30 ms of Chrome's own WebRTC sender | AWS c6g.xlarge |
 | Sound against picture | phone on cellular: every tone within **-61 to +30 ms** of its picture (median -22 ms) | AWS c6g.xlarge |
 | Long, lossy paths | a 200 ms round trip with 2% loss: the picture frozen **1 to 3 s in about 50 s of watching, where v0.1.102 froze about 20 s**; no delay added on a clean link | a desktop PC, the link emulated |
@@ -153,6 +155,38 @@ TURN; 45-second holds. CPU from the engine's own per-process accounting.
 home 4G and cellular, driving three.js's WebGL examples, one session each:
 60 fps by eye, a crisp picture; the pod at about 6.1 of its 7.65 cores,
 with both pictures at 70% of their size.
+
+## How many sessions one GPU carries
+
+**Where:** RunPod, an NVIDIA RTX PRO 4500 Blackwell pod with 32 vCPUs (EU-RO-1), the
+Docker image v0.1.126 (2026-11-18), Chrome drawing on the GPU and NVENC encoding.
+Viewers: real Chrome on an AWS c6i.4xlarge in eu-central-1, 33 ms away, one per
+session, relayed through `glass turn` on that machine. 60-second holds at each step.
+
+**A step passes** when every viewer holds 55 fps or more, no viewer's picture stops
+for more than 1 s, and the slowest viewer's 95th-percentile input latency is no more
+than 50 ms above a single session's.
+
+| Page, sessions | Frames a second, average / slowest viewer | Longest stop | Input latency, median / 95th percentile, slowest viewer | Host CPU | Passes |
+|---|---|---|---|---|---|
+| WebGL aquarium, 12 | 59.8 / 59.2 | 0.07 s | 69 / 101 ms | 62% | yes |
+| WebGL aquarium, 16 | 59.3 / 59.0 | 0.18 s | 77 / 105 ms | 91% | **yes** |
+| WebGL aquarium, 18 | 51.1 / 50.3 | 0.12 s | 85 / 113 ms | 95% | no: frame rate |
+| 2D animation (testufo), 20 | 60 / 60 | 0.05 s | 83 / 107 ms | 66% | **yes** |
+| 2D animation, 24 | 57.8 / 57.5 | 0.18 s | 113 / 173 ms | 86% | no: input latency |
+
+- **The CPU is the limit, not the GPU.** A WebGL session costs about 1.6 cores in all
+  (Chrome about 1.15), a 2D animation about 1 core; at 16 WebGL sessions an earlier run
+  on the same pod type had the GPU at about 45% and 8 GB of its 32 GB in use. A host
+  with more cores per GPU carries more sessions per GPU.
+- **Past the limit the picture degrades, it doesn't fail:** at 32 WebGL sessions, twice
+  the limit, every session kept streaming, at 15 fps on average (9 for the slowest
+  viewer) and a smaller size.
+- **A click to the picture** (input latency above is to the next picture captured; this
+  includes the page drawing its reaction): median 71 to 89 ms, 95th percentile 92 to 97
+  ms and 99th 97 to 110 ms at one session; 95th percentile 129 ms with 16 WebGL sessions
+  and 146 ms with 20 animations, as the page reacts more slowly on a full host. The
+  viewer's own screen is not included.
 
 ## The display capture
 

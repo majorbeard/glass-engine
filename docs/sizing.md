@@ -32,7 +32,11 @@ news site, the CPU split was **Chrome 81%, encoder 15%, the Glass engine 4%**.
 - **NVIDIA GPU hosts.** Run with `--gpus all -e NVIDIA_DRIVER_CAPABILITIES=all`
   ([deployment.md](deployment.md#gpu-hosts)): Chrome draws on the GPU and the
   GPU encodes, so a session's own CPU is mostly Chrome's page work (scripts,
-  layout). WebGL pages gain the most.
+  layout). WebGL pages gain the most. Budget about **1.6 cores per WebGL
+  session** and **1 core per full-screen 2D animation**: a 32-vCPU host with one
+  RTX PRO 4500 carried 16 WebGL sessions or 20 animations at 60 fps, with the GPU
+  about half used, so the CPU, not the GPU, sets the count
+  ([performance.md](performance.md#how-many-sessions-one-gpu-carries)).
 
 ## Relay streams and calls
 
