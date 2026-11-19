@@ -5,6 +5,7 @@ import {
   deleteGlassSession,
   redeemGlassTicket,
   LINK_EXPIRED_MESSAGE,
+  SESSION_NOT_FOUND_MESSAGE,
   LINK_REVOKED_MESSAGE,
   type GlassClient,
   type GlassDialog,
@@ -358,8 +359,18 @@ export function useGlassSession(notify: Notify) {
           notify({ message: "View only: you don't have control of this session", type: "info" });
         }
       });
+      // A refusal for now (the engine's viewer limit) comes just before the retry it causes, so the
+      // retry message can say why instead of retrying without a reason.
+      let refusedReason: string | null = null;
+      c.on("refused", (reason) => {
+        refusedReason = reason;
+        if (!cancelled) setError(reason);
+      });
       c.on("reconnecting", (attempt, max) => {
-        if (!cancelled) setError(`Reconnecting… (attempt ${attempt}/${max})`);
+        if (cancelled) return;
+        const why = refusedReason ? `${refusedReason}. ` : "";
+        refusedReason = null;
+        setError(`${why}Reconnecting… (attempt ${attempt}/${max})`);
       });
       c.on("newTabRequested", (url) => {
         if (!cancelled) setHijackedUrl(url);
@@ -463,6 +474,11 @@ export function useGlassSession(notify: Notify) {
         // recreate, not this watch-only tab's.
         if (attachSessionId || ticket) {
           if (ticket) keepSession(null);
+          // The engine said the session is gone: it ended, so a reload would not bring it back.
+          if (reason === SESSION_NOT_FOUND_MESSAGE) {
+            setError("This session has ended.");
+            return;
+          }
           setError("Connection lost and could not be restored. Please reload.");
           return;
         }

@@ -216,6 +216,10 @@ export type GlassClientEventMap = {
   disconnected: [];
   // A full reconnect attempt is about to run.
   reconnecting: [attempt: number, maxAttempts: number];
+  // The engine refused a connect attempt for now, with the reason (its viewer limit:
+  // VIEWER_LIMIT_MESSAGE). Not terminal: with reconnecting on, "reconnecting" follows and the
+  // client keeps trying; without it, connect() fails with the same reason.
+  refused: [reason: string];
   // Optional periodic transport/quality snapshot (see statsIntervalMs).
   stats: [stats: GlassStats];
   // A connection's live producesInput actually changed (docs/protocol.md's
@@ -305,6 +309,11 @@ export type GlassClientEventMap = {
  */
 export const CLOSE_SESSION_NOT_FOUND = 4404;
 /**
+ * The "closed" event's reason when the session is gone (CLOSE_SESSION_NOT_FOUND): it never
+ * existed, was swept, or ended while this client was connected.
+ */
+export { SESSION_NOT_FOUND_MESSAGE } from "./internal";
+/**
  * WebSocket close code Glass sends for a link that has expired: it no longer admits a new
  * connection, though a connection that joined with it may still resume after a drop. Retrying
  * can't help; ask whoever shared the link for a new one.
@@ -320,6 +329,14 @@ export const LINK_EXPIRED_MESSAGE = "this link has expired";
 export const CLOSE_LINK_REVOKED = 4403;
 /** The "closed" event's reason when the link was revoked (CLOSE_LINK_REVOKED). */
 export const LINK_REVOKED_MESSAGE = "this link has been revoked";
+/**
+ * WebSocket close code Glass sends for a viewer of a relay session refused at the engine's relay
+ * viewer limit, before it joined. Not final: a place can free up, so a reconnect keeps trying with
+ * its usual backoff, and a first connect fails with VIEWER_LIMIT_MESSAGE.
+ */
+export const CLOSE_VIEWER_LIMIT = 4503;
+/** The error a first connect fails with when Glass refused it at its viewer limit (CLOSE_VIEWER_LIMIT). */
+export const VIEWER_LIMIT_MESSAGE = "this engine is at its viewer limit; try again later";
 // Highest wire-contract major this client understands. Must track the
 // engine's protocol version (docs/protocol.md, "Versioning"); see
 // readSession for the fail-closed check and why absent means 1.

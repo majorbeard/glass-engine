@@ -59,6 +59,24 @@ In practice, **upload bandwidth is usually the limit** for relay deployments. A
 viewers at 1 Mbit/s took 2.7 of 4 cores; expect the cost per viewer to grow with its
 bitrate (only 1 Mbit/s was measured).
 
+**Relays and browser sessions on one host.** Their costs add, with a little more:
+on a 12-vCPU GPU host, browser sessions and 250 relay viewers together took about
+16% more CPU than each alone, the extra in the relay's work. Size the relay part
+20% higher when a host runs both. For heavy mixed loads, run relays and browsers on
+separate engines, best on separate hosts: that removes the extra entirely.
+
+### Relay viewers and admission
+
+New relay sessions pass the same CPU check as browser sessions (below), but a relay
+session costs little when it starts; its cost arrives with its viewers, and an
+engine that forwards video has no lower picture quality to fall back on. So set a
+budget for them, `GLASS_RELAY_MAX_VIEWERS`: the most viewers of relay sessions at
+once on the engine. A viewer past it is refused before it joins, with a reason, and
+can try again later; `GET /v1/info` shows `capacity.relayViewers` against
+`capacity.relayViewerLimit`. Work it out from the cost per viewer: at 1 Mbit/s,
+about 4.5 millicores, 5.5 when the host also runs browser sessions, so 500 viewers
+take about 2.7 cores. Scale it with your producers' top-layer bitrate.
+
 ## Viewers through the built-in TURN relay
 
 With `GLASS_TURN=embedded` ([deployment.md](deployment.md#turn)), a viewer
@@ -119,9 +137,10 @@ doesn't refuse work.
 
 ## Admission under load
 
-Glass protects the host itself. A new browser session is admitted only while
-host CPU is below 85% (`GLASS_HARD_CAP_CPU_THRESHOLD_PERCENT`). Each new session
-reserves a core's worth of headroom until its own load shows, so a burst of
+Glass protects the host itself. A new browser or relay session is admitted only
+while host CPU is below 85% (`GLASS_HARD_CAP_CPU_THRESHOLD_PERCENT`). Each new browser
+session reserves a core's worth of headroom until its own load shows (a relay session
+far less, what its first viewer costs), so a burst of
 requests can't oversubscribe the host. Refused sessions get `503` after a
 short wait. Once it has started refusing, Glass admits again only when CPU is
 back below 75% (`GLASS_HARD_CAP_CPU_READMIT_PERCENT`, the threshold minus 10), so

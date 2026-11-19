@@ -120,7 +120,8 @@ await client.connect();
 | `videoTrack(stream)` | The media stream (video, plus audio when the session has it). |
 | `connected`, `disconnected` | Transport up or down. |
 | `reconnecting(attempt, maxAttempts)` | A retry is scheduled. |
-| `closed(reason)` | Final: the session ended (Glass reported its source failed, or that it can't resume), doesn't exist (`4404`), the link expired (`4401`, reason `LINK_EXPIRED_MESSAGE`), the link was revoked (`4403`, reason `LINK_REVOKED_MESSAGE`), or retries ran out. |
+| `refused(reason)` | Glass refused this attempt for now: the engine is at its relay viewer limit (`4503`, reason `VIEWER_LIMIT_MESSAGE`). Not final: with reconnecting on, `reconnecting` follows and the client keeps trying; without it, `connect()` fails with the same reason. Show it, so a retry isn't left unexplained. |
+| `closed(reason)` | Final: the session ended (Glass reported its source failed, or that it can't resume), doesn't exist or has ended (`4404`, reason `SESSION_NOT_FOUND_MESSAGE`), the link expired (`4401`, reason `LINK_EXPIRED_MESSAGE`), the link was revoked (`4403`, reason `LINK_REVOKED_MESSAGE`), or retries ran out. |
 | `error(message)` | A message from Glass. When it ends the session, `closed` follows with the same text; otherwise the connection, and any reconnect, go on. Before v0.1.118 every one was taken as the end of the session. |
 | `inputLatency(sample)` | One input's time from send to the picture showing it (`kind`, `ms`, `continuous` for a drag or scroll); `inputLatencyStats()` gives the median and 95th percentile so far. |
 | `stats(stats)` | RTT, throughput, jitter buffer, decoded and dropped frames. |
