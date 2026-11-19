@@ -291,6 +291,8 @@ interface InputLatencyStats {
     continuous: InputLatencySummary;
 }
 
+declare const SESSION_NOT_FOUND_MESSAGE = "session not found or expired";
+
 interface GlassReconnectOptions {
     maxAttempts?: number;
     delaysMs?: number[];
@@ -322,6 +324,7 @@ type GlassClientEventMap = {
     connected: [];
     disconnected: [];
     reconnecting: [attempt: number, maxAttempts: number];
+    refused: [reason: string];
     stats: [stats: GlassStats];
     capabilitiesChanged: [
         connectionId: string,
@@ -347,6 +350,7 @@ type GlassClientEventMap = {
  * before anyone connected. Retrying can't help.
  */
 declare const CLOSE_SESSION_NOT_FOUND = 4404;
+
 /**
  * WebSocket close code Glass sends for a link that has expired: it no longer admits a new
  * connection, though a connection that joined with it may still resume after a drop. Retrying
@@ -363,6 +367,14 @@ declare const LINK_EXPIRED_MESSAGE = "this link has expired";
 declare const CLOSE_LINK_REVOKED = 4403;
 /** The "closed" event's reason when the link was revoked (CLOSE_LINK_REVOKED). */
 declare const LINK_REVOKED_MESSAGE = "this link has been revoked";
+/**
+ * WebSocket close code Glass sends for a viewer of a relay session refused at the engine's relay
+ * viewer limit, before it joined. Not final: a place can free up, so a reconnect keeps trying with
+ * its usual backoff, and a first connect fails with VIEWER_LIMIT_MESSAGE.
+ */
+declare const CLOSE_VIEWER_LIMIT = 4503;
+/** The error a first connect fails with when Glass refused it at its viewer limit (CLOSE_VIEWER_LIMIT). */
+declare const VIEWER_LIMIT_MESSAGE = "this engine is at its viewer limit; try again later";
 declare const SUPPORTED_PROTOCOL_VERSION = 1;
 declare function createGlassSession(baseUrl?: string, apiToken?: string, options?: boolean | GlassCreateSessionOptions): Promise<GlassSession>;
 declare function redeemGlassTicket(ticket: string, baseUrl?: string): Promise<GlassSession>;
@@ -424,6 +436,7 @@ export {
     CLOSE_LINK_EXPIRED,
     CLOSE_LINK_REVOKED,
     CLOSE_SESSION_NOT_FOUND,
+    CLOSE_VIEWER_LIMIT,
     type ElementState,
     type GlassCapabilities,
     GlassClient,
@@ -463,10 +476,12 @@ export {
     type ProducerSession,
     type ProducerState,
     type ProducerStats,
+    SESSION_NOT_FOUND_MESSAGE,
     SUPPORTED_PROTOCOL_VERSION,
     type TouchDispatchType,
     type TouchPoint,
     type UserAgentClientHints,
+    VIEWER_LIMIT_MESSAGE,
     createGlassClient,
     createGlassSession,
     deleteGlassSession,

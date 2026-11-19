@@ -39,12 +39,13 @@ change between releases.
 | `GLASS_SESSION_CAP` | the tier's limit | Lower the concurrent-session limit (each session type separately). Can't exceed the tier's limit. |
 | `GLASS_POOL_SIZE` | the session cap | Most browser processes. Lower it to cap browser sessions below the session cap. |
 | `GLASS_POOL_WARM_FLOOR` | `2` | Browsers started at boot and kept ready. `0` starts them on demand. |
-| `GLASS_HARD_CAP_CPU_THRESHOLD_PERCENT` | `85` | Host CPU percent above which new browser sessions are refused. `0` turns CPU admission off. See [sizing.md](sizing.md#admission-under-load). |
+| `GLASS_HARD_CAP_CPU_THRESHOLD_PERCENT` | `85` | Host CPU percent above which new browser and relay sessions are refused. `0` turns CPU admission off. See [sizing.md](sizing.md#admission-under-load). |
 | `GLASS_HARD_CAP_CPU_READMIT_PERCENT` | the threshold minus 10 | Host CPU percent below which admission resumes after it stopped. |
 | `GLASS_HARD_CAP_SAMPLE_INTERVAL_MS` | `3000` | How often host CPU is sampled for admission. |
 | `GLASS_HARD_CAP_SESSION_RESERVE_PERCENT` | one core | CPU each new session reserves until its own load shows. Lower it for light pages. |
 | `GLASS_HARD_CAP_RESERVE_WINDOW_MS` | `20000` | How long a new session's reservation takes to fade, as its own load starts to show. |
 | `GLASS_HARD_CAP_MAX_WAIT_MS` | `3000` | How long a new session waits for CPU headroom before `503`. |
+| `GLASS_RELAY_MAX_VIEWERS` | `0` (no limit) | The most viewers of relay sessions at once on this engine, all relay sessions together. A viewer past it is refused before it joins (close code `4503`, or `503` `viewer_limit`) and may try again later. Set it from the cost per viewer: see [sizing.md](sizing.md#relay-viewers-and-admission). |
 | `GLASS_MAX_VIEWERS_PER_SESSION` | `50` | Connections one session admits. |
 | `GLASS_MAX_STREAM_SLOTS` | `4` | Named slots one relay session may declare. |
 | `GLASS_GOMEMLIMIT_MB` | unset | Soft memory limit for the engine process. See [sizing.md](sizing.md#memory-limit-glass_gomemlimit_mb). |

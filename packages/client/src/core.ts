@@ -204,6 +204,9 @@ export class ClientCore {
   // Set, to the "closed" reason, when Glass closed the socket with CLOSE_SESSION_NOT_FOUND,
   // CLOSE_LINK_EXPIRED or CLOSE_LINK_REVOKED: stops the reconnect loop.
   sessionGone: string | null = null;
+  // Set, to the reason, when Glass refused the last attempt for now (CLOSE_VIEWER_LIMIT); the retry
+  // paths report it as a "refused" event and clear it.
+  refusedReason: string | null = null;
 
   // Timers we must clear on close (backoff waits, batch timer, stats timer).
   pendingTimeouts = new Set<ReturnType<typeof setTimeout>>();

@@ -3,7 +3,7 @@
 // behavior, so internal refactors must keep it passing unchanged. Message
 // type bytes are the wire protocol's (docs/protocol.md), not internal names.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CLOSE_LINK_EXPIRED, CLOSE_LINK_REVOKED, GlassClient, LINK_EXPIRED_MESSAGE, LINK_REVOKED_MESSAGE } from "./index";
+import { CLOSE_LINK_EXPIRED, CLOSE_LINK_REVOKED, CLOSE_VIEWER_LIMIT, GlassClient, LINK_EXPIRED_MESSAGE, LINK_REVOKED_MESSAGE, SESSION_NOT_FOUND_MESSAGE, VIEWER_LIMIT_MESSAGE } from "./index";
 import { connectedClient, FakePeerConnection, FakeWebSocket, flush, installFakes, type FakeDataChannel } from "./testing/fakes";
 
 const URL = "ws://glass.test/v1/sessions/s1/signaling?token=tok";
@@ -334,7 +334,19 @@ describe("reconnect", () => {
     ws.drop(1006);
     FakeWebSocket.last().drop(4404);
     await flush();
-    expect(closed).toHaveBeenCalledWith("session not found or expired");
+    expect(closed).toHaveBeenCalledWith(SESSION_NOT_FOUND_MESSAGE);
+  });
+
+  // The engine ends each live connection with 4404 when it closes the session; the client stops
+  // with that reason instead of reconnecting to a session that is gone.
+  it("closes without retrying when the session ends while connected", async () => {
+    const { client, ws } = await connected({ reconnect: { maxAttempts: 5, delaysMs: [10] } });
+    const events: string[] = [];
+    client.on("reconnecting", (n: number, max: number) => events.push(`reconnecting ${n}/${max}`));
+    client.on("closed", (r: string) => events.push(`closed ${r}`));
+    ws.drop(4404);
+    await flush();
+    expect(events).toEqual([`closed ${SESSION_NOT_FOUND_MESSAGE}`]);
   });
 
   it("closes without retrying when the server says the link has expired", async () => {
@@ -345,6 +357,48 @@ describe("reconnect", () => {
     FakeWebSocket.last().drop(CLOSE_LINK_EXPIRED);
     await flush();
     expect(closed).toHaveBeenCalledWith(LINK_EXPIRED_MESSAGE);
+  });
+
+  // A viewer refused at the engine's viewer limit is told why on a first connect, and a reconnect
+  // keeps trying: a place can free up.
+  it("fails a first connect at the viewer limit with its reason", async () => {
+    const client = new GlassClient({ signalingUrl: URL, reconnect: false });
+    const done = client.connect();
+    const ws = FakeWebSocket.last();
+    ws.open();
+    ws.drop(CLOSE_VIEWER_LIMIT);
+    await expect(done).rejects.toThrow(VIEWER_LIMIT_MESSAGE);
+  });
+
+  it("says why while reconnecting at the viewer limit, and keeps trying", async () => {
+    const { client, ws } = await connected({ reconnect: { maxAttempts: 3, delaysMs: [10] } });
+    const events: string[] = [];
+    client.on("refused", (r: string) => events.push(`refused ${r}`));
+    client.on("reconnecting", (n: number, max: number) => events.push(`reconnecting ${n}/${max}`));
+    client.on("closed", (r: string) => events.push(`closed ${r}`));
+    ws.drop(1006);
+    await flush();
+    FakeWebSocket.last().drop(CLOSE_VIEWER_LIMIT);
+    await flush();
+    expect(events).toEqual(["reconnecting 1/3", `refused ${VIEWER_LIMIT_MESSAGE}`]);
+    client.disconnect();
+  });
+
+  // The default: retrying on. A refused first connect says why before each retry, instead of
+  // retrying in silence.
+  it("says why before retrying a first connect refused at the viewer limit", async () => {
+    const client = new GlassClient({ signalingUrl: URL, reconnect: { maxAttempts: 3, delaysMs: [10] } });
+    const events: string[] = [];
+    client.on("refused", (r: string) => events.push(`refused ${r}`));
+    client.on("reconnecting", (n: number, max: number) => events.push(`reconnecting ${n}/${max}`));
+    client.on("closed", (r: string) => events.push(`closed ${r}`));
+    void client.connect().catch(() => undefined);
+    const ws = FakeWebSocket.last();
+    ws.open();
+    ws.drop(CLOSE_VIEWER_LIMIT);
+    await flush();
+    expect(events).toEqual([`refused ${VIEWER_LIMIT_MESSAGE}`, "reconnecting 1/3"]);
+    client.disconnect();
   });
 
   // An `error` without a final code is a report, not the end of the

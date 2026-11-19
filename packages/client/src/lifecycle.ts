@@ -9,9 +9,11 @@ import { stopRepairWait } from "./repair_wait";
 import {
   CLOSE_LINK_EXPIRED,
   CLOSE_LINK_REVOKED,
+  CLOSE_VIEWER_LIMIT,
   CLOSE_SESSION_NOT_FOUND,
   LINK_EXPIRED_MESSAGE,
   LINK_REVOKED_MESSAGE,
+  VIEWER_LIMIT_MESSAGE,
   deleteGlassSession,
 } from "./index";
 import { DEFAULT_RECONNECT_DELAYS_MS, SESSION_NOT_FOUND_MESSAGE, SIGNALING_TIMEOUT_MS, PEER_TIMEOUT_MS, DISCONNECTED_GRACE_MS } from "./internal";
@@ -35,6 +37,7 @@ export async function connect(c: ClientCore): Promise<void> {
         if (!c.userClosed) c.emit("closed", reason);
         throw err;
       }
+      reportRefusal(c);
       if (
         c.userClosed ||
         !c.reconnectEnabled ||
@@ -49,6 +52,14 @@ export async function connect(c: ClientCore): Promise<void> {
       if (c.userClosed) throw new Error("connect aborted");
     }
   }
+}
+
+// reportRefusal tells the app why the last attempt failed when Glass refused it for now (its
+// viewer limit), so a retry loop is not left unexplained. See docs/protocol.md, close code 4503.
+function reportRefusal(c: ClientCore): void {
+  const reason = c.refusedReason;
+  c.refusedReason = null;
+  if (reason && !c.userClosed) c.emit("refused", reason);
 }
 
 // nextDelayMs is the wait after failed attempt number reconnectAttempt:
@@ -187,7 +198,8 @@ export function establish(c: ClientCore): Promise<void> {
       if (c.peerConnected) {
         onTerminalDrop(c);
       } else {
-        settle(() => reject(new Error(c.sessionGone ?? "signaling socket closed")));
+        if (event?.code === CLOSE_VIEWER_LIMIT) c.refusedReason = VIEWER_LIMIT_MESSAGE;
+        settle(() => reject(new Error(c.sessionGone ?? c.refusedReason ?? "signaling socket closed")));
       }
     };
   });
@@ -277,6 +289,7 @@ export async function reconnectLoop(c: ClientCore): Promise<void> {
           c.emit("closed", c.sessionGone);
           return;
         }
+        reportRefusal(c);
         await c.wait(nextDelayMs(c));
       }
     }
