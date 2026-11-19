@@ -264,8 +264,9 @@ A session can be recorded and played back; every viewer is told. See
 
 - **Sites that block cloud IP addresses.** Some sites (major video
   platforms in particular) refuse or challenge traffic from datacenter IP
-  ranges. This comes from the site, not from Glass; the same page works when
-  Glass runs on a residential connection.
+  ranges, and may also check the browser itself. This comes from the site,
+  not from Glass. Glass has no setting to send page traffic out through
+  another address.
 - **GPU-heavy pages.** Without a GPU, Chrome renders WebGL in software, which
   costs CPU and can be slow on 3D-heavy pages.
 - **DRM-protected video** (streaming services that use Widevine) doesn't
