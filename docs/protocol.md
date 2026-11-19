@@ -238,7 +238,7 @@ the code. A body may carry more fields beside these two (`floor_taken`'s
 | `internal_error` | 500 | A fault in the runtime; the detail is in its log, never in the body. |
 | `recording_limit` | 503 | `GLASS_RECORDING_MAX_ACTIVE` recordings already run. |
 | `disk_low` | 507 | Under 512 MB free where recordings are kept. |
-| `viewer_limit` | 503 | A relay viewer refused at the engine's relay viewer limit (`GLASS_RELAY_MAX_VIEWERS`). Not final: a place can free up. On a WebSocket it arrives as close code `4503`. |
+| `viewer_limit` | 503 | A relay viewer refused at the engine's relay viewer limit (`GLASS_RELAY_MAX_VIEWERS`). Not final: a place can free up. On a WebSocket it arrives as close code `4503`, as does a viewer refused at its session's own limit (`GLASS_MAX_VIEWERS_PER_SESSION`). |
 | `at_capacity`, `hard_cap_reached`, `shutting_down`, `unavailable` | 503 | No session slot; no hardware headroom (the message names the CPU, memory, the GPU or its encoder); the runtime is stopping; not available on this session now, or tickets unavailable. |
 | `source_failed` | (signaling only) | The session's browser stopped; the session has ended. Sent in the signaling `error` message, never by an HTTP route. |
 | `session_not_resumable` | (signaling only) | A reconnect found a session that cannot resume; the session has ended. Sent in the signaling `error` message. |
@@ -252,7 +252,7 @@ the code. A body may carry more fields beside these two (`floor_taken`'s
 | `4401` | Glass | The link has expired: it admits no new connection ([link expiry](#link-expiry)). Don't retry; get a new link. |
 | `4403` | Glass | The link was revoked: this connection is closed, and the link admits nothing again. Don't retry; get a new link. |
 | `4404` | Glass | The session doesn't exist (never created, closed or expired), or it closed while this connection was open. Don't retry. |
-| `4503` | Glass | A relay viewer refused at the engine's relay viewer limit, before it joined. Not final: try again later. |
+| `4503` | Glass | A viewer refused at a viewer limit: the engine's for relay viewers (`GLASS_RELAY_MAX_VIEWERS`), or its session's own (`GLASS_MAX_VIEWERS_PER_SESSION`, browser and relay sessions). Not final: try again later. |
 | `1011` | Glass | The session's browser stopped; sent after the signaling `error` message (`source_failed`). The session has ended: don't retry it. |
 | anything else | either | Treated as a lost connection: held for the reconnect grace. |
 
