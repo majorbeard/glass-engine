@@ -4,6 +4,8 @@ import {
   createGlassSession,
   deleteGlassSession,
   redeemGlassTicket,
+  requestGateTicket,
+  GlassGateError,
   LINK_EXPIRED_MESSAGE,
   SESSION_NOT_FOUND_MESSAGE,
   LINK_REVOKED_MESSAGE,
@@ -23,6 +25,8 @@ import {
   DECODE_READBACK_ENABLED,
   ENCODED_STREAM_CHECK_ENABLED,
   GLASS_ADDR,
+  engineOf,
+  gateFromLink,
   ICE_TRANSPORT_POLICY,
   JITTER_BUFFER_TARGET_MS,
   PIXEL_TRACE_ENABLED,
@@ -30,6 +34,39 @@ import {
 } from "../config";
 
 export type Notify = (toast: { message: string; type: "success" | "error" | "info" }) => void;
+
+// sessionFromGate asks glass gate for a ticket and redeems it with the engine
+// the gate names. A passphrase gate refuses a request without its phrase, so
+// the visitor is asked for it, again if it was wrong.
+async function sessionFromGate(gate: string, code: string | null): Promise<GlassSession> {
+  let passphrase: string | undefined;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const t = await requestGateTicket(gate, { code: code ?? undefined, passphrase });
+      return await redeemGlassTicket(t.ticket, t.engine);
+    } catch (err) {
+      const refused = err instanceof GlassGateError && err.code === "gate_refused";
+      if (!refused || code || attempt >= 5) throw err;
+      const asked = window.prompt(attempt === 0 ? "This session needs a passphrase:" : "That passphrase is not right. Try again:");
+      if (asked === null) throw new Error("A passphrase is needed to start a session.");
+      passphrase = asked;
+    }
+  }
+}
+
+// gateMessage is what the visitor reads when the gate gives no session.
+function gateMessage(err: unknown): string {
+  if (err instanceof GlassGateError) {
+    if (err.code === "rate_limited") {
+      return `Many sessions are starting right now. Try again${err.retryAfterSeconds ? ` in ${err.retryAfterSeconds} s` : " shortly"}.`;
+    }
+    if (err.code === "gate_refused") {
+      return `This link can't be used: ${err.message}. Ask whoever shared it for a new one.`;
+    }
+    return `No session could be started: ${err.message}`;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
 
 // The tab's own session, kept across a reload. Glass holds a session for its
 // reconnect grace after the page using it unloads, and connecting to the same
@@ -119,6 +156,9 @@ export function useGlassSession(notify: Notify) {
   // The token of the link this viewer joined with: the stats stream takes
   // it, since a browser can't send a header there.
   const [linkToken, setLinkToken] = useState<string | null>(null);
+  // The engine this session lives on, from its link: the build's address, or
+  // the one a gate named.
+  const [engine, setEngine] = useState<string | null>(null);
   const [producesInput, setProducesInput] = useState(false);
   // Several viewers may hold control at once; in the session's default input
   // mode only one of them drives the page at a time. True while that is
@@ -173,6 +213,9 @@ export function useGlassSession(notify: Notify) {
     // session this tab then owns. It holds no API token, so it can neither
     // delete the session nor create another when this one ends.
     const ticket = new URLSearchParams(window.location.search).get("ticket");
+    // #gate=...&code=..., or VITE_GLASS_GATE: glass gate gives a ticket. A link's
+    // code is used once a session; an open gate may give a fresh one on a retry.
+    const { gate, code: gateCode } = gateFromLink();
 
     (async () => {
       // Typed as the full GlassSession rather than an inline {id, signalingUrl}
@@ -212,8 +255,21 @@ export function useGlassSession(notify: Notify) {
         const url = new URL(window.location.href);
         url.searchParams.delete("ticket");
         window.history.replaceState(null, "", url);
+      } else if (gate && (sessionEpoch === 0 || !gateCode)) {
+        try {
+          session = await sessionFromGate(gate, gateCode);
+        } catch (err) {
+          if (!cancelled) setError(gateMessage(err));
+          return;
+        }
+        // A link's code has been used; a reload rejoins the kept session instead.
+        if (gateCode) {
+          const url = new URL(window.location.href);
+          url.hash = "";
+          window.history.replaceState(null, "", url);
+        }
       } else if (!CAN_CREATE_SESSIONS) {
-        if (!cancelled) setError("This viewer opens session links. Ask whoever runs the engine for a link to a session.");
+        if (!cancelled) setError("This viewer opens session links. Ask whoever runs the engine for a link.");
         return;
       } else {
         try {
@@ -231,11 +287,12 @@ export function useGlassSession(notify: Notify) {
       // Only a session this run created is deleted here: a kept one may be
       // what the next run rejoins.
       if (cancelled) {
-        if (!attachSessionId && !kept && !ticket) deleteGlassSession(session.id, GLASS_ADDR, API_TOKEN);
+        if (!attachSessionId && !kept && !ticket && !gate) deleteGlassSession(session.id, GLASS_ADDR, API_TOKEN);
         return;
       }
       setSessionId(session.id);
       setLinkToken(new URL(session.signalingUrl).searchParams.get("token"));
+      setEngine(engineOf(session.signalingUrl));
       if (!attachSessionId) keepSession(session);
 
       c = createGlassClient({
@@ -245,7 +302,7 @@ export function useGlassSession(notify: Notify) {
         // for the session's own tab, never for an attached viewer, which
         // does not own the session and must not end it for its owner or
         // anyone else watching.
-        deleteSessionOnClose: !attachSessionId && !ticket,
+        deleteSessionOnClose: !attachSessionId && !ticket && !gate,
         ...(ICE_TRANSPORT_POLICY
           ? { iceTransportPolicy: ICE_TRANSPORT_POLICY }
           : {}),
@@ -472,8 +529,8 @@ export function useGlassSession(notify: Notify) {
         // attachSessionId viewers don't own the session (see its own doc
         // comment above) - if it's gone, that's the owner's session to
         // recreate, not this watch-only tab's.
-        if (attachSessionId || ticket) {
-          if (ticket) keepSession(null);
+        if (attachSessionId || ticket || gateCode) {
+          if (ticket || gateCode) keepSession(null);
           // The engine said the session is gone: it ended, so a reload would not bring it back.
           if (reason === SESSION_NOT_FOUND_MESSAGE) {
             setError("This session has ended.");
@@ -544,6 +601,7 @@ export function useGlassSession(notify: Notify) {
     canGoForward,
     sessionId,
     linkToken,
+    engine,
     producesInput,
     otherHasFloor,
     pageDialog,

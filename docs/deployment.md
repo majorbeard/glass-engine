@@ -250,6 +250,46 @@ the connection then hangs at ICE `checking` forever. Open UDP 50000 in
 Docker (`-p 50000:50000/udp`), the host firewall **and** the cloud security
 group.
 
+### Every port, by part
+
+What each part of Glass listens on, and who must be able to reach it. Anything
+else open on the host isn't Glass's.
+
+| Part | Port | Who reaches it | When |
+|---|---|---|---|
+| Engine | TCP `8080` | your proxy, your backend | plain HTTP behind your own proxy |
+| Engine | TCP `443`, and `80` for the redirect | browsers, your backend, Let's Encrypt | with Glass's own TLS (`GLASS_TLS=auto` or `GLASS_DOMAIN`) |
+| Engine | UDP `50000` | viewers, producers, call peers (media) | always |
+| Engine, built-in relay | UDP and TCP `3478`; TLS on `443` | viewers that can't reach UDP 50000 | `GLASS_TURN=embedded` |
+| `glass turn` | UDP and TCP `3478`; TCP `443` for TLS | viewers | the relay on a host of its own |
+| `glass turn` | UDP `49152-65535` (`GLASS_TURN_RELAY_PORTS`) | **the engines**, sending media to relayed viewers | always: open it to the engines' outbound addresses, or to everyone |
+| `glass gate` | TCP `8090` | your proxy | behind your own proxy |
+| `glass gate` | TCP `443` | browsers, Let's Encrypt | on a host of its own, with its own certificate |
+| `glass gate` | none | | beside an engine: the engine forwards its route (`GLASS_GATE_UPSTREAM`) |
+| Any part | `GLASS_MONITOR_ADDR` | you | a private address only |
+
+**Secrets that must match**, or the parts refuse each other:
+
+| Secret | Set on | A mismatch shows as |
+|---|---|---|
+| `GLASS_TURN_SECRET` | the engine and its TURN relay (`glass turn` or your own) | viewers stuck at ICE `checking`; the relay logs `turn.auth-refused reason=wrong-key` |
+| `GLASS_TICKET_SECRET` | the engine and `glass gate` | tickets refused at the engine (`ticket_invalid`) |
+
+**Pitfalls seen in real deployments:**
+
+- **A firewall rule scoped to an old address.** A cloud firewall rule that
+  allows a port "from" one address keeps that address after an instance
+  restarts with a new one. Open the relay's range to the engines, or to
+  everyone, not to a remembered address.
+- **The engine's outbound address isn't always the "public IP" your provider
+  shows.** `glass turn` takes media only from `GLASS_TURN_PEERS`, which must be
+  the address the engine's traffic actually leaves from. On some hosts that
+  differs from the address shown for port mappings. Find it from the engine's
+  host (for example `curl https://api.ipify.org`).
+- **A NAT that changes the media port.** Some hosts send the engine's media from
+  another port than 50000. `glass turn` then logs the port it sees, with the
+  `GLASS_TURN_PEERS` value to use.
+
 `GLASS_WEBRTC_UDP_PORT_MIN`/`_MAX` (a port per connection) are deprecated.
 They still work when set on their own, and they cap a host at about as many
 connections as ports. Existing firewall rules for `50000-50100/udp` keep
@@ -702,6 +742,54 @@ needs neither. Set `GLASS_PUBLIC_URL` behind a proxy that rewrites `Host` to
 its own upstream address, such as a hosting provider's built-in HTTPS
 proxy. The sign that you need it: sessions are created, but viewers never
 connect, and the `signalingUrl` names an internal address.
+
+## The session service: `glass gate`
+
+`glass gate` gives a browser a [session ticket](protocol.md#session-tickets)
+from the engine's pool, so a website gets a browser without the API token in
+the page and without anyone handing out session links. It is the same image
+(`glass gate`), and signs with the engine's `GLASS_TICKET_SECRET`. The browser
+redeems the ticket with the engine, which creates the session then.
+
+Who gets a ticket is `GLASS_GATE`:
+
+- `links`: links you mint with `glass gate link [--uses N] [--valid 24h|7d]`
+  (default one use and 24 hours, at most 30 days and 1000 uses), run where the
+  gate's settings are (`docker compose exec gate glass gate link`). A link is
+  your viewer's address (`GLASS_GATE_VIEWER`) with the gate's
+  (`GLASS_GATE_PUBLIC`) and a signed code in the fragment, `#gate=…&code=…`,
+  which a browser never sends to a server. Each ticket takes one use; the gate
+  keeps the uses, hashed, in its cache volume, so a restart gives none back.
+- `open`: anyone, within the gate's limits: a public demo, or a site behind
+  your own sign-in.
+- `passphrase`: a shared phrase, `GLASS_GATE_PASSPHRASE`.
+
+The gate allows 10 tickets a minute per visitor and 120 in all
+(`GLASS_GATE_RATE_PER_MINUTE`, `GLASS_GATE_TOTAL_PER_MINUTE`). The engine's
+own admission still applies: a ticket at capacity is refused, not spent.
+
+Where it runs:
+
+- **Beside the engine, on one host** ([`examples/compose`](../examples/compose)).
+  Set `GLASS_GATE_UPSTREAM=gate:8090` on the engine: it forwards
+  `POST /v1/ticket` to the gate, so one address and one certificate serve
+  both, and the gate publishes no port. The engine passes the visitor's address
+  as `X-Forwarded-For`, so name the engine in the gate's
+  `GLASS_TRUSTED_PROXIES`. The engine answers CORS for the gate's route, from
+  its own `GLASS_CORS_ORIGINS`.
+- **On a host of its own**, with a certificate of its own: `GLASS_DOMAIN`, or
+  `GLASS_TLS=auto` for a certificate named after the host's public address
+  (from `GLASS_WEBRTC_NAT_1TO1_IPS`, else looked up). It then needs TCP 443 to
+  itself. Set `GLASS_CORS_ORIGINS` on the gate to
+  your viewer's origin.
+- **Behind your own proxy**: plain HTTP on `GLASS_GATE_ADDR` (default `:8090`).
+
+`GLASS_GATE_ENGINE` is the engine's public address, handed to the browser with
+its ticket. With `GLASS_MONITOR_ADDR` and `GLASS_API_TOKEN` the gate serves
+`/healthz` and, behind the token, `/v1/metrics` (tickets issued and refused, by
+reason) on a port of its own. `glass gate --check` prints what it would do and
+exits. The route is in [protocol.md](protocol.md#the-session-service-glass-gate),
+and the settings in [configuration.md](configuration.md#the-session-service).
 
 ## Allowing your frontend (CORS)
 

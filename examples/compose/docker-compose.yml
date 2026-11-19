@@ -1,0 +1,67 @@
+# Glass and glass gate on one host: a browser opens a link (or your site) and gets a
+# browser session from the engine's pool, with no API token in any page and nobody
+# handing out session links.
+#
+#   docker run --rm ghcr.io/majorbeard/glass seccomp-profile > glass-seccomp.json
+#   cp .env.example .env      # then fill it in
+#   docker compose up -d
+#   docker compose exec gate glass gate link     # prints a link: open it
+#
+# The engine holds the certificate (GLASS_DOMAIN must point at this host) and forwards
+# the gate's one route, POST /v1/ticket, so both are reached at https://GLASS_DOMAIN:
+# two processes on one host can't both take port 443 for Let's Encrypt.
+services:
+  engine:
+    image: ghcr.io/majorbeard/glass:${GLASS_VERSION:-latest}
+    restart: unless-stopped
+    security_opt:
+      - seccomp=./glass-seccomp.json   # Chrome's sandbox needs it, with SYS_CHROOT below
+    cap_add: [SYS_CHROOT]
+    shm_size: 1g
+    ports:
+      - "443:443"            # HTTPS: the API, signaling, and the gate's route
+      - "80:80"              # redirects to HTTPS
+      - "50000:50000/udp"    # media
+    volumes:
+      - glass-cache:/home/glass/.cache/glass
+    environment:
+      GLASS_DOMAIN: ${GLASS_DOMAIN:?set GLASS_DOMAIN in .env}
+      GLASS_API_TOKEN: ${GLASS_API_TOKEN:?set GLASS_API_TOKEN in .env}
+      GLASS_TICKET_SECRET: ${GLASS_TICKET_SECRET:?set GLASS_TICKET_SECRET in .env}
+      GLASS_LICENSE_KEY: ${GLASS_LICENSE_KEY:-}
+      GLASS_GATE_UPSTREAM: gate:8090
+      GLASS_CORS_ORIGINS: ${GLASS_VIEWER_ORIGIN:?set GLASS_VIEWER_ORIGIN in .env}
+    networks: [glass]
+
+  gate:
+    image: ghcr.io/majorbeard/glass:${GLASS_VERSION:-latest}
+    command: gate
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges
+    volumes:
+      - gate-data:/home/glass/.cache/glass   # the links' uses, kept across restarts
+    environment:
+      GLASS_GATE: ${GLASS_GATE:-links}
+      GLASS_GATE_PASSPHRASE: ${GLASS_GATE_PASSPHRASE:-}
+      GLASS_TICKET_SECRET: ${GLASS_TICKET_SECRET}
+      GLASS_GATE_ENGINE: https://${GLASS_DOMAIN}
+      GLASS_GATE_PUBLIC: https://${GLASS_DOMAIN}
+      GLASS_GATE_VIEWER: ${GLASS_VIEWER_URL:?set GLASS_VIEWER_URL in .env}
+      GLASS_CORS_ORIGINS: ${GLASS_VIEWER_ORIGIN}
+      # The engine forwards each visitor's address; trust it from the engine only.
+      GLASS_TRUSTED_PROXIES: 172.30.80.0/24
+    networks: [glass]
+    # The gate publishes no port: browsers reach it through the engine.
+
+networks:
+  glass:
+    ipam:
+      config:
+        - subnet: 172.30.80.0/24
+
+volumes:
+  glass-cache:
+  gate-data:

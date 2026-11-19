@@ -412,6 +412,73 @@ export async function redeemGlassTicket(
   return readSession(res, "redeem ticket");
 }
 
+/** A session ticket from glass gate, and the engine to redeem it with. */
+export interface GlassGateTicket {
+  /** The engine's public address: pass it to redeemGlassTicket as baseUrl. */
+  engine: string;
+  /** A session ticket, good for one session, redeemed at once. */
+  ticket: string;
+}
+
+/**
+ * What glass gate asks for: nothing for an `open` gate, the shared phrase for a
+ * `passphrase` gate, a minted link's code for a `links` gate.
+ */
+export interface GlassGateCredentials {
+  code?: string;
+  passphrase?: string;
+}
+
+/**
+ * The gate refused a ticket. `code` is the gate's: `gate_refused` (a wrong
+ * passphrase, or a link not valid, expired or used up), `rate_limited` (see
+ * retryAfterSeconds), `origin_not_allowed`, `unavailable`.
+ */
+export class GlassGateError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+    readonly retryAfterSeconds?: number
+  ) {
+    super(message);
+    this.name = "GlassGateError";
+  }
+}
+
+// Asks glass gate (POST {gate}/v1/ticket) for a session ticket. With it, a
+// website gets a browser from the engine's pool with no API token in the page
+// and no link handed out by anyone: the gate answers with a ticket and the
+// engine's address, and redeemGlassTicket(ticket, engine) starts the session.
+// Fails with a GlassGateError carrying the gate's reason.
+export async function requestGateTicket(
+  gate: string,
+  credentials: GlassGateCredentials = {}
+): Promise<GlassGateTicket> {
+  const body: GlassGateCredentials = {};
+  if (credentials.code) body.code = credentials.code;
+  if (credentials.passphrase) body.passphrase = credentials.passphrase;
+  const res = await fetch(`${gate.replace(/\/+$/, "")}/v1/ticket`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let message = `the gate refused (${res.status})`;
+    let code: string | undefined;
+    try {
+      const err = (await res.json()) as { error?: string; code?: string };
+      if (err.error) message = err.error;
+      code = err.code;
+    } catch {
+      // not JSON: keep the status
+    }
+    const after = Number(res.headers.get("Retry-After"));
+    throw new GlassGateError(message, res.status, code, Number.isFinite(after) && after > 0 ? after : undefined);
+  }
+  return (await res.json()) as GlassGateTicket;
+}
+
 // Reads a session-creating response, failing with the runtime's reason.
 async function readSession(res: Response, what: string): Promise<GlassSession> {
   if (!res.ok) {

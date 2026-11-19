@@ -135,6 +135,42 @@ with a token for an engine that is not on your machine or private network,
 and pointed at any other engine it only opens the session links it is
 given.
 
+## 7. On a server: the engine and `glass gate`
+
+The quickest way to a browser anyone can open: the engine, and `glass gate`
+beside it. The gate gives each visitor a browser from the engine's pool, so no
+page holds the API token and nobody hands out session links.
+
+You need a host with Docker, a name pointing at it (for the certificate), and
+the reference viewer hosted somewhere (`examples/viewer-preact`, built with
+`npm run build`; any static host works).
+
+```sh
+cd examples/compose
+docker run --rm ghcr.io/majorbeard/glass seccomp-profile > glass-seccomp.json
+cp .env.example .env     # fill in the name, two random secrets, and your viewer's address
+docker compose up -d
+docker compose exec gate glass gate link
+```
+
+The last command prints a link to your viewer. Open it: the viewer asks the gate
+for a ticket and a browser starts. A link works once and for 24 hours by
+default (`--uses N`, `--valid 7d`); mint one per person, or whenever you want
+to look. A reload rejoins the same browser without spending another use.
+
+For a public demo, or a site behind your own sign-in, set `GLASS_GATE=open`
+in `.env`: then anyone opening your viewer gets a browser, within the gate's
+limits (10 a minute per visitor, 120 in all), with no link at all. Build the
+viewer with `VITE_GLASS_GATE=https://your-glass-domain` for that.
+`GLASS_GATE=passphrase` asks visitors for a shared phrase instead.
+
+The engine holds the certificate and forwards the gate's one route
+(`GLASS_GATE_UPSTREAM`), so both are reached at the same address. Open TCP 443
+and UDP 50000 to the host (and TCP 80 for the redirect to HTTPS, if you
+like); the gate itself publishes no port. See
+[deployment.md](deployment.md#the-session-service-glass-gate) for a gate on a
+host of its own.
+
 ## Next
 
 - [concepts.md](concepts.md): the session model behind all of this.

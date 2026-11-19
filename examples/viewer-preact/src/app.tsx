@@ -62,7 +62,7 @@ export function App() {
     micAccessOrigin, setMicAccessOrigin, micError, setMicError, micGranting, setMicGranting,
   } = session;
   // A playback session has no statistics stream (it encodes nothing).
-  const { fps, perfStats } = useStatsStream(session.playback ? null : sessionId, session.linkToken);
+  const { fps, perfStats } = useStatsStream(session.playback ? null : sessionId, session.linkToken, session.engine);
   const closeContextMenu = useCallback(() => setContextMenu({ show: false, x: 0, y: 0 }), []);
   const { handleNavigate, handleNavigateBack, handleNavigateForward, handleRefresh } = useNavigation({
     client,

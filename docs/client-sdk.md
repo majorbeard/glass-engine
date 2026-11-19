@@ -24,6 +24,7 @@ for development and for backends written in TypeScript.
 ```ts
 createGlassSession(baseUrl?, apiToken?, options?): Promise<GlassSession>
 redeemGlassTicket(ticket, baseUrl?): Promise<GlassSession>
+requestGateTicket(gate, credentials?): Promise<GlassGateTicket>
 deleteGlassSession(id, baseUrl?, apiToken?): void
 mintConnectionGrant(sessionId, capabilities, baseUrl?, apiToken?): Promise<GlassConnectionGrant>
 ```
@@ -71,6 +72,20 @@ anywhere near it: your backend signs a short-lived
 [session ticket](protocol.md#session-tickets) and hands it to the page,
 which redeems it once for the session. The returned `GlassSession` also has
 `watchUrls`, when the ticket asked for watch links.
+
+`requestGateTicket` asks [`glass gate`](deployment.md#the-session-service-glass-gate)
+for a ticket: `gate` is the gate's address, and `credentials` what it asks
+for (`{ code }` for a link, `{ passphrase }`, or nothing for an open gate).
+It resolves to `{ engine, ticket }`; redeem it at once:
+
+```ts
+const { engine, ticket } = await requestGateTicket(gate, { code });
+const session = await redeemGlassTicket(ticket, engine);
+```
+
+A refusal rejects with a `GlassGateError` carrying the HTTP `status`, the
+gate's `code` (`gate_refused`, `rate_limited`, `origin_not_allowed`,
+`unavailable`) and, when rate-limited, `retryAfterSeconds`.
 
 `createGlassSession` refuses a server whose `protocolVersion` is newer than
 `SUPPORTED_PROTOCOL_VERSION`, rather than connecting and failing in confusing
@@ -305,3 +320,9 @@ mode `free`. While another viewer has the page, the header shows "Another
 viewer is in control", and a dropped click or key says so.
 Configure it with `VITE_GLASS_ADDR` and, for local testing only,
 `VITE_GLASS_API_TOKEN`.
+
+Deployed anywhere, the viewer gets its sessions from `glass gate`: opened with
+a link from `glass gate link` (`#gate=…&code=…`), or built with
+`VITE_GLASS_GATE` set to an `open` or `passphrase` gate, it asks the gate for a
+ticket and starts a session on the engine the gate names, with no engine
+address and no API token in the page. A reload rejoins the same session.
