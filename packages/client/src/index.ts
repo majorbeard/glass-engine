@@ -330,13 +330,13 @@ export const CLOSE_LINK_REVOKED = 4403;
 /** The "closed" event's reason when the link was revoked (CLOSE_LINK_REVOKED). */
 export const LINK_REVOKED_MESSAGE = "this link has been revoked";
 /**
- * WebSocket close code Glass sends for a viewer of a relay session refused at the engine's relay
- * viewer limit, before it joined. Not final: a place can free up, so a reconnect keeps trying with
- * its usual backoff, and a first connect fails with VIEWER_LIMIT_MESSAGE.
+ * WebSocket close code Glass sends for a viewer refused at a viewer limit: the engine's limit on
+ * relay viewers, or the session's own. Not final: a place can free up, so a reconnect keeps trying
+ * with its usual backoff, and a first connect fails with VIEWER_LIMIT_MESSAGE.
  */
 export const CLOSE_VIEWER_LIMIT = 4503;
 /** The error a first connect fails with when Glass refused it at its viewer limit (CLOSE_VIEWER_LIMIT). */
-export const VIEWER_LIMIT_MESSAGE = "this engine is at its viewer limit; try again later";
+export const VIEWER_LIMIT_MESSAGE = "at the viewer limit; try again later";
 // Highest wire-contract major this client understands. Must track the
 // engine's protocol version (docs/protocol.md, "Versioning"); see
 // readSession for the fail-closed check and why absent means 1.

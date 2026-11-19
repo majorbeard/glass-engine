@@ -461,6 +461,12 @@ prints what the relay would do, and binds nothing.
   traffic from an engine's other addresses, so an engine listed by its
   private address alone never connects. Names are looked up again every 5
   seconds, and a name that stops resolving keeps its last answer.
+- **If an engine's NAT changes its port.** Some hosts send an engine's media
+  out from another port than its media port. The relay then refuses all of it,
+  and its log says so once, with the setting to use: "Engine 203.0.113.5 sends
+  from port 8684, not 50000 as GLASS_TURN_PEERS says: …until the list names
+  203.0.113.5:8684". List the engine at that port. `wrongPort` in its
+  `/v1/metrics` counts such packets.
 - **It relays to those engines only**, and to their media port only, so none
   of the peer rules of a TURN server of your own are needed. Its limits are
   the built-in relay's.
