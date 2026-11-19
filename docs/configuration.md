@@ -145,6 +145,29 @@ itself. See [recording.md](recording.md).
 | `GLASS_QUALITY_SCALER` | `false` | `true` also adapts the picture when the bitrate can't carry it; `GLASS_CONTENT_HINT` chooses how. |
 | `GLASS_QUALITY_SCALER_MIN_PERCENT` | `37` | Lowest resolution scale the quality scaler may choose, in percent. |
 
+## The session service
+
+`glass gate` reads these, with `GLASS_TICKET_SECRET` (the engine's), `GLASS_CORS_ORIGINS`,
+`GLASS_TRUSTED_PROXIES`, `GLASS_MONITOR_ADDR`, `GLASS_API_TOKEN` and the [TLS](#tls) settings. See
+[deployment.md](deployment.md#the-session-service-glass-gate).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GLASS_GATE` | unset | Who gets a session ticket: `open` (anyone, within the limits), `passphrase`, or `links` (minted with `glass gate link`). Required. |
+| `GLASS_GATE_ENGINE` | unset | Required: the engine's public address, `http(s)://host[:port]`, handed to the browser with its ticket. |
+| `GLASS_GATE_PASSPHRASE` | unset | The shared phrase `GLASS_GATE=passphrase` asks for. |
+| `GLASS_GATE_PUBLIC` | unset | `glass gate link`: the gate's own public address, which the link points the viewer at. |
+| `GLASS_GATE_VIEWER` | unset | `glass gate link`: the viewer a link opens, `http(s)://host[/path]`. Unset, the command prints the fragment alone. |
+| `GLASS_GATE_ADDR` | `:8090` | Listen address without a certificate of its own. |
+| `GLASS_GATE_RATE_PER_MINUTE` | `10` | Tickets one visitor may get a minute. |
+| `GLASS_GATE_TOTAL_PER_MINUTE` | `120` | Tickets all visitors together may get a minute. |
+
+On the engine:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GLASS_GATE_UPSTREAM` | unset | `glass gate` beside the engine (`host:port`), whose `POST /v1/ticket` the engine forwards, so one address and certificate serve both. The engine answers `502` `unavailable` while the gate is down. |
+
 ## Operations
 
 | Variable | Default | Purpose |

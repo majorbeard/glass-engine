@@ -60,6 +60,27 @@ function isLocalAddress(addr: string): boolean {
 // of its own.
 export const CAN_CREATE_SESSIONS = isLocalAddress(GLASS_ADDR);
 
+// The session service this viewer asks for a ticket when it opens with no
+// session link: glass gate. A link minted with `glass gate link` carries it in
+// the fragment (#gate=...&code=...), which the browser never sends to a server;
+// VITE_GLASS_GATE sets one for a site that always uses the same gate (an open
+// or passphrase gate). The gate names the engine, so this viewer then needs no
+// engine address and no API token.
+export function gateFromLink(): { gate: string | null; code: string | null } {
+  const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  return {
+    gate: fragment.get("gate") || (import.meta.env.VITE_GLASS_GATE as string | undefined) || null,
+    code: fragment.get("code"),
+  };
+}
+
+// engineOf is the engine a session lives on, from its signaling link: the
+// engine's own address, whichever way the session was started.
+export function engineOf(signalingUrl: string): string {
+  const u = new URL(signalingUrl);
+  return `${u.protocol === "wss:" ? "https:" : "http:"}//${u.host}`;
+}
+
 // Requests the mic-capable browser pool at session-creation time (see
 // createGlassSession's own audioInput param) - a build-time flag
 // rather than a runtime UI toggle for now, same reasoning as API_TOKEN

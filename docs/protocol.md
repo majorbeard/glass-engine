@@ -216,6 +216,7 @@ the code. A body may carry more fields beside these two (`floor_taken`'s
 | `navigation_not_allowed` | 400 | A `navigate` input to a URL the navigation rules refuse: a scheme other than `http` or `https`, loopback, a private or link-local address. |
 | `unauthorized` | 401 | No credential, or one the runtime does not know. |
 | `ticket_invalid`, `ticket_expired`, `ticket_used` | 401 | A session ticket refused (`POST /v1/tickets`). |
+| `gate_refused` | 401 | `glass gate` refused a ticket: its passphrase (or, with the `links` gate, its link) is not right. |
 | `link_expired`, `link_revoked` | 401 | A link past its expiry, or revoked. |
 | `origin_not_allowed` | 403 | A browser origin the runtime does not allow. |
 | `link_not_allowed` | 403 | A valid link without the right this needs: control of the page, producing, the statistics, the other peer's place. |
@@ -326,6 +327,24 @@ refuse; a ticket refused that way, or at capacity (`503`), is not spent.
 
 A ticket opens only this route: it is not accepted as a token anywhere
 else, and the API token is not accepted here.
+
+### The session service: `glass gate`
+
+`glass gate` runs beside the engine and gives a browser a session ticket, so a
+website gets a browser from the engine's pool with nobody handing out links
+and no API token in the page. It signs with the engine's
+`GLASS_TICKET_SECRET`; the browser redeems the ticket with the engine
+(`POST /v1/tickets`, above). Running it: see
+[deployment.md](deployment.md#the-session-service-glass-gate).
+
+| Method | Path | |
+|---|---|---|
+| `POST` | `/v1/ticket` | Body: JSON with what the gate asks for, and nothing else (`400` `bad_request` for any other field): `{}` for the `open` gate, `{"passphrase"}` for `passphrase`, `{"code"}` for `links`. `201` with `{"engine", "ticket"}`: the engine's public address and a ticket for one session with the engine's defaults, valid 2 minutes. `401` `gate_refused` for a wrong passphrase, or a link's code that is not valid, has expired or has no uses left; `503` `unavailable` when the `links` gate can't read or keep its record of uses; `429` `rate_limited` with `Retry-After` past the per-visitor or total limit; `403` `origin_not_allowed` for a browser origin not in `GLASS_CORS_ORIGINS`. Answers a CORS preflight for allowed origins. |
+| `GET` | `/healthz` | `200`. |
+
+Beside an engine with `GLASS_GATE_UPSTREAM`, the engine serves the same
+`POST /v1/ticket` itself and forwards it, with no API token needed; it
+answers `502` `unavailable` while the gate is down.
 
 ## Signaling: viewers
 

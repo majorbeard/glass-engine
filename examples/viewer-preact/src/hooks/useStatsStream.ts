@@ -1,10 +1,10 @@
 import { useEffect, useState } from "preact/hooks";
 import type { PerformanceStats } from "../components/BrowserHeader";
-import { API_TOKEN, GLASS_ADDR } from "../config";
+import { API_TOKEN } from "../config";
 
 // useStatsStream follows the backend's per-session SSE stats stream for
 // BrowserHeader's stats menu.
-export function useStatsStream(sessionId: string | null, linkToken: string | null) {
+export function useStatsStream(sessionId: string | null, linkToken: string | null, engine: string | null) {
   // Live performance stats (BrowserHeader's StatsMenu) - previously wired
   // to permanently-hardcoded fps={0}/performanceStats={null}, a dead UI
   // shell with nothing feeding it. Fed by the backend's own SSE stats
@@ -29,7 +29,7 @@ export function useStatsStream(sessionId: string | null, linkToken: string | nul
     // (the session's own link, or one given control). With neither, no
     // stream: a request without a credential is only refused.
     const token = API_TOKEN || linkToken;
-    if (!sessionId || !token) {
+    if (!sessionId || !token || !engine) {
       setFps(0);
       setPerfStats(null);
       return;
@@ -42,7 +42,7 @@ export function useStatsStream(sessionId: string | null, linkToken: string | nul
     // 2026-09-07, silently broken since this stats stream was first wired
     // up, harmless beyond the stats menu never populating (video/input are
     // on a separate, already-authenticated signaling connection).
-    const statsStreamUrl = `${GLASS_ADDR}/v1/sessions/${sessionId}/stats/stream?token=${encodeURIComponent(token)}`;
+    const statsStreamUrl = `${engine}/v1/sessions/${sessionId}/stats/stream?token=${encodeURIComponent(token)}`;
     const es = new EventSource(statsStreamUrl);
     let prevFramesEmitted: number | null = null;
     let prevCapturedAt: number | null = null;
@@ -78,7 +78,7 @@ export function useStatsStream(sessionId: string | null, linkToken: string | nul
       // effect's own cleanup below tears it down on the next sessionId change.
     };
     return () => es.close();
-  }, [sessionId, linkToken]);
+  }, [sessionId, linkToken, engine]);
 
   return { fps, perfStats };
 }

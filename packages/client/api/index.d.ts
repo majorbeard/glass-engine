@@ -378,6 +378,33 @@ declare const VIEWER_LIMIT_MESSAGE = "at the viewer limit; try again later";
 declare const SUPPORTED_PROTOCOL_VERSION = 1;
 declare function createGlassSession(baseUrl?: string, apiToken?: string, options?: boolean | GlassCreateSessionOptions): Promise<GlassSession>;
 declare function redeemGlassTicket(ticket: string, baseUrl?: string): Promise<GlassSession>;
+/** A session ticket from glass gate, and the engine to redeem it with. */
+interface GlassGateTicket {
+    /** The engine's public address: pass it to redeemGlassTicket as baseUrl. */
+    engine: string;
+    /** A session ticket, good for one session, redeemed at once. */
+    ticket: string;
+}
+/**
+ * What glass gate asks for: nothing for an `open` gate, the shared phrase for a
+ * `passphrase` gate, a minted link's code for a `links` gate.
+ */
+interface GlassGateCredentials {
+    code?: string;
+    passphrase?: string;
+}
+/**
+ * The gate refused a ticket. `code` is the gate's: `gate_refused` (a wrong
+ * passphrase, or a link not valid, expired or used up), `rate_limited` (see
+ * retryAfterSeconds), `origin_not_allowed`, `unavailable`.
+ */
+declare class GlassGateError extends Error {
+    readonly status: number;
+    readonly code?: string | undefined;
+    readonly retryAfterSeconds?: number | undefined;
+    constructor(message: string, status: number, code?: string | undefined, retryAfterSeconds?: number | undefined);
+}
+declare function requestGateTicket(gate: string, credentials?: GlassGateCredentials): Promise<GlassGateTicket>;
 declare function deleteGlassSession(id: string, baseUrl?: string, apiToken?: string): void;
 declare function mintConnectionGrant(sessionId: string, capabilities: GlassGrantRequest, baseUrl?: string, apiToken?: string): Promise<GlassConnectionGrant>;
 declare class GlassClient extends Emitter<GlassClientEventMap> {
@@ -449,6 +476,9 @@ export {
     type GlassContentHint,
     type GlassCreateSessionOptions,
     type GlassDialog,
+    type GlassGateCredentials,
+    GlassGateError,
+    type GlassGateTicket,
     type GlassGrantRequest,
     type GlassInputDrop,
     type GlassInputDropCode,
@@ -487,4 +517,5 @@ export {
     deleteGlassSession,
     mintConnectionGrant,
     redeemGlassTicket,
+    requestGateTicket,
 };

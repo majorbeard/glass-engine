@@ -247,6 +247,8 @@ What is being built next. None of it exists yet, and there are no dates.
 - `examples/producer-capacitor/`: an Android app that publishes the phone's
   camera and microphone as a relay producer and shares a watch link.
 - `examples/call-capacitor/`: an Android app for two-party calls.
+- `examples/compose/`: the engine and `glass gate` on one host, with Docker
+  Compose: see [getting-started.md](docs/getting-started.md#7-on-a-server-the-engine-and-glass-gate).
 - `examples/quickstart/`: the single-page relay and call examples used by
   the getting-started guide.
 - `docs/`: everything above.
