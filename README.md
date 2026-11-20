@@ -1,8 +1,10 @@
 # Glass Engine
 
-Glass is a self-hosted engine for live streaming and remote control. It
-carries video and audio from a **source** to any number of **viewers** over
-WebRTC, and carries input back from a viewer to the source.
+Glass is a self-hosted engine for live streaming and remote control, built
+to run inside your own product. It carries video and audio from a **source**
+to any number of **viewers** over WebRTC, and carries input back from a
+viewer to the source. You run it on your servers and build your app on its
+HTTP API and SDK; your product, your users and your service terms stay yours.
 
 A source can be:
 
@@ -35,20 +37,44 @@ contains everything it needs or downloads it from its publisher at start.
 This repository holds the public pieces: the client SDK, the example apps
 and these docs.
 
-## Performance
+## What to expect
 
 Measured on real machines and real links; each figure's version, hardware,
-page and method are in [docs/performance.md](docs/performance.md).
+page and method are in [docs/performance.md](docs/performance.md). Your pages
+and your network decide most of it, so measure your own workload too.
 
-| | |
+| | What to expect |
 |---|---|
-| **40,000 sessions** on one 8-vCPU machine | no errors; 25,000 held for an hour under constant churn, no leak |
-| **3 to 5 millicores** per 30 fps stream | the engine's own cost, linear from 50 to 800 streams |
-| **WebGL at 43 fps, 1280x720** on a GPU | against 10 fps at 640x360 in software, CPU full |
-| **19% of the CPU instead of 31.5%** | eight sessions encoded on the GPU (NVENC) |
-| **159 to 188 ms** click to picture | cloud machine to a PC on home 4G, median; within about 30 ms of Chrome's own WebRTC sender |
-| **Sound within -61 to +30 ms** of its picture | a phone on cellular |
-| **1 to 3 s frozen in about 50 s of watching, instead of about 20 s** | a 200 ms round trip with 2% loss (emulated), v0.1.103 against v0.1.102 |
+| **Hosted browser, CPU machine** | Chrome is most of the cost (on a news site: Chrome 81%, the encoder 15%, the engine 4%). A busy page can take most of a core; a page that stops painting costs little. Start at 4 vCPU for a handful of sessions. |
+| **Hosted browser, GPU machine** | About 1.6 cores per WebGL session and 1 core per full-screen 2D animation. A 32-vCPU host with one RTX PRO 4500 carried 16 WebGL sessions or 20 animations at 60 fps. |
+| **Relay streams and calls** | Forwarded without decoding: about 4 to 5 millicores per viewer at 1 Mbit/s. Your upload bandwidth usually runs out before the CPU does. |
+| **A click to the picture** | 71 to 89 ms at the median with the viewer near the server; 159 to 188 ms from a cloud machine to a PC on home 4G, within about 30 ms of Chrome's own WebRTC sender on the same page. |
+| **Sound against picture** | Within -61 to +30 ms of its picture, on a phone on cellular. |
+| **A poor link** | A 200 ms round trip with 2% loss: the picture froze 1 to 3 s in about 50 s of watching. |
+| **Start** | 46 s for a first start, which downloads Chrome; 7 s after that. |
+| **One process** | Up to 50 sessions of each type, set by the license (see [Licensing](#licensing)). The engine's own overhead is small next to that: idle sessions cost about 0.3 MB each. On real workloads you reach the browsers' CPU, your upload bandwidth or the license limit first. |
+
+## What Glass does, and what you run
+
+Glass takes care of the media engineering: WebRTC, bandwidth estimation and
+pacing, encoding, reconnects, input, per-link permissions enforced on the
+server, recording, and a TURN relay and TLS certificates built in.
+
+You still run the infrastructure:
+
+- **The servers.** One Docker container per machine, a GPU machine where
+  your pages need one, and the firewall rules for its HTTP and UDP ports
+  ([docs/deployment.md](docs/deployment.md)).
+- **Upgrades, monitoring and incidents.** Glass reports what it refuses and
+  why, and exposes metrics ([docs/monitoring.md](docs/monitoring.md)), but
+  you watch them. [docs/incident-response.md](docs/incident-response.md)
+  covers a leaked link, token or secret.
+- **More than one machine.** Each Glass process stands alone. To use several
+  machines, your backend chooses the machine for each session; Glass doesn't
+  route sessions between machines yet (see [Direction](#direction)).
+- **Where the hosted browser browses from.** It reaches the web from your
+  server's address, and some sites refuse or challenge datacenter addresses
+  ([docs/sources/browser.md](docs/sources/browser.md#limits-worth-knowing)).
 
 ## Status
 
