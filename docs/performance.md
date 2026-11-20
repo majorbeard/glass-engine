@@ -7,10 +7,11 @@ judge it and repeat it. Where a result has a limit, the limit is next to it.
 
 ## At a glance
 
+What to expect from a released image comes first; the engine's own limits, measured
+in a test build, are last.
+
 | What | Result | Where |
 |---|---|---|
-| The engine at scale | **40,000 sessions** on one 8-vCPU machine, no errors; **25,000 held for an hour** with 50 created and 50 closed every second, no leak | AWS c7g.2xlarge |
-| Streaming cost of the engine | **3 to 5 millicores** per 30 fps stream, linear from 50 to 800 streams | AWS c7g.2xlarge |
 | WebGL on a GPU | **43 fps at 1280x720** for one session, where software rendering manages 10 fps at 640x360 with the CPU full | RunPod A40 |
 | GPU encoding | eight light sessions at **19% of the CPU quota instead of 31.5%** (NVENC instead of software H.264) | RunPod A40 |
 | Sessions on one GPU | **16 WebGL sessions or 20 full-screen 2D animations at 60 fps**, every viewer within the frame-rate, freeze and input lines below | RunPod RTX PRO 4500, 32 vCPU |
@@ -19,6 +20,8 @@ judge it and repeat it. Where a result has a limit, the limit is next to it.
 | Sound against picture | phone on cellular: every tone within **-61 to +30 ms** of its picture (median -22 ms) | AWS c6g.xlarge |
 | Long, lossy paths | a 200 ms round trip with 2% loss: the picture frozen **1 to 3 s in about 50 s of watching, where v0.1.102 froze about 20 s**; no delay added on a clean link | a desktop PC, the link emulated |
 | Start | container healthy **46 s** after a first start that downloads Chrome; **7 s** with the cache volume | AWS c6g.xlarge |
+| The engine alone, in a test build | without Chrome or the encoder: **40,000 idle signaling sessions plus 200 streams** held on one 8-vCPU machine, no errors, and 25,000 for an hour under churn with no leak. This is the engine's ceiling, not a deployment's: a released image is limited to 50 sessions of each type per process | AWS c7g.2xlarge |
+| The engine's own cost per stream | **3 to 5 millicores** per 30 fps stream, linear from 50 to 800 streams, in the same test build; a hosted browser costs far more (Chrome) | AWS c7g.2xlarge |
 
 ## The engine at scale (signaling, sessions, streaming)
 
