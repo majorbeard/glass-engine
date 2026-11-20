@@ -30,6 +30,22 @@ const ContextMenu = lazy(() =>
 );
 
 // --- Main App Component ---
+// controlRefusal is what the viewer says when Glass refuses a grant or revoke.
+function controlRefusal(reason?: string): string {
+  switch (reason) {
+    case "no_capacity":
+      return "Control can't be given: there is no room for another person in control.";
+    case "unknown_connection":
+      return "That viewer has left.";
+    case "not_owner":
+      return "Only the session's owner can do that.";
+    case "rate_limited":
+      return "Too many requests: try again in a moment.";
+    default:
+      return "Glass refused that request.";
+  }
+}
+
 export function App() {
   // --- App-chrome state ---
   const [contextMenu, setContextMenu] = useState({ show: false, x: 0, y: 0 });
@@ -62,7 +78,7 @@ export function App() {
     micAccessOrigin, setMicAccessOrigin, micError, setMicError, micGranting, setMicGranting,
   } = session;
   // A playback session has no statistics stream (it encodes nothing).
-  const { fps, perfStats } = useStatsStream(session.playback ? null : sessionId, session.linkToken, session.engine);
+  const { fps, perfStats } = useStatsStream(session.browserSession ? sessionId : null, session.linkToken, session.engine);
   const closeContextMenu = useCallback(() => setContextMenu({ show: false, x: 0, y: 0 }), []);
   const { handleNavigate, handleNavigateBack, handleNavigateForward, handleRefresh } = useNavigation({
     client,
@@ -220,15 +236,18 @@ export function App() {
   // (see grantInput/revokeInput's own doc comments) - the "isOwner &&"
   // guard in the render below is what actually keeps these buttons from
   // showing to a non-owner in the first place.
+  // Glass answers each grant and revoke; a refusal is shown, not left silent.
   const handleGrantInput = useCallback(
-    (connectionId: string) => {
-      client?.grantInput(connectionId);
+    async (connectionId: string) => {
+      const answer = await client?.grantInput(connectionId);
+      if (answer?.outcome === "refused") setToastMessage({ message: controlRefusal(answer.reason), type: "error" });
     },
     [client]
   );
   const handleRevokeInput = useCallback(
-    (connectionId: string) => {
-      client?.revokeInput(connectionId);
+    async (connectionId: string) => {
+      const answer = await client?.revokeInput(connectionId);
+      if (answer?.outcome === "refused") setToastMessage({ message: controlRefusal(answer.reason), type: "error" });
     },
     [client]
   );
@@ -243,12 +262,12 @@ export function App() {
   const handleShareWatchOnlyLink = useCallback(async () => {
     if (!sessionId) return;
     try {
-      const grant = await mintConnectionGrant(
+      const grant = await mintConnectionGrant({
         sessionId,
-        { consumesMedia: true },
-        GLASS_ADDR,
-        API_TOKEN
-      );
+        capabilities: { consumesMedia: true },
+        baseUrl: GLASS_ADDR,
+        apiToken: API_TOKEN,
+      });
       const attachUrl = new URL(window.location.href);
       attachUrl.search = "";
       attachUrl.searchParams.set("attachSessionId", sessionId);

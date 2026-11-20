@@ -38,7 +38,7 @@ class FakeWebSocket {
   open(sendIceConfig = true) {
     this.readyState = FakeWebSocket.OPEN;
     this.fire("open");
-    if (sendIceConfig) this.serverMessage({ type: "ice_config", iceServers: ENGINE_ICE });
+    if (sendIceConfig) this.serverMessage({ type: "ice_config", protocolVersion: 2, iceServers: ENGINE_ICE });
   }
   serverMessage(msg: object) {
     this.fire("message", { data: JSON.stringify(msg) });
@@ -123,7 +123,7 @@ function sessionResponse(id: string) {
       main: `wss://glass/v1/relay-sessions/${id}/produce?token=p-${id}-main`,
       cam: `wss://glass/v1/relay-sessions/${id}/produce?token=p-${id}-cam`,
     },
-    videoCodec: "h264",
+    codec: "h264",
   };
 }
 

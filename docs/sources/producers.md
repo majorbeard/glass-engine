@@ -59,8 +59,8 @@ curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
   "id": "9ee60523-…",
   "signalingUrl": "wss://glass.example.com/v1/relay-sessions/9ee6…/signaling?token=…",
   "produceUrl": "wss://glass.example.com/v1/relay-sessions/9ee6…/produce?token=…",
-  "videoCodec": "h264",
-  "protocolVersion": 1,
+  "codec": "h264",
+  "protocolVersion": 2,
   "sourceType": "relay",
   "capabilities": { "video": true, "navigation": false, "…": "…" }
 }
@@ -72,7 +72,7 @@ curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
   other session ([client-sdk.md](../client-sdk.md)). To hand out a watch-only
   link, mint a grant with `POST /v1/relay-sessions/{id}/connections` and
   `{"consumesMedia": true}`.
-- `videoCodec` is the one video codec this Glass instance accepts: `h264`, or
+- `codec` is the one video codec this Glass instance accepts: `h264`, or
   `vp8` when the operator enables VP8. **The producer must send it.**
 
 ### Several streams in one session: slots
@@ -152,8 +152,9 @@ below).
   `producer_report` (`GlassProducer` does): the layers viewers are on, and
   the one below each of them, so that a move down lands at once, whatever
   the producer's uplink: when it can't carry them all, the producer's own
-  encoder cuts its upper layers. A layer no viewer needs is turned off
-  after 5 s.
+  encoder cuts its upper layers. With no viewer, Glass asks for the full
+  layer and the one below it, so a recording made with nobody watching gets
+  the full picture. A layer no viewer needs is turned off after 5 s.
   `GlassProducer` turns off the layers Glass doesn't ask for, which saves
   the device's upload and encoders. A producer that sends no report
   sends every layer, as before.
@@ -227,7 +228,7 @@ any sign on the server side.
 
 ## Media requirements
 
-**Video.** Exactly one video track, in `videoCodec`. Glass behaves as a normal
+**Video.** Exactly one video track, in `codec`. Glass behaves as a normal
 WebRTC receiver, and your sender must respond to it like one:
 
 - **NACK:** resend lost packets.

@@ -6,6 +6,7 @@ import { Emitter } from "./emitter";
 import { withStartBitrate } from "./sdp";
 import { errorDetail } from "./internal";
 import { LayerControl } from "./layers";
+import { SUPPORTED_PROTOCOL_VERSION, protocolMismatchMessage } from "./protocol_version";
 
 export type ProducerState =
   | "idle"
@@ -146,7 +147,7 @@ interface CreatedSession {
   signalingUrl: string;
   produceUrl: string;
   produceUrls?: Record<string, string>;
-  videoCodec: "h264" | "vp8";
+  codec: "h264" | "vp8";
 }
 
 /** A failure retrying can't fix. */
@@ -309,7 +310,7 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
 
       // Glass answers with the codec it registered; an attached producer can't ask, so it
       // offers H.264 (the default) unless the created session said otherwise.
-      let codec = created?.videoCodec ?? "h264";
+      let codec = created?.codec ?? "h264";
       const connect = () => this.establish(produceUrl, codec);
 
       this.setState("connecting", this._session?.id);
@@ -348,7 +349,7 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
           try {
             if (!resuming && !madeNewSession) {
               ({ created, produceUrl } = await this.createSession());
-              codec = created.videoCodec;
+              codec = created.codec;
               madeNewSession = true;
               if (this.stopped) return;
               this.publishSession(created, produceUrl);
@@ -494,13 +495,18 @@ export class GlassProducer extends Emitter<GlassProducerEvents> {
       });
 
       socket.addEventListener("message", (event) => {
-        let msg: { type: string; sdp?: string; candidate?: RTCIceCandidateInit; code?: string; message?: string; iceServers?: RTCIceServer[]; active?: boolean; rids?: unknown };
+        let msg: { type: string; sdp?: string; candidate?: RTCIceCandidateInit; code?: string; message?: string; iceServers?: RTCIceServer[]; active?: boolean; rids?: unknown; protocolVersion?: number };
         try {
           msg = JSON.parse(event.data);
         } catch {
           return;
         }
         if (msg.type === "ice_config") {
+          const version = typeof msg.protocolVersion === "number" ? msg.protocolVersion : 1;
+          if (version !== SUPPORTED_PROTOCOL_VERSION) {
+            drop(true, protocolMismatchMessage(version));
+            return;
+          }
           if (Array.isArray(msg.iceServers)) gotIceConfig(msg.iceServers);
         } else if (msg.type === "answer" && msg.sdp) {
           void pc.setRemoteDescription({ type: "answer", sdp: withStartBitrate(msg.sdp, this.startBitrateKbps) });
@@ -605,7 +611,7 @@ async function createRelaySession(serverUrl: string, apiToken?: string, slots?: 
   return res.json();
 }
 
-/** Restrict the offer to the one codec Glass registered (the session's videoCodec). */
+/** Restrict the offer to the one codec Glass registered (the session's codec). */
 function lockCodec(transceiver: RTCRtpTransceiver, codec: "h264" | "vp8") {
   if (typeof transceiver.setCodecPreferences !== "function") return;
   const capabilities = RTCRtpSender.getCapabilities?.("video");

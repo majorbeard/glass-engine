@@ -2,12 +2,18 @@
 // modules (lifecycle, transport, input, ...) operate on it. Internal:
 // not exported from the package.
 
-import type { GlassClientOptions, GlassClientEventMap } from "./index";
+import type { GlassClientOptions, GlassClientEventMap, GlassCloseCode } from "./index";
 import { DEFAULT_RECONNECT_DELAYS_MS, DEFAULT_MAX_RECONNECT_ATTEMPTS, originOf } from "./internal";
-import type { GlassConnectionQuality, GlassDialog, GlassPlaybackState, GlassRosterEntry, GlassSlotState } from "./types";
+import type { GlassConnectionQuality, GlassControlAnswer, GlassDialog, GlassPlaybackState, GlassRosterEntry, GlassSlotState } from "./types";
 import { InputLatencyTracker } from "./input_latency";
 import type { ReceiverCounters } from "./input_latency";
 import { EncodedStreamChecker } from "./encoded_stream_check";
+
+// Ending is a "closed" event's arguments: a sentence for people, a code for programs.
+export interface Ending {
+  reason: string;
+  code: GlassCloseCode;
+}
 
 // @internal Not part of GlassClientOptions - deliberately undocumented and
 // excluded from the public options surface (see GlassClient's
@@ -127,6 +133,9 @@ export class ClientCore {
   // connectionId. Stays empty for a non-owner connection (isOwner() false)
   // - it never receives roster traffic at all.
   _connections = new Map<string, GlassRosterEntry>();
+  // Control requests waiting for Glass's control_answer, by the id each was sent with.
+  controlPending = new Map<number, { action: GlassControlAnswer["action"]; connectionId?: string; resolve: (answer: GlassControlAnswer) => void }>();
+  controlNextId = 1;
   // Client-side input latency (input_latency.ts); samples are reported to
   // Glass at most every INPUT_LATENCY_REPORT_MS.
   inputLatency = new InputLatencyTracker();
@@ -200,10 +209,11 @@ export class ClientCore {
   // skip reconnectLoop entirely instead of retrying a session ID that can
   // never come back. Cleared once consumed so it can't leak into a later,
   // unrelated connection.
-  serverTerminalError: string | null = null;
+  serverTerminalError: Ending | null = null;
   // Set, to the "closed" reason, when Glass closed the socket with CLOSE_SESSION_NOT_FOUND,
-  // CLOSE_LINK_EXPIRED or CLOSE_LINK_REVOKED: stops the reconnect loop.
-  sessionGone: string | null = null;
+  // CLOSE_LINK_EXPIRED or CLOSE_LINK_REVOKED, or the protocol versions differ: stops the
+  // reconnect loop.
+  sessionGone: Ending | null = null;
   // Set, to the reason, when Glass refused the last attempt for now (CLOSE_VIEWER_LIMIT); the retry
   // paths report it as a "refused" event and clear it.
   refusedReason: string | null = null;

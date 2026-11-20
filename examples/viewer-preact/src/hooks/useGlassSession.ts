@@ -6,9 +6,6 @@ import {
   redeemGlassTicket,
   requestGateTicket,
   GlassGateError,
-  LINK_EXPIRED_MESSAGE,
-  SESSION_NOT_FOUND_MESSAGE,
-  LINK_REVOKED_MESSAGE,
   type GlassClient,
   type GlassDialog,
   type GlassPlaybackState,
@@ -42,8 +39,8 @@ async function sessionFromGate(gate: string, code: string | null): Promise<Glass
   let passphrase: string | undefined;
   for (let attempt = 0; ; attempt++) {
     try {
-      const t = await requestGateTicket(gate, { code: code ?? undefined, passphrase });
-      return await redeemGlassTicket(t.ticket, t.engine);
+      const t = await requestGateTicket({ gate, code: code ?? undefined, passphrase });
+      return await redeemGlassTicket({ ticket: t.ticket, baseUrl: t.engine });
     } catch (err) {
       const refused = err instanceof GlassGateError && err.code === "gate_refused";
       if (!refused || code || attempt >= 5) throw err;
@@ -156,6 +153,9 @@ export function useGlassSession(notify: Notify) {
   // The token of the link this viewer joined with: the stats stream takes
   // it, since a browser can't send a header there.
   const [linkToken, setLinkToken] = useState<string | null>(null);
+  // Whether this is a browser session (its link is under /v1/sessions/): only
+  // a browser session has the statistics stream this viewer reads.
+  const [browserSession, setBrowserSession] = useState(false);
   // The engine this session lives on, from its link: the build's address, or
   // the one a gate named.
   const [engine, setEngine] = useState<string | null>(null);
@@ -246,7 +246,7 @@ export function useGlassSession(notify: Notify) {
         session = kept;
       } else if (ticket && sessionEpoch === 0) {
         try {
-          session = await redeemGlassTicket(ticket, GLASS_ADDR);
+          session = await redeemGlassTicket({ ticket, baseUrl: GLASS_ADDR });
         } catch (err: any) {
           if (!cancelled) setError(`This link could not be opened: ${err.message}`);
           return;
@@ -273,7 +273,9 @@ export function useGlassSession(notify: Notify) {
         return;
       } else {
         try {
-          session = await createGlassSession(GLASS_ADDR, API_TOKEN, {
+          session = await createGlassSession({
+            baseUrl: GLASS_ADDR,
+            apiToken: API_TOKEN,
             audioInput: AUDIO_INPUT,
             contentHint: CONTENT_HINT,
             codec: CODEC,
@@ -287,11 +289,14 @@ export function useGlassSession(notify: Notify) {
       // Only a session this run created is deleted here: a kept one may be
       // what the next run rejoins.
       if (cancelled) {
-        if (!attachSessionId && !kept && !ticket && !gate) deleteGlassSession(session.id, GLASS_ADDR, API_TOKEN);
+        if (!attachSessionId && !kept && !ticket && !gate) {
+          void deleteGlassSession({ id: session.id, baseUrl: GLASS_ADDR, apiToken: API_TOKEN }).catch(() => {});
+        }
         return;
       }
       setSessionId(session.id);
       setLinkToken(new URL(session.signalingUrl).searchParams.get("token"));
+      setBrowserSession(new URL(session.signalingUrl).pathname.startsWith("/v1/sessions/"));
       setEngine(engineOf(session.signalingUrl));
       if (!attachSessionId) keepSession(session);
 
@@ -510,20 +515,24 @@ export function useGlassSession(notify: Notify) {
         setMicGranting(false);
         setMicAccessOrigin(origin);
       });
-      c.on("closed", (reason) => {
+      c.on("closed", (_reason, code) => {
         if (cancelled) return;
         setIsConnected(false);
         // A user-initiated disconnect closes silently; a lost/exhausted
         // connection surfaces an actionable message.
-        const userInitiated = reason.includes("client disconnected");
-        if (userInitiated) return;
+        if (code === "client_disconnected") return;
         // A new session would not help: the link itself no longer admits anyone.
-        if (reason === LINK_EXPIRED_MESSAGE) {
+        if (code === "link_expired") {
           setError("This link has expired. Ask whoever shared it for a new one.");
           return;
         }
-        if (reason === LINK_REVOKED_MESSAGE) {
+        if (code === "link_revoked") {
           setError("This link has been revoked. Ask whoever shared it for a new one.");
+          return;
+        }
+        // Retrying can't help: this viewer and the engine speak different protocol versions.
+        if (code === "protocol_mismatch") {
+          setError("This viewer doesn't match the engine's version. Ask whoever runs it to update the viewer.");
           return;
         }
         // attachSessionId viewers don't own the session (see its own doc
@@ -532,7 +541,7 @@ export function useGlassSession(notify: Notify) {
         if (attachSessionId || ticket || gateCode) {
           if (ticket || gateCode) keepSession(null);
           // The engine said the session is gone: it ended, so a reload would not bring it back.
-          if (reason === SESSION_NOT_FOUND_MESSAGE) {
+          if (code === "session_not_found") {
             setError("This session has ended.");
             return;
           }
@@ -601,6 +610,7 @@ export function useGlassSession(notify: Notify) {
     canGoForward,
     sessionId,
     linkToken,
+    browserSession,
     engine,
     producesInput,
     otherHasFloor,

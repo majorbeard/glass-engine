@@ -84,14 +84,13 @@ change between releases.
 | `GLASS_TURN_PEERS` | unset | `glass turn` only, and required there: the engines it relays to, comma-separated, as `host[:port]` (their media port, 50000 if left out). Name the address each engine reaches the relay from. See [deployment.md](deployment.md#glasss-relay-on-its-own-host). |
 | `GLASS_TURN_RELAY_PORTS` | `49152-65535` | `glass turn` only: the UDP port range of its relay sockets, `min-max`, at least 2,000 ports. Open it to the engines only. |
 | `GLASS_TURN_URLS` | unset | A TURN server of your own: comma-separated TURN/TURNS URLs, each `turn:<host>:<port>` or `turns:<host>:<port>`. Glass refuses to start on one it can't parse (a missing `turn:` is the usual slip), and `glass doctor` fails the check. Needs `GLASS_TURN_SECRET`, or both `GLASS_TURN_USERNAME` and `GLASS_TURN_CREDENTIAL`: without a credential no session could connect, so Glass refuses to start and `glass doctor` fails the check. |
-| `GLASS_WEBRTC_ALLOW_PRIVATE_PEERS` | `false` | Accept ICE candidates a client sends at private, loopback or link-local addresses (or mDNS `.local` names). Off, they are dropped, so a link holder can't point Glass's connectivity checks into your network; clients on a private network still connect from the packets they send, and a TURN server on the same private network keeps working. Turn it on only if clients on your private network fail to connect without it. `GLASS_INSECURE_LOCAL_DEV` implies it. |
+| `GLASS_WEBRTC_ALLOW_PRIVATE_PEERS` | `false` | Accept ICE candidates a client sends at private, loopback or link-local addresses (or mDNS `.local` names). Off, they are dropped, so a link holder can't point Glass's connectivity checks into your network; clients on a private network still connect from the packets they send, and a TURN server on the same private network keeps working. A client on the engine's own machine (loopback) needs it. Turn it on only if clients on your private network fail to connect without it. `GLASS_INSECURE_LOCAL_DEV` implies it. |
 | `GLASS_TURN_SECRET` | unset | Secret shared with your TURN server (coturn's `use-auth-secret`), or the built-in relay's. Set, Glass issues every client connection its own short-lived TURN credential; Glass's own side then uses no TURN, as it reaches a client's relay by sending to it. With `GLASS_TURN=embedded` it is optional: unset, Glass makes a new one at every start. `glass turn` needs the engines' own. See [deployment.md](deployment.md#turn). |
 | `GLASS_TURN_CREDENTIAL_TTL_HOURS` | `24` | How long an issued TURN credential lasts. |
 | `GLASS_TURN_USERNAME`, `GLASS_TURN_CREDENTIAL` | unset | A fixed TURN credential, for Glass's own side only: it is never given to clients, so with it Glass's own relay is the only one. Ignored when `GLASS_TURN_SECRET` is set. |
 | `GLASS_CORS_ORIGINS` | unset | Extra browser origins allowed, exact match, comma-separated. Loopback and private-network origins are always allowed. |
 | `GLASS_TRUSTED_PROXIES` | loopback | IPs or CIDRs of reverse proxies whose `X-Forwarded-For` and `X-Forwarded-Host` are trusted. |
 | `GLASS_PUBLIC_URL` | the request's own host | The address viewers reach Glass at, such as `https://glass.example.com`: the host and scheme of the signaling URLs Glass hands out. Set it behind a proxy that rewrites `Host`. See [deployment.md](deployment.md#the-address-viewers-are-given). |
-| `GLASS_WEBRTC_UDP_PORT_MIN`, `_MAX` | unset | Deprecated per-connection port range; used only when set without `GLASS_WEBRTC_UDP_PORT`. |
 
 ## TLS
 
@@ -105,6 +104,8 @@ Glass's own HTTPS, in place of a proxy of your own. See
 | `GLASS_TLS_EMAIL` | unset | An address Let's Encrypt may write to about the certificate. Optional. |
 | `GLASS_TLS_ADDR` | `:443` | Listen address for HTTPS, and TURN over TLS with the built-in relay. |
 | `GLASS_TLS_HTTP_ADDR` | `:80` | Listen address for the redirect from HTTP to HTTPS; `off` turns it off. Publishing it is optional. |
+| `GLASS_TLS_ACME_URL` | Let's Encrypt | The ACME directory of another certificate authority (your own, or Let's Encrypt's staging) to get the certificate from. Browsers must trust that authority's root. |
+| `GLASS_TLS_ACME_ROOT` | unset | A file with the root to trust for that authority's own HTTPS (its ACME directory), when the usual roots don't cover it. |
 
 ## Hosted browser
 
@@ -114,6 +115,7 @@ Glass's own HTTPS, in place of a proxy of your own. See
 | `GLASS_CHROME_BIN` | found on `PATH`; in Docker `/usr/local/bin/chrome-headless-shell` | Chrome or `chrome-headless-shell` binary. In Docker, the two image paths (`chrome-headless-shell`, `chrome-full`) are downloaded from Google at start; any other path is used as it is and nothing is downloaded. Every capture method but `screencast` needs the full browser, so in Docker the headless shell is replaced by `chrome-full` for them. See [deployment.md](deployment.md#docker). |
 | `GLASS_EGRESS_FILTER` | `true` | Block browser connections to private networks. See [deployment.md](deployment.md#security-posture). |
 | `GLASS_AUDIO_MODE` | off | `on` streams browser audio. |
+| `GLASS_STEALTH_MODE` | off | `true` injects a script into every page that hides automation signals from the page's own JavaScript: it removes `navigator.webdriver`, makes up `navigator.plugins`, `languages` and `permissions.query` answers, and reports a common GPU as the WebGL renderer. Off, the page's JavaScript sees Chrome as it is. It is no anti-bot measure: sites that check further still refuse. |
 | `GLASS_MIC_POOL_CHROME_BIN` | unset | Enables microphone-capable sessions. In Docker: `/usr/local/bin/chrome-full`. |
 | `GLASS_MIC_POOL_SIZE` | `1` | Most microphone-capable browsers. |
 | `GLASS_MIC_POOL_WARM_FLOOR` | `0` | Microphone-capable browsers kept ready. |
@@ -182,5 +184,8 @@ Left in an old environment file, these are ignored with a warning in the log:
 `GLASS_FORCE_KEYFRAME_RECOVERY_WINDOW_MS`, `GLASS_MAX_CONCURRENT_SPAWNS`,
 `GLASS_SHED_RECOVERY_QP`, `GLASS_TIER_SWITCH_RECOVERY_MAX_BACKOFF_MS`,
 `GLASS_TIER_SWITCH_RECOVERY_MIN_MS` and `GLASS_TIER_SWITCH_RECOVERY_WINDOW_MS`.
-`GLASS_ENCODER_HW_ACCEL` is refused: Glass does not start while it is set. Remove it;
-GPU encoding is `GLASS_NVENC_SHIM_MAX_SESSIONS` and the GPU capture methods.
+These are refused: Glass does not start while one is set, and `glass doctor` fails, saying what to set instead.
+
+- `GLASS_ENCODER_HW_ACCEL`: GPU encoding is `GLASS_NVENC_SHIM_MAX_SESSIONS` and the GPU capture methods.
+- `GLASS_WEBRTC_UDP_PORT_MIN`, `GLASS_WEBRTC_UDP_PORT_MAX` (from v0.1.132): every connection shares one port, `GLASS_WEBRTC_UDP_PORT`.
+- `GLASS_STEALTH_MODE_DISABLE` (from v0.1.132): the stealth script is off by default; `GLASS_STEALTH_MODE=true` turns it on.

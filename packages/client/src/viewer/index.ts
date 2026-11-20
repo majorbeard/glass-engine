@@ -450,7 +450,7 @@ export function mountGlassViewer(
   }
 
   // --- state / navigation ---
-  const offState = client.on("state", (state) => {
+  const offState = client.on("elementState", (state) => {
     stage.style.cursor = state.cursor || "default";
     keyboard.setEditableFocused(!!state.editableFocused);
   });

@@ -21,6 +21,9 @@ export interface GlassCapabilities {
   clipboard?: boolean;
   pauseResume?: boolean;
   mobileEmulation?: boolean;
+  // Whether the source can be inspected (the page routes); a session allows
+  // it only when created with inspect: true.
+  inspect?: boolean;
   // The exact input action strings this source accepts - the backend publishes
   // its dispatcher's own vocabulary, so this cannot disagree with what the
   // runtime will really handle.
@@ -71,6 +74,32 @@ export type GlassGrantRequest = Partial<GlassConnectionCapabilities> & { expires
 // non-owner connection never receives roster traffic at all, since it has
 // no grantInput()/revokeInput() authority to act on it (see
 // GlassClient.isOwner()).
+/**
+ * Glass's one answer to a control request: requestInput(), releaseInput(), grantInput() or
+ * revokeInput(). `outcome` is the state the request leaves: asking for what this connection
+ * already holds is "granted", not refused. "relayed" means nobody could be given control now, so
+ * the request went to whoever holds it (their "inputRequested" event). `reason` says why a
+ * refusal: Glass's own (`not_allowed`: this link never included control; `not_owner`;
+ * `no_capacity`; `unknown_connection`; `rate_limited`; `invalid`) or this client's
+ * (`not_connected`, `disconnected`: the connection went before Glass answered).
+ */
+export interface GlassControlAnswer {
+  action: "request_input" | "release_input" | "grant_input" | "revoke_input";
+  outcome: "granted" | "relayed" | "released" | "revoked" | "refused";
+  reason?:
+    | "not_allowed"
+    | "not_owner"
+    | "no_capacity"
+    | "unknown_connection"
+    | "rate_limited"
+    | "invalid"
+    | "not_connected"
+    | "disconnected"
+    | (string & {});
+  /** The connection a grant or revoke was about. */
+  connectionId?: string;
+}
+
 export interface GlassRosterEntry {
   connectionId: string;
   producesInput: boolean;
@@ -171,8 +200,17 @@ export interface GlassTimelineEvent {
   [field: string]: unknown;
 }
 
+// Where an engine is, and the credential its API takes, for the session
+// helpers. baseUrl defaults to the page's own origin. apiToken is
+// GLASS_API_TOKEN, for local testing and TypeScript backends: a token in a
+// browser bundle is public.
+export interface GlassEngine {
+  baseUrl?: string;
+  apiToken?: string;
+}
+
 // Options for createGlassSession. All are optional.
-export interface GlassCreateSessionOptions {
+export interface GlassCreateSessionOptions extends GlassEngine {
   // Requests the mic-capable browser pool. See createGlassSession.
   audioInput?: boolean;
   // Absent, the session uses the runtime's own default.

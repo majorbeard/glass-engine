@@ -19,8 +19,8 @@ curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
   "id": "5c0b…",
   "peerAUrl": "wss://glass.example.com/v1/calls/5c0b…/peers/a/signaling?token=…",
   "peerBUrl": "wss://glass.example.com/v1/calls/5c0b…/peers/b/signaling?token=…",
-  "videoCodec": "h264",
-  "protocolVersion": 1,
+  "codec": "h264",
+  "protocolVersion": 2,
   "sourceType": "call"
 }
 ```
@@ -78,7 +78,7 @@ credential for this peer's connection when Glass mints them
 ([deployment.md](../deployment.md#turn)). An engine older than v0.1.89
 sends none; offer once the socket opens instead.
 
-- Send video in the call's `videoCodec`, and optionally one Opus audio track.
+- Send video in the call's `codec`, and optionally one Opus audio track.
   Glass doesn't check a peer's offer for it, as it does a relay producer's:
   there is no `codec_mismatch` on a call, so make sure of the codec yourself.
 - A peer that joins first sees a silent, black remote track until the other

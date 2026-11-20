@@ -22,7 +22,7 @@ POST /v1/sessions
 {"inspect": true}
 ```
 
-or `createGlassSession(baseUrl, apiToken, { inspect: true })`. The session's
+or `createGlassSession({ baseUrl, apiToken, inspect: true })`. The session's
 `capabilities.inspect` says whether its source can be inspected at all (the
 hosted browser can).
 

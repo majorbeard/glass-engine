@@ -15,6 +15,7 @@ interface GlassCapabilities {
     clipboard?: boolean;
     pauseResume?: boolean;
     mobileEmulation?: boolean;
+    inspect?: boolean;
     inputActions?: string[];
     [key: string]: unknown;
 }
@@ -34,6 +35,22 @@ interface GlassConnectionGrant {
 type GlassGrantRequest = Partial<GlassConnectionCapabilities> & {
     expiresIn?: number;
 };
+/**
+ * Glass's one answer to a control request: requestInput(), releaseInput(), grantInput() or
+ * revokeInput(). `outcome` is the state the request leaves: asking for what this connection
+ * already holds is "granted", not refused. "relayed" means nobody could be given control now, so
+ * the request went to whoever holds it (their "inputRequested" event). `reason` says why a
+ * refusal: Glass's own (`not_allowed`: this link never included control; `not_owner`;
+ * `no_capacity`; `unknown_connection`; `rate_limited`; `invalid`) or this client's
+ * (`not_connected`, `disconnected`: the connection went before Glass answered).
+ */
+interface GlassControlAnswer {
+    action: "request_input" | "release_input" | "grant_input" | "revoke_input";
+    outcome: "granted" | "relayed" | "released" | "revoked" | "refused";
+    reason?: "not_allowed" | "not_owner" | "no_capacity" | "unknown_connection" | "rate_limited" | "invalid" | "not_connected" | "disconnected" | (string & {});
+    /** The connection a grant or revoke was about. */
+    connectionId?: string;
+}
 interface GlassRosterEntry {
     connectionId: string;
     producesInput: boolean;
@@ -74,7 +91,11 @@ interface GlassTimelineEvent {
     type: string;
     [field: string]: unknown;
 }
-interface GlassCreateSessionOptions {
+interface GlassEngine {
+    baseUrl?: string;
+    apiToken?: string;
+}
+interface GlassCreateSessionOptions extends GlassEngine {
     audioInput?: boolean;
     contentHint?: GlassContentHint;
     codec?: GlassVideoCodec;
@@ -272,8 +293,6 @@ declare class GlassProducer extends Emitter<GlassProducerEvents> {
     start(): Promise<void>;
     /** Stop producing and close the session's producer slot deliberately. Doesn't stop the stream's tracks. */
     stop(): void;
-    /** Sleeps for ms, or less if the page comes back online or into view. */
-    /** One connection attempt: resolves once connected, rejects if it can't get there. */
 }
 
 interface InputLatencySample {
@@ -293,6 +312,8 @@ interface InputLatencyStats {
 
 declare const SESSION_NOT_FOUND_MESSAGE = "session not found or expired";
 
+declare const SUPPORTED_PROTOCOL_VERSION = 2;
+
 interface GlassReconnectOptions {
     maxAttempts?: number;
     delaysMs?: number[];
@@ -311,7 +332,7 @@ interface GlassClientOptions {
 }
 type GlassClientEventMap = {
     videoTrack: [stream: MediaStream];
-    state: [state: ElementState];
+    elementState: [state: ElementState];
     navigation: [nav: NavigationState];
     interactiveElements: [elements: InteractiveElement[]];
     clipboardText: [text: string];
@@ -320,11 +341,12 @@ type GlassClientEventMap = {
     fileChooserOpened: [multiple: boolean];
     fileChooserClosed: [];
     micAccessRequested: [origin: string];
-    error: [message: string];
+    /** A report from Glass; `code` for programs when it has one (`encoder_failed`, `source_failed`, …). */
+    error: [message: string, code?: string];
     connected: [];
     disconnected: [];
     reconnecting: [attempt: number, maxAttempts: number];
-    refused: [reason: string];
+    refused: [reason: string, code: GlassRefusedCode];
     stats: [stats: GlassStats];
     capabilitiesChanged: [
         connectionId: string,
@@ -342,7 +364,7 @@ type GlassClientEventMap = {
     connectionQuality: [quality: GlassConnectionQualityLevel, score: number];
     inputDropped: [drop: GlassInputDrop];
     inputLatency: [sample: InputLatencySample];
-    closed: [reason: string];
+    closed: [reason: string, code: GlassCloseCode];
     newTabRequested: [url: string];
 };
 /**
@@ -375,9 +397,22 @@ declare const LINK_REVOKED_MESSAGE = "this link has been revoked";
 declare const CLOSE_VIEWER_LIMIT = 4503;
 /** The error a first connect fails with when Glass refused it at its viewer limit (CLOSE_VIEWER_LIMIT). */
 declare const VIEWER_LIMIT_MESSAGE = "at the viewer limit; try again later";
-declare const SUPPORTED_PROTOCOL_VERSION = 1;
-declare function createGlassSession(baseUrl?: string, apiToken?: string, options?: boolean | GlassCreateSessionOptions): Promise<GlassSession>;
-declare function redeemGlassTicket(ticket: string, baseUrl?: string): Promise<GlassSession>;
+
+/**
+ * Why a GlassClient closed, for programs (the "closed" event's second argument); the first
+ * argument is a sentence for people. `session_not_found`, `link_expired` and `link_revoked` are
+ * Glass's close codes 4404, 4401 and 4403; `source_failed` and `session_not_resumable` are its
+ * signaling error codes; `protocol_mismatch` means this client and the engine speak different
+ * protocol versions; the rest are this client's own.
+ */
+type GlassCloseCode = "session_not_found" | "link_expired" | "link_revoked" | "source_failed" | "session_not_resumable" | "protocol_mismatch" | "connect_failed" | "connection_lost" | "reconnect_exhausted" | "client_disconnected";
+/** The "refused" event's code: Glass refused this attempt for now (close code 4503). */
+type GlassRefusedCode = "viewer_limit";
+declare function createGlassSession(options?: GlassCreateSessionOptions): Promise<GlassSession>;
+declare function redeemGlassTicket({ ticket, baseUrl }: {
+    ticket: string;
+    baseUrl?: string;
+}): Promise<GlassSession>;
 /** A session ticket from glass gate, and the engine to redeem it with. */
 interface GlassGateTicket {
     /** The engine's public address: pass it to redeemGlassTicket as baseUrl. */
@@ -393,6 +428,11 @@ interface GlassGateCredentials {
     code?: string;
     passphrase?: string;
 }
+/** Where glass gate is, and what it asks for. */
+interface GlassGateRequest extends GlassGateCredentials {
+    /** The gate's address, http(s)://host[:port]. */
+    gate: string;
+}
 /**
  * The gate refused a ticket. `code` is the gate's: `gate_refused` (a wrong
  * passphrase, or a link not valid, expired or used up), `rate_limited` (see
@@ -404,23 +444,22 @@ declare class GlassGateError extends Error {
     readonly retryAfterSeconds?: number | undefined;
     constructor(message: string, status: number, code?: string | undefined, retryAfterSeconds?: number | undefined);
 }
-declare function requestGateTicket(gate: string, credentials?: GlassGateCredentials): Promise<GlassGateTicket>;
-declare function deleteGlassSession(id: string, baseUrl?: string, apiToken?: string): void;
-declare function mintConnectionGrant(sessionId: string, capabilities: GlassGrantRequest, baseUrl?: string, apiToken?: string): Promise<GlassConnectionGrant>;
+declare function requestGateTicket({ gate, code, passphrase }: GlassGateRequest): Promise<GlassGateTicket>;
+declare function deleteGlassSession({ id, baseUrl, apiToken }: GlassEngine & {
+    id: string;
+}): Promise<void>;
+declare function mintConnectionGrant({ sessionId, capabilities, baseUrl, apiToken, }: GlassEngine & {
+    sessionId: string;
+    capabilities: GlassGrantRequest;
+}): Promise<GlassConnectionGrant>;
 declare class GlassClient extends Emitter<GlassClientEventMap> {
     constructor(options: GlassClientOptions);
     connect(): Promise<void>;
-    get pixelTraceEnabled(): boolean;
-    get decodeReadbackEnabled(): boolean;
-    reportPixelTraceSamples(samples: {
-        rtpTimestamp: number;
-        paintedAtMs: number;
-    }[]): void;
     navigate(url: string): void;
-    requestInput(): void;
+    requestInput(): Promise<GlassControlAnswer>;
     grantMicAccess(): Promise<void>;
     denyMicAccess(): void;
-    releaseInput(): void;
+    releaseInput(): Promise<GlassControlAnswer>;
     connectionId(): string | null;
     producesInput(): boolean;
     floorHolder(): string | null;
@@ -435,8 +474,8 @@ declare class GlassClient extends Emitter<GlassClientEventMap> {
     inputLatencyStats(): InputLatencyStats;
     connectionQuality(): GlassConnectionQuality | null;
     slotStates(): Record<string, GlassSlotState>;
-    grantInput(connectionId: string): void;
-    revokeInput(connectionId: string): void;
+    grantInput(connectionId: string): Promise<GlassControlAnswer>;
+    revokeInput(connectionId: string): Promise<GlassControlAnswer>;
     sendInitialViewport(width: number, height: number, isMobile?: boolean, userAgent?: string, userAgentData?: UserAgentClientHints): void;
     navigateBack(): void;
     navigateForward(): void;
@@ -469,15 +508,19 @@ export {
     GlassClient,
     type GlassClientEventMap,
     type GlassClientOptions,
+    type GlassCloseCode,
     type GlassConnectionCapabilities,
     type GlassConnectionGrant,
     type GlassConnectionQuality,
     type GlassConnectionQualityLevel,
     type GlassContentHint,
+    type GlassControlAnswer,
     type GlassCreateSessionOptions,
     type GlassDialog,
+    type GlassEngine,
     type GlassGateCredentials,
     GlassGateError,
+    type GlassGateRequest,
     type GlassGateTicket,
     type GlassGrantRequest,
     type GlassInputDrop,
@@ -488,6 +531,7 @@ export {
     type GlassProducerEvents,
     type GlassProducerOptions,
     type GlassReconnectOptions,
+    type GlassRefusedCode,
     type GlassRosterEntry,
     type GlassSession,
     type GlassSlotState,

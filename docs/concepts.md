@@ -161,7 +161,9 @@ Navigation stays the owner's in both modes. Input your backend sends with
 mode and takes the page from no one.
 
 `@glass/client` exposes all of this as `requestInput()`, `releaseInput()`,
-`grantInput()`, `revokeInput()`, `isOwner()`, `connections()`, `floorHolder()`
+`grantInput()`, `revokeInput()` (each resolves with Glass's answer: granted,
+relayed to the holder, released, revoked or refused, with the reason),
+`isOwner()`, `connections()`, `floorHolder()`
 and the `capabilitiesChanged`, `inputRequested`, `rosterChanged` and
 `floorChanged` events. Glass
 provides the mechanism; the policy (who should get control, and when) belongs
@@ -196,7 +198,7 @@ the old one can't be resumed.
   was created with: H.264 by default, VP8 or AV1 where the operator enables
   them (`codec` on session creation; `GET /v1/info` lists what the host
   serves). Relay and call sessions use the host's default codec and report
-  it as `videoCodec`; producers must send that codec.
+  it as `codec`; producers must send that codec.
 - Audio, when present, is an Opus track.
 - Input and state messages travel on a WebRTC DataChannel; video never does.
 - Each viewer gets its own bandwidth estimate (Google Congestion Control), and
