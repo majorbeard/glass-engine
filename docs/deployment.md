@@ -290,10 +290,9 @@ else open on the host isn't Glass's.
   another port than 50000. `glass turn` then logs the port it sees, with the
   `GLASS_TURN_PEERS` value to use.
 
-`GLASS_WEBRTC_UDP_PORT_MIN`/`_MAX` (a port per connection) are deprecated.
-They still work when set on their own, and they cap a host at about as many
-connections as ports. Existing firewall rules for `50000-50100/udp` keep
-working, because they include 50000.
+`GLASS_WEBRTC_UDP_PORT_MIN`/`_MAX` (a port per connection) were removed in
+v0.1.132: Glass refuses to start while either is set. Existing firewall rules
+for `50000-50100/udp` keep working, because they include 50000.
 
 ### Many connections
 
@@ -390,8 +389,7 @@ network that allows only HTTPS uses TLS on 443, by itself.
   keep them open past it, within the limits above. It opens no session. To
   end them all at once, set a new `GLASS_TURN_SECRET` and recreate the
   container.
-- **Not with** `GLASS_TURN_URLS`, nor the deprecated
-  `GLASS_WEBRTC_UDP_PORT_MIN`/`_MAX`: Glass refuses to start, saying which.
+- **Not with** `GLASS_TURN_URLS`: Glass refuses to start, saying so.
 
 Tested in Chrome and Firefox, over IPv4.
 
@@ -800,6 +798,15 @@ origins by default. For a frontend on a public origin, list it exactly
 ```sh
 GLASS_CORS_ORIGINS=https://app.example.com
 ```
+
+**A frontend on a public origin and an engine on a private address.** Chrome's
+Local Network Access check stops a page served from a public origin from
+reaching a private-network or loopback address unless the visitor allows it:
+the page is prompted or blocked before Glass sees a request. This happens, for
+example, with a viewer hosted on a public site pointed at an engine on your
+office network or on the visitor's own machine. An engine on a public address
+is not affected. For local development, serve the viewer locally too, as in
+[getting-started.md](getting-started.md).
 
 ## Security posture
 

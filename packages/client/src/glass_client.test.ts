@@ -26,7 +26,7 @@ describe("connect", () => {
     void client.connect();
     const ws = FakeWebSocket.last();
     ws.open();
-    ws.receive({ type: "ice_config", iceServers: engineIce });
+    ws.receive({ type: "ice_config", protocolVersion: 2, iceServers: engineIce });
     ws.receive({ type: "offer", sdp: "offer-sdp" });
     await flush();
     expect(FakePeerConnection.last().config.iceServers).toEqual(engineIce);
@@ -39,7 +39,7 @@ describe("connect", () => {
     void client.connect();
     const ws = FakeWebSocket.last();
     ws.open();
-    ws.receive({ type: "ice_config", iceServers: [{ urls: ["turn:turn.example:3478"] }] });
+    ws.receive({ type: "ice_config", protocolVersion: 2, iceServers: [{ urls: ["turn:turn.example:3478"] }] });
     ws.receive({ type: "offer", sdp: "offer-sdp" });
     await flush();
     expect(FakePeerConnection.last().config.iceServers).toEqual(own);
@@ -99,14 +99,14 @@ describe("connect", () => {
     ws.receive({ type: "error", code: "source_failed", error: "session ended: boom" });
     ws.drop(1000);
     await expect(done).rejects.toThrow();
-    expect(closed).toHaveBeenCalledWith("session ended: boom");
+    expect(closed).toHaveBeenCalledWith("session ended: boom", "source_failed");
   });
 });
 
 describe("DataChannel messages", () => {
   const cases: Array<[string, number, unknown, string, unknown[]]> = [
     ["navigation", 0x06, { url: "https://a.test/", canGoBack: true }, "navigation", [{ url: "https://a.test/", canGoBack: true }]],
-    ["element state", 0x05, { cursor: "pointer" }, "state", [{ cursor: "pointer" }]],
+    ["element state", 0x05, { cursor: "pointer" }, "elementState", [{ cursor: "pointer" }]],
     ["interactive elements", 0x0a, { elements: [{ x: 1, y: 2, width: 3, height: 4 }] }, "interactiveElements", [[{ x: 1, y: 2, width: 3, height: 4 }]]],
     ["clipboard", 0x09, { text: "hi" }, "clipboardText", ["hi"]],
     ["console", 0x0b, { level: "warn", text: "careful" }, "consoleMessage", ["warn", "careful"]],
@@ -114,7 +114,7 @@ describe("DataChannel messages", () => {
     ["file chooser opened", 0x0d, { multiple: true }, "fileChooserOpened", [true]],
     ["file chooser closed", 0x0e, undefined, "fileChooserClosed", []],
     ["mic access requested", 0x0f, { origin: "https://m.test" }, "micAccessRequested", ["https://m.test"]],
-    ["error", 0xff, { error: "bad" }, "error", ["bad"]],
+    ["error", 0xff, { error: "bad", code: "encoder_failed" }, "error", ["bad", "encoder_failed"]],
   ];
   for (const [name, type, body, event, args] of cases) {
     it(`emits ${event} for ${name} (0x${type.toString(16)})`, async () => {
@@ -232,7 +232,7 @@ describe("input", () => {
     const { client, ws } = await connected();
     client.navigate("https://b.test/");
     client.sendInitialViewport(800, 600, true, "UA");
-    expect(ws.sentOfType("navigate")).toEqual([{ type: "navigate", sdp: "https://b.test/" }]);
+    expect(ws.sentOfType("navigate")).toEqual([{ type: "navigate", url: "https://b.test/" }]);
     expect(ws.sentOfType("initial_viewport")).toEqual([{ type: "initial_viewport", width: 800, height: 600, isMobile: true, userAgent: "UA" }]);
     client.disconnect();
   });
@@ -324,7 +324,7 @@ describe("reconnect", () => {
     await flush();
     vi.advanceTimersByTime(10);
     await flush();
-    expect(closed).toHaveBeenCalledWith("reconnection attempts exhausted");
+    expect(closed).toHaveBeenCalledWith("reconnection attempts exhausted", "reconnect_exhausted");
   });
 
   it("closes without retrying when the server says the session is gone", async () => {
@@ -334,7 +334,7 @@ describe("reconnect", () => {
     ws.drop(1006);
     FakeWebSocket.last().drop(4404);
     await flush();
-    expect(closed).toHaveBeenCalledWith(SESSION_NOT_FOUND_MESSAGE);
+    expect(closed).toHaveBeenCalledWith(SESSION_NOT_FOUND_MESSAGE, "session_not_found");
   });
 
   // The engine ends each live connection with 4404 when it closes the session; the client stops
@@ -356,7 +356,7 @@ describe("reconnect", () => {
     ws.drop(1006);
     FakeWebSocket.last().drop(CLOSE_LINK_EXPIRED);
     await flush();
-    expect(closed).toHaveBeenCalledWith(LINK_EXPIRED_MESSAGE);
+    expect(closed).toHaveBeenCalledWith(LINK_EXPIRED_MESSAGE, "link_expired");
   });
 
   // A viewer refused at the engine's viewer limit is told why on a first connect, and a reconnect
@@ -438,7 +438,7 @@ describe("reconnect", () => {
     ws.receive({ type: "error", code: "source_failed", error: "the browser stopped" });
     ws.drop(1011);
     await flush();
-    expect(closed).toHaveBeenCalledWith("the browser stopped");
+    expect(closed).toHaveBeenCalledWith("the browser stopped", "source_failed");
     expect(FakeWebSocket.instances).toHaveLength(sockets);
   });
 
@@ -454,7 +454,7 @@ describe("reconnect", () => {
     await flush();
     const sockets = FakeWebSocket.instances.length;
     await new Promise((r) => setTimeout(r, 50));
-    expect(closed).toHaveBeenCalledWith("session cannot be resumed");
+    expect(closed).toHaveBeenCalledWith("session cannot be resumed", "session_not_resumable");
     expect(FakeWebSocket.instances).toHaveLength(sockets);
   });
 
@@ -466,7 +466,7 @@ describe("reconnect", () => {
     ws.drop(CLOSE_LINK_REVOKED);
     await flush();
     await new Promise((r) => setTimeout(r, 50));
-    expect(closed).toHaveBeenCalledWith(LINK_REVOKED_MESSAGE);
+    expect(closed).toHaveBeenCalledWith(LINK_REVOKED_MESSAGE, "link_revoked");
     expect(FakeWebSocket.instances).toHaveLength(sockets);
   });
 });
@@ -542,5 +542,51 @@ describe("connection quality", () => {
     expect(got).toEqual([["poor", 30], ["good", 58]]);
     expect(client.connectionQuality()).toEqual({ quality: "good", score: 58 });
     client.disconnect();
+  });
+});
+
+describe("protocol version", () => {
+  // A client that joined by link alone learns the engine's protocol version
+  // from the connection's first message, and refuses one it doesn't speak.
+  it("closes, without retrying, on an engine that speaks another version", async () => {
+    const client = new GlassClient({ signalingUrl: URL, reconnect: { maxAttempts: 3, delaysMs: [1] } });
+    const closed = vi.fn();
+    client.on("closed", closed);
+    const done = client.connect();
+    const ws = FakeWebSocket.last();
+    ws.open();
+    ws.receive({ type: "ice_config", protocolVersion: 1, iceServers: [] });
+    await expect(done).rejects.toThrow("protocol v1");
+    expect(closed).toHaveBeenCalledWith(expect.stringContaining("protocol v1"), "protocol_mismatch");
+    expect(ws.closedWith?.code).toBe(1000);
+    expect(FakeWebSocket.instances.length).toBe(1);
+  });
+});
+
+describe("control answers", () => {
+  it("resolves each request with Glass's answer to it", async () => {
+    const { client, ws } = await connected();
+    const asked = client.requestInput();
+    const granted = client.grantInput("c2");
+    const [req, grant] = [ws.sentOfType("request_input")[0], ws.sentOfType("grant_input")[0]];
+    expect(grant.connectionId).toBe("c2");
+    expect(req.id).not.toBe(grant.id);
+    ws.receive({ type: "control_answer", action: "grant_input", outcome: "refused", reason: "no_capacity", connectionId: "c2", id: grant.id });
+    ws.receive({ type: "control_answer", action: "request_input", outcome: "relayed", id: req.id });
+    await expect(asked).resolves.toEqual({ action: "request_input", outcome: "relayed" });
+    await expect(granted).resolves.toEqual({ action: "grant_input", outcome: "refused", reason: "no_capacity", connectionId: "c2" });
+    client.disconnect();
+  });
+
+  it("resolves a request still waiting as disconnected when the connection goes", async () => {
+    const { client } = await connected();
+    const released = client.releaseInput();
+    client.disconnect();
+    await expect(released).resolves.toEqual({ action: "release_input", outcome: "refused", reason: "disconnected" });
+  });
+
+  it("refuses at once when not connected", async () => {
+    const client = new GlassClient({ signalingUrl: URL, reconnect: false });
+    await expect(client.revokeInput("c2")).resolves.toEqual({ action: "revoke_input", outcome: "refused", reason: "not_connected", connectionId: "c2" });
   });
 });

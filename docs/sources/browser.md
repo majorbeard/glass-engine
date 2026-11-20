@@ -44,7 +44,7 @@ curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
 {
   "id": "9ee60523-4129-4f4a-b43a-89e14189e89f",
   "signalingUrl": "wss://glass.example.com/v1/sessions/9ee6…/signaling?token=…",
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "sourceType": "browser",
   "capabilities": {
     "video": true, "navigation": true, "viewport": true, "clipboard": true,
@@ -223,7 +223,7 @@ viewers:
    `GLASS_MIC_POOL_CHROME_BIN=/usr/local/bin/chrome-full` (included in the
    Docker image) and `GLASS_MIC_POOL_SIZE` (default 1).
 2. Your backend creates the session with `{"audioInput": true}`
-   (`createGlassSession(baseUrl, apiToken, true)` in the SDK).
+   (`createGlassSession({ baseUrl, apiToken, audioInput: true })` in the SDK).
 3. When the page asks, every viewer gets `micAccessRequested(origin)`. The first
    answer wins: `grantMicAccess()` captures the viewer's own microphone and
    sends it to the page; `denyMicAccess()` refuses. No answer within 60 s
@@ -266,7 +266,9 @@ A session can be recorded and played back; every viewer is told. See
   platforms in particular) refuse or challenge traffic from datacenter IP
   ranges, and may also check the browser itself. This comes from the site,
   not from Glass. Glass has no setting to send page traffic out through
-  another address.
+  another address. `GLASS_STEALTH_MODE` (off by default) hides the usual
+  automation signals from the page's JavaScript, but it is no anti-bot
+  measure ([configuration.md](../configuration.md#hosted-browser)).
 - **GPU-heavy pages.** Without a GPU, Chrome renders WebGL in software, which
   costs CPU and can be slow on 3D-heavy pages.
 - **DRM-protected video** (streaming services that use Widevine) doesn't

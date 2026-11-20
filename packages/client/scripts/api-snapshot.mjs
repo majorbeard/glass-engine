@@ -18,12 +18,25 @@ const entries = [
 ];
 const update = process.argv.includes("--update");
 
+// dropPrivate removes each private member line and the doc comment just above it.
+function dropPrivate(lines) {
+  const out = [];
+  for (const line of lines) {
+    if (!/^\s*private (readonly )?[\w$]+\??;$/.test(line)) {
+      out.push(line);
+      continue;
+    }
+    if (out.length && /\*\/\s*$/.test(out[out.length - 1])) {
+      while (out.length && !/^\s*\/\*\*/.test(out[out.length - 1])) out.pop();
+      out.pop();
+    }
+  }
+  return out;
+}
+
 function normalize(text) {
   return (
-    text
-      .replace(/\r\n/g, "\n")
-      .split("\n")
-      .filter((line) => !/^\s*private (readonly )?[\w$]+\??;$/.test(line))
+    dropPrivate(text.replace(/\r\n/g, "\n").split("\n"))
       .map((line) => {
         const m = /^export \{ (.*) \};$/.exec(line);
         if (!m) return line;

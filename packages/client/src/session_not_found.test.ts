@@ -42,7 +42,7 @@ describe("GlassClient and an expired session", () => {
     client.on("closed", closed);
 
     await expect(client.connect()).rejects.toThrow("session not found or expired");
-    expect(closed).toHaveBeenCalledWith("session not found or expired");
+    expect(closed).toHaveBeenCalledWith("session not found or expired", "session_not_found");
     expect(ClosingWebSocket.instances).toBe(1);
   });
 });

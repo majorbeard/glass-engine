@@ -32,7 +32,7 @@ export interface CallInfo {
   id: string;
   peerAUrl: string;
   peerBUrl: string;
-  videoCodec: "h264" | "vp8";
+  codec: "h264" | "vp8";
 }
 
 export interface StartCallOptions {
@@ -66,7 +66,14 @@ interface WSSignal {
   sdp?: string;
   candidate?: RTCIceCandidateInit;
   iceServers?: RTCIceServer[];
+  protocolVersion?: number;
 }
+
+/**
+ * The Glass protocol version this app speaks. Glass sends its own in the first message on every
+ * connection; on any other, this app stops, since it would otherwise misread what Glass sends.
+ */
+const PROTOCOL_VERSION = 2;
 
 /** How long to wait for Glass's ICE servers before offering without them: a Glass that sends them does so the moment the socket opens. */
 const ICE_CONFIG_WAIT_MS = 2000;
@@ -202,6 +209,13 @@ export function startCall(options: StartCallOptions): CallHandle {
     activeWs.addEventListener("message", (event) => {
       const msg: WSSignal = JSON.parse(event.data);
       if (msg.type === "ice_config") {
+        const version = typeof msg.protocolVersion === "number" ? msg.protocolVersion : 1;
+        if (version !== PROTOCOL_VERSION) {
+          stopped = true;
+          activeWs.close(1000, "protocol mismatch");
+          onStateChange("error", `this app speaks Glass protocol v${PROTOCOL_VERSION}, the engine v${version}: update the app`);
+          return;
+        }
         if (Array.isArray(msg.iceServers)) gotIceConfig(msg.iceServers);
       } else if (msg.type === "answer" && msg.sdp) {
         void activePc.setRemoteDescription({ type: "answer", sdp: msg.sdp });

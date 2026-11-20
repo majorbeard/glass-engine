@@ -29,6 +29,7 @@ import type {
   GlassCapabilities,
   GlassConnectionCapabilities,
   GlassConnectionGrant,
+  GlassControlAnswer,
   GlassGrantRequest,
   GlassInputDrop,
   GlassInputDropCode,
@@ -38,6 +39,7 @@ import type {
   GlassConnectionQualityLevel,
   GlassContentHint,
   GlassCreateSessionOptions,
+  GlassEngine,
   GlassVideoCodec,
   GlassInputMode,
   GlassDialog,
@@ -71,6 +73,7 @@ export type {
   GlassCapabilities,
   GlassConnectionCapabilities,
   GlassConnectionGrant,
+  GlassControlAnswer,
   GlassGrantRequest,
   GlassInputDrop,
   GlassInputDropCode,
@@ -80,6 +83,7 @@ export type {
   GlassConnectionQualityLevel,
   GlassContentHint,
   GlassCreateSessionOptions,
+  GlassEngine,
   GlassVideoCodec,
   GlassInputMode,
   GlassDialog,
@@ -162,7 +166,7 @@ export type GlassClientEventMap = {
   // A remote video track arrived - bind it to a <video> element's srcObject.
   videoTrack: [stream: MediaStream];
   // Cursor / editable-focus state from the remote page.
-  state: [state: ElementState];
+  elementState: [state: ElementState];
   // URL-bar / navigation state from the remote page.
   navigation: [nav: NavigationState];
   // Text-editable candidate bounding boxes on the remote page, mobile-only,
@@ -208,7 +212,8 @@ export type GlassClientEventMap = {
   micAccessRequested: [origin: string];
   // A fatal, session-level backend error (e.g. the encoder died). Distinct
   // from a transport drop - there is no recovery, video is gone.
-  error: [message: string];
+  /** A report from Glass; `code` for programs when it has one (`encoder_failed`, `source_failed`, …). */
+  error: [message: string, code?: string];
   // The peer connection reached "connected" (initial connect or a reconnect).
   connected: [];
   // A transport drop occurred. May be followed by "reconnecting" then
@@ -219,7 +224,7 @@ export type GlassClientEventMap = {
   // The engine refused a connect attempt for now, with the reason (its viewer limit:
   // VIEWER_LIMIT_MESSAGE). Not terminal: with reconnecting on, "reconnecting" follows and the
   // client keeps trying; without it, connect() fails with the same reason.
-  refused: [reason: string];
+  refused: [reason: string, code: GlassRefusedCode];
   // Optional periodic transport/quality snapshot (see statsIntervalMs).
   stats: [stats: GlassStats];
   // A connection's live producesInput actually changed (docs/protocol.md's
@@ -292,7 +297,7 @@ export type GlassClientEventMap = {
   inputLatency: [sample: InputLatencySample];
   // Terminal: reconnection was exhausted/disabled, or disconnect() was called.
   // No further events will fire.
-  closed: [reason: string];
+  closed: [reason: string, code: GlassCloseCode];
   // The remote page tried to open a popup/new tab (window.open(),
   // target="_blank", etc.) - the browser popup was blocked server-side
   // and the URL it would have opened is handed to the app instead
@@ -337,43 +342,44 @@ export const LINK_REVOKED_MESSAGE = "this link has been revoked";
 export const CLOSE_VIEWER_LIMIT = 4503;
 /** The error a first connect fails with when Glass refused it at its viewer limit (CLOSE_VIEWER_LIMIT). */
 export const VIEWER_LIMIT_MESSAGE = "at the viewer limit; try again later";
-// Highest wire-contract major this client understands. Must track the
-// engine's protocol version (docs/protocol.md, "Versioning"); see
-// readSession for the fail-closed check and why absent means 1.
-export const SUPPORTED_PROTOCOL_VERSION = 1;
+import { SUPPORTED_PROTOCOL_VERSION, protocolMismatchMessage } from "./protocol_version";
+export { SUPPORTED_PROTOCOL_VERSION };
+
+/**
+ * Why a GlassClient closed, for programs (the "closed" event's second argument); the first
+ * argument is a sentence for people. `session_not_found`, `link_expired` and `link_revoked` are
+ * Glass's close codes 4404, 4401 and 4403; `source_failed` and `session_not_resumable` are its
+ * signaling error codes; `protocol_mismatch` means this client and the engine speak different
+ * protocol versions; the rest are this client's own.
+ */
+export type GlassCloseCode =
+  | "session_not_found"
+  | "link_expired"
+  | "link_revoked"
+  | "source_failed"
+  | "session_not_resumable"
+  | "protocol_mismatch"
+  | "connect_failed"
+  | "connection_lost"
+  | "reconnect_exhausted"
+  | "client_disconnected";
+
+/** The "refused" event's code: Glass refused this attempt for now (close code 4503). */
+export type GlassRefusedCode = "viewer_limit";
 
 
-// Creates a session via the runtime's REST API (POST {baseUrl}/v1/sessions)
-// and returns its id + signaling URL. A dev-convenience helper - in a real
-// app your own backend creates the session so auth/quota stay server-side, and
-// hands the client only the signalingUrl. baseUrl defaults to same-origin.
-//
-// apiToken is only relevant if the runtime has GLASS_API_TOKEN set - passed here purely for local testing symmetry;
-// a real deployment's actual token belongs in your own backend, never
-// shipped to a browser bundle. When a session is created with a token, the
-// returned signalingUrl already has it embedded as a query param (the
-// runtime does this server-side), so GlassClient needs no separate token
-// handling to open the signaling WebSocket - only this helper's own
-// follow-up REST calls (deleteGlassSession) need it passed again.
-// audioInput requests the mic-capable browser pool - false by default,
-// since it costs real, measured extra CPU/memory
-// and most sessions don't need it. Only takes effect if the runtime was
-// actually started with GLASS_MIC_POOL_CHROME_BIN configured - otherwise
-// the flag is accepted and the session uses the default pool, not an
-// error.
-//
-// The third argument is either that flag alone, as it has always been, or
-// an options object, which can also carry the session's content hint (see
-// GlassContentHint) and video codec (see GlassVideoCodec). The runtime
-// refuses a hint it does not know, and a codec it cannot serve.
-export async function createGlassSession(
-  baseUrl = "",
-  apiToken?: string,
-  options: boolean | GlassCreateSessionOptions = false
-): Promise<GlassSession> {
-  const { audioInput = false, contentHint, codec, inputMode, inspect, linkExpiresIn } =
-    typeof options === "boolean" ? { audioInput: options } : options;
-  // No body at all when nothing is asked for, as before.
+
+// Creates a browser session (POST {baseUrl}/v1/sessions) and returns its id
+// and link. For development and TypeScript backends: in a real app your own
+// backend creates sessions and hands each client only its link. The returned
+// signalingUrl carries the session's own token, so GlassClient needs no
+// other credential. audioInput asks for the microphone-capable browser
+// pool, which costs more and takes effect only where the operator set one
+// up. The engine refuses a content hint it does not know and a codec it
+// cannot serve.
+export async function createGlassSession(options: GlassCreateSessionOptions = {}): Promise<GlassSession> {
+  const { baseUrl = "", apiToken, audioInput = false, contentHint, codec, inputMode, inspect, linkExpiresIn } = options;
+  // No body at all when nothing is asked for.
   const body: Record<string, unknown> = {};
   if (audioInput) body.audioInput = true;
   if (contentHint) body.contentHint = contentHint;
@@ -400,10 +406,7 @@ export async function createGlassSession(
 // a unique jti, since each ticket is accepted once) and hands it to the page.
 // The ticket's "glass" claim carries the session's options (audioInput,
 // contentHint, codec, inputMode, linkExpiresIn) and watchLinks.
-export async function redeemGlassTicket(
-  ticket: string,
-  baseUrl = ""
-): Promise<GlassSession> {
+export async function redeemGlassTicket({ ticket, baseUrl = "" }: { ticket: string; baseUrl?: string }): Promise<GlassSession> {
   const res = await fetch(`${baseUrl}/v1/tickets`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -429,6 +432,12 @@ export interface GlassGateCredentials {
   passphrase?: string;
 }
 
+/** Where glass gate is, and what it asks for. */
+export interface GlassGateRequest extends GlassGateCredentials {
+  /** The gate's address, http(s)://host[:port]. */
+  gate: string;
+}
+
 /**
  * The gate refused a ticket. `code` is the gate's: `gate_refused` (a wrong
  * passphrase, or a link not valid, expired or used up), `rate_limited` (see
@@ -449,15 +458,12 @@ export class GlassGateError extends Error {
 // Asks glass gate (POST {gate}/v1/ticket) for a session ticket. With it, a
 // website gets a browser from the engine's pool with no API token in the page
 // and no link handed out by anyone: the gate answers with a ticket and the
-// engine's address, and redeemGlassTicket(ticket, engine) starts the session.
-// Fails with a GlassGateError carrying the gate's reason.
-export async function requestGateTicket(
-  gate: string,
-  credentials: GlassGateCredentials = {}
-): Promise<GlassGateTicket> {
+// engine's address, and redeemGlassTicket({ ticket, baseUrl: engine }) starts
+// the session. Fails with a GlassGateError carrying the gate's reason.
+export async function requestGateTicket({ gate, code, passphrase }: GlassGateRequest): Promise<GlassGateTicket> {
   const body: GlassGateCredentials = {};
-  if (credentials.code) body.code = credentials.code;
-  if (credentials.passphrase) body.passphrase = credentials.passphrase;
+  if (code) body.code = code;
+  if (passphrase) body.passphrase = passphrase;
   const res = await fetch(`${gate.replace(/\/+$/, "")}/v1/ticket`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -489,37 +495,26 @@ async function readSession(res: Response, what: string): Promise<GlassSession> {
   }
   const session: GlassSession = await res.json();
 
-  // Fail closed on a wire contract we don't understand. A runtime that predates
-  // the handshake sends no protocolVersion at all, so an absent value means
-  // "1", not "unsupported" - that keeps this client working against an older
-  // backend. A HIGHER major means the runtime has made a breaking change to
-  // the signaling shape or DataChannel messages, and proceeding would produce a
-  // black screen or silently-dropped input with nothing pointing at the cause.
-  // Better to say so here, at the one call every client makes first.
+  // Fail closed on a wire contract this client doesn't speak: proceeding would
+  // give a black screen or silently dropped input with nothing pointing at the
+  // cause. An engine that sends no protocolVersion speaks version 1.
   const version = session.protocolVersion ?? 1;
-  if (version > SUPPORTED_PROTOCOL_VERSION) {
-    throw new Error(
-      `Glass runtime speaks protocol v${version}, but this client only supports v${SUPPORTED_PROTOCOL_VERSION}. Upgrade @glass/client.`
-    );
+  if (version !== SUPPORTED_PROTOCOL_VERSION) {
+    throw new Error(protocolMismatchMessage(version));
   }
   return session;
 }
 
-// Best-effort session close via DELETE {baseUrl}/v1/sessions/{id}. The backend
-// also closes a session once its last connection has been gone for the
-// reconnect grace, so failures are non-fatal. See createGlassSession's doc
-// comment for apiToken's caveats.
-export function deleteGlassSession(
-  id: string,
-  baseUrl = "",
-  apiToken?: string
-): void {
-  fetch(`${baseUrl}/v1/sessions/${id}`, {
+// Ends a session for every connection (DELETE {baseUrl}/v1/sessions/{id}).
+// Resolves once it is gone, or was already; fails with the engine's reason
+// otherwise. Takes the API token: see GlassEngine.
+export async function deleteGlassSession({ id, baseUrl = "", apiToken }: GlassEngine & { id: string }): Promise<void> {
+  const res = await fetch(`${baseUrl}/v1/sessions/${id}`, {
     method: "DELETE",
     headers: authHeaders(apiToken),
-  }).catch(() => {
-    // best-effort
   });
+  if (res.ok || res.status === 404) return;
+  throw new Error(`Failed to delete session (${res.status}): ${await errorDetail(res)}`);
 }
 
 // Mints a fresh, capability-scoped connection to an already-created session
@@ -534,15 +529,14 @@ export function deleteGlassSession(
 // `capabilities` may also set `expiresIn`, the link's lifetime in seconds (0 for
 // never); the result names the link (`linkId`) for revoking it.
 //
-// Same dev-convenience/trust-model caveat as createGlassSession: a real app
-// mints grants from its own backend (which already holds whatever auth this
-// call needs), not from a browser bundle carrying apiToken.
-export async function mintConnectionGrant(
-  sessionId: string,
-  capabilities: GlassGrantRequest,
+// Takes the API token, as createGlassSession: a real app mints links from its
+// own backend, not from a browser bundle.
+export async function mintConnectionGrant({
+  sessionId,
+  capabilities,
   baseUrl = "",
-  apiToken?: string
-): Promise<GlassConnectionGrant> {
+  apiToken,
+}: GlassEngine & { sessionId: string; capabilities: GlassGrantRequest }): Promise<GlassConnectionGrant> {
   const res = await fetch(`${baseUrl}/v1/sessions/${sessionId}/connections`, {
     method: "POST",
     headers: {
@@ -604,12 +598,14 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
   // than the viewer owning its own separate opt-in flag (GlassClient is
   // this whole SDK's single source of truth for what diagnostics are
   // enabled for a given session).
+  /** @internal */
   get pixelTraceEnabled(): boolean {
     return this.core._pixelTraceEnabled;
   }
 
   // @internal Mirrors pixelTraceEnabled exactly - see
   // InternalGlassClientOptions.__internalDecodeReadbackEnabled.
+  /** @internal */
   get decodeReadbackEnabled(): boolean {
     return this.core._decodeReadbackEnabled;
   }
@@ -621,6 +617,7 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
   // discrete input dispatch rather than on a fixed interval. Not part of
   // the documented public API (see traceReportIntervalMs' own doc comment
   // for why this whole diagnostic channel stays internal-only for now).
+  /** @internal */
   reportPixelTraceSamples(samples: { rtpTimestamp: number; paintedAtMs: number }[]): void {
     return statsTrace.reportPixelTraceSamples(this.core, samples);
   }
@@ -631,18 +628,12 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
   }
 
   // --- Input handoff (docs/protocol.md's "Control handoff" section) ---
-  // Asks the backend for producesInput, over the signaling socket (not the
-  // DataChannel) - a no-op if this connection already has it. Glass's
-  // entire server-side policy: grant immediately (a "capabilitiesChanged"
-  // event with isSelf=true follows) if nothing/no one else currently holds
-  // it and the resolved license tier admits it; otherwise relay the ask to
-  // whoever already holds it (they get an "inputRequested" event - nothing
-  // changes here) or drop it if there's no one to relay to and no capacity
-  // either. Glass never queues, prompts, or auto-preempts on its own - it's
-  // entirely up to this app what to do while waiting, including whether to
-  // retry at all. See producesInput()/connectionId() for reading the
-  // resulting state, and the "capabilitiesChanged"/"inputRequested" events.
-  requestInput(): void {
+  // Asks Glass for control of the page (producesInput). Resolves with Glass's
+  // answer: "granted" (a "capabilitiesChanged" event follows), "relayed"
+  // (there was no room, so whoever holds control got an "inputRequested"
+  // event and decides), or "refused" with the reason. Glass never queues,
+  // prompts or takes control from anyone on its own.
+  requestInput(): Promise<GlassControlAnswer> {
     return handoff.requestInput(this.core);
   }
 
@@ -672,13 +663,9 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
     return mic.denyMicAccess(this.core);
   }
 
-  // Voluntarily gives up producesInput - a no-op if this connection doesn't
-  // currently hold it. Frees whatever interactive-input slot this
-  // connection holds immediately (however it was acquired - a mint-time
-  // grant or an earlier requestInput()), not just on disconnect, so it's
-  // available to someone else in a shared-pool tier right away. A
-  // "capabilitiesChanged" event (isSelf=true, producesInput=false) follows.
-  releaseInput(): void {
+  // Gives up control of the page, and the interactive slot with it, at once.
+  // Resolves "released", whether this connection held control or not.
+  releaseInput(): Promise<GlassControlAnswer> {
     return handoff.releaseInput(this.core);
   }
 
@@ -782,24 +769,16 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
     return handoff.slotStates(this.core);
   }
 
-  // Grants producesInput to a SPECIFIC other connection by ID - the
-  // owner-driven counterpart to requestInput() (that connection asking for
-  // it itself). Routed through the exact same license-tier/capacity gate
-  // request_input uses - an owner can't grant
-  // more interactive slots than the resolved tier allows. Silently denied
-  // (no error, no exception - watch for the resulting "rosterChanged"/
-  // "capabilitiesChanged" or their absence) if this connection isn't the
-  // owner, or if admission fails.
-  grantInput(connectionId: string): void {
+  // The owner gives control to another connection. The same license and
+  // capacity check as requestInput() applies. Resolves "granted", or
+  // "refused" with the reason (not_owner, no_capacity, unknown_connection).
+  grantInput(connectionId: string): Promise<GlassControlAnswer> {
     return handoff.grantInput(this.core, connectionId);
   }
 
-  // Forcibly releases a SPECIFIC other connection's producesInput,
-  // regardless of how it was acquired (a mint-time grant, its own
-  // requestInput(), or an earlier grantInput()) - the owner-driven
-  // counterpart to releaseInput() (a connection giving up its own).
-  // Silently denied if this connection isn't the owner.
-  revokeInput(connectionId: string): void {
+  // The owner takes control from another connection, however it got it.
+  // Resolves "revoked", or "refused" with the reason.
+  revokeInput(connectionId: string): Promise<GlassControlAnswer> {
     return handoff.revokeInput(this.core, connectionId);
   }
 

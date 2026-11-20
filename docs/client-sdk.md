@@ -21,13 +21,20 @@ These call the HTTP API directly. In production, call the API from your
 backend instead, so the API token never reaches a browser. The helpers are
 for development and for backends written in TypeScript.
 
+Each takes one options object. `baseUrl` (the engine's address, the page's
+own origin when absent) and `apiToken` are the same in all of them
+(`GlassEngine`):
+
 ```ts
-createGlassSession(baseUrl?, apiToken?, options?): Promise<GlassSession>
-redeemGlassTicket(ticket, baseUrl?): Promise<GlassSession>
-requestGateTicket(gate, credentials?): Promise<GlassGateTicket>
-deleteGlassSession(id, baseUrl?, apiToken?): void
-mintConnectionGrant(sessionId, capabilities, baseUrl?, apiToken?): Promise<GlassConnectionGrant>
+createGlassSession({ baseUrl?, apiToken?, ...options }): Promise<GlassSession>
+redeemGlassTicket({ ticket, baseUrl? }): Promise<GlassSession>
+requestGateTicket({ gate, code?, passphrase? }): Promise<GlassGateTicket>
+deleteGlassSession({ id, baseUrl?, apiToken? }): Promise<void>
+mintConnectionGrant({ sessionId, capabilities, baseUrl?, apiToken? }): Promise<GlassConnectionGrant>
 ```
+
+Before v0.1.132 they took positional arguments, and `deleteGlassSession`
+returned nothing; it now rejects when the delete fails (a session already gone counts as deleted).
 
 `mintConnectionGrant` mints another link to a browser session:
 `capabilities` is a `GlassGrantRequest`, the connection's capabilities
@@ -37,9 +44,9 @@ carries the link's `signalingUrl`, its `linkId` (to revoke it) and
 `expiresAt` when it expires. Relay-session links are minted with the HTTP
 API ([protocol.md](protocol.md#relay-sessions)).
 
-`createGlassSession`'s third argument is either `true` (the
-microphone-capable browser, as before) or an options object,
-`GlassCreateSessionOptions`: `{ audioInput?: boolean, contentHint?: "detail" | "motion", codec?: "h264" | "vp8" | "av1", inputMode?: "floor" | "free", inspect?: boolean, linkExpiresIn?: number }`.
+`createGlassSession`'s options (`GlassCreateSessionOptions`) are, beside
+`baseUrl` and `apiToken`: `{ audioInput?: boolean, contentHint?: "detail" | "motion", codec?: "h264" | "vp8" | "av1", inputMode?: "floor" | "free", inspect?: boolean, linkExpiresIn?: number }`.
+`audioInput: true` asks for the microphone-capable browser.
 `contentHint` (`GlassContentHint`) chooses what the session protects when
 bitrate or CPU is short: `"detail"` keeps the size and lowers the frame rate
 (text, interfaces), `"motion"` keeps the frame rate and lowers the size
@@ -74,22 +81,23 @@ which redeems it once for the session. The returned `GlassSession` also has
 `watchUrls`, when the ticket asked for watch links.
 
 `requestGateTicket` asks [`glass gate`](deployment.md#the-session-service-glass-gate)
-for a ticket: `gate` is the gate's address, and `credentials` what it asks
-for (`{ code }` for a link, `{ passphrase }`, or nothing for an open gate).
-It resolves to `{ engine, ticket }`; redeem it at once:
+for a ticket: `gate` is the gate's address, with what it asks for (`code`
+for a link, `passphrase`, or neither for an open gate). It resolves to
+`{ engine, ticket }`; redeem it at once:
 
 ```ts
-const { engine, ticket } = await requestGateTicket(gate, { code });
-const session = await redeemGlassTicket(ticket, engine);
+const { engine, ticket } = await requestGateTicket({ gate, code });
+const session = await redeemGlassTicket({ ticket, baseUrl: engine });
 ```
 
 A refusal rejects with a `GlassGateError` carrying the HTTP `status`, the
 gate's `code` (`gate_refused`, `rate_limited`, `origin_not_allowed`,
 `unavailable`) and, when rate-limited, `retryAfterSeconds`.
 
-`createGlassSession` refuses a server whose `protocolVersion` is newer than
-`SUPPORTED_PROTOCOL_VERSION`, rather than connecting and failing in confusing
-ways.
+The session helpers refuse an engine whose `protocolVersion` is not
+`SUPPORTED_PROTOCOL_VERSION`, and a `GlassClient` checks it again on connect
+and closes with the code `protocol_mismatch`, rather than connecting and
+failing in confusing ways. See [protocol.md](protocol.md#versioning).
 
 ## `GlassClient`
 
@@ -135,9 +143,9 @@ await client.connect();
 | `videoTrack(stream)` | The media stream (video, plus audio when the session has it). |
 | `connected`, `disconnected` | Transport up or down. |
 | `reconnecting(attempt, maxAttempts)` | A retry is scheduled. |
-| `refused(reason)` | Glass refused this attempt for now: a viewer limit, the engine's for relay viewers or the session's own (`4503`, reason `VIEWER_LIMIT_MESSAGE`). Not final: with reconnecting on, `reconnecting` follows and the client keeps trying; without it, `connect()` fails with the same reason. Show it, so a retry isn't left unexplained. |
-| `closed(reason)` | Final: the session ended (Glass reported its source failed, or that it can't resume), doesn't exist or has ended (`4404`, reason `SESSION_NOT_FOUND_MESSAGE`), the link expired (`4401`, reason `LINK_EXPIRED_MESSAGE`), the link was revoked (`4403`, reason `LINK_REVOKED_MESSAGE`), or retries ran out. |
-| `error(message)` | A message from Glass. When it ends the session, `closed` follows with the same text; otherwise the connection, and any reconnect, go on. Before v0.1.118 every one was taken as the end of the session. |
+| `refused(reason, code)` | Glass refused this attempt for now: a viewer limit, the engine's for relay viewers or the session's own (`4503`, code `viewer_limit`). Not final: with reconnecting on, `reconnecting` follows and the client keeps trying; without it, `connect()` fails with the same reason. Show it, so a retry isn't left unexplained. |
+| `closed(reason, code)` | Final. `reason` is a sentence for people; branch on `code` (`GlassCloseCode`): `source_failed` or `session_not_resumable` (the session ended), `session_not_found` (`4404`: it doesn't exist or has ended), `link_expired` (`4401`), `link_revoked` (`4403`), `protocol_mismatch` (the client and the engine speak different protocol versions), `connect_failed`, `connection_lost` (reconnecting off), `reconnect_exhausted` or `client_disconnected` (`disconnect()` was called). |
+| `error(message, code?)` | A message from Glass; `code` for programs when it has one (`encoder_failed`: the session's video stopped for good). When it ends the session, `closed` follows; otherwise the connection, and any reconnect, go on. |
 | `inputLatency(sample)` | One input's time from send to the picture showing it (`kind`, `ms`, `continuous` for a drag or scroll); `inputLatencyStats()` gives the median and 95th percentile so far. |
 | `stats(stats)` | RTT, throughput, jitter buffer, decoded and dropped frames. |
 | `connectionQuality(quality, score)` | This connection's quality as Glass measures it: `excellent`, `good`, `poor` (a weak link: a smaller picture, the odd freeze) or `lost` (no media arriving). Once it is known after connecting, then on each change, at most every 5 s. Show `poor` and `lost`; the reference viewer says "Your connection is weak" and "Connection lost, reconnecting". |
@@ -171,6 +179,7 @@ await client.connect();
 | `inputDropped(drop)` | Input was dropped. See below. |
 | `requestInput()`, `releaseInput()` | Ask for or give up control. |
 | `grantInput(id)`, `revokeInput(id)` | Owner only. |
+| | Each resolves with Glass's answer, a `GlassControlAnswer`: `{action, outcome, reason?, connectionId?}`. `outcome` is `granted`, `relayed` (nobody could be given control now, so the request went to whoever holds it), `released`, `revoked` or `refused`, and a refusal says why in `reason` (`not_allowed`, `not_owner`, `no_capacity`, `unknown_connection`, `rate_limited`, `invalid`, or this client's own `not_connected` and `disconnected`). They never reject. |
 | `connections()` | Owner only: everyone else on the session. |
 | `capabilitiesChanged(id, producesInput, isSelf)` | Someone's control changed. |
 | `inputRequested(id)` | Someone asked for control you hold. |
@@ -215,7 +224,7 @@ every 2 s per code and event type. See
 | Event | |
 |---|---|
 | `navigation(nav)` | URL, loading, back and forward availability. |
-| `state(el)` | Cursor shape, and whether a text field has focus. |
+| `elementState(el)` | Cursor shape, and whether a text field has focus. Named `state` before v0.1.132. |
 | `interactiveElements(els)` | Phones only: text-field positions, for the on-screen keyboard. |
 | `clipboardText(text)` | Answer to `copyText()`. |
 | `newTabRequested(url)` | The page tried to open a popup or tab. |

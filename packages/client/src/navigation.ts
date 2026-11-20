@@ -10,7 +10,7 @@ import type { UserAgentClientHints } from "./types";
 export function navigate(c: ClientCore, url: string): void {
   if (!drops.allowed(c, "navigate", true)) return;
   if (c.ws && c.signalingConnected) {
-    c.ws.send(JSON.stringify({ type: "navigate", sdp: url }));
+    c.ws.send(JSON.stringify({ type: "navigate", url: url }));
   }
 }
 

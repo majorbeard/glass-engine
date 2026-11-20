@@ -203,7 +203,7 @@ export function handleBinaryMessage(c: ClientCore, data: ArrayBuffer): void {
           const state: ElementState = JSON.parse(
             decoder.decode(new Uint8Array(view.buffer, offset))
           );
-          c.emit("state", state);
+          c.emit("elementState", state);
         }
         break;
       case MessageType.ViewportSize:
@@ -295,10 +295,10 @@ export function handleBinaryMessage(c: ClientCore, data: ArrayBuffer): void {
         break;
       case MessageType.Error:
         if (data.byteLength > offset) {
-          const parsed: { error?: string } = JSON.parse(
+          const parsed: { error?: string; code?: string } = JSON.parse(
             decoder.decode(new Uint8Array(view.buffer, offset))
           );
-          c.emit("error", parsed.error || "Unknown server error");
+          c.emit("error", parsed.error || "Unknown server error", parsed.code);
         }
         break;
     }
@@ -378,6 +378,9 @@ export async function handleSignal(c: ClientCore, signal: any): Promise<void> {
       }
       case "input_requested":
         c.emit("inputRequested", String(signal.connectionId ?? ""));
+        break;
+      case "control_answer":
+        handoff.answerControl(c, signal);
         break;
       case "input_floor": {
         const holder = typeof signal.connectionId === "string" && signal.connectionId !== "" ? signal.connectionId : null;

@@ -2,9 +2,10 @@
 // GlassClient (index.ts) for the public API, including what a page unload
 // does to the session (nothing: it is held for a reconnect).
 
-import type { ClientCore } from "./core";
+import type { ClientCore, Ending } from "./core";
 import * as transport from "./transport";
 import * as mic from "./mic";
+import * as handoff from "./handoff";
 import { stopRepairWait } from "./repair_wait";
 import {
   CLOSE_LINK_EXPIRED,
@@ -15,7 +16,9 @@ import {
   LINK_REVOKED_MESSAGE,
   VIEWER_LIMIT_MESSAGE,
   deleteGlassSession,
+  type GlassCloseCode,
 } from "./index";
+import { SUPPORTED_PROTOCOL_VERSION, protocolMismatchMessage } from "./protocol_version";
 import { DEFAULT_RECONNECT_DELAYS_MS, SESSION_NOT_FOUND_MESSAGE, SIGNALING_TIMEOUT_MS, PEER_TIMEOUT_MS, DISCONNECTED_GRACE_MS } from "./internal";
 
 // Signaling `error` codes after which the session cannot continue, so the
@@ -32,9 +35,9 @@ export async function connect(c: ClientCore): Promise<void> {
       return;
     } catch (err) {
       if (c.serverTerminalError) {
-        const reason = c.serverTerminalError;
+        const ending = c.serverTerminalError;
         c.serverTerminalError = null;
-        if (!c.userClosed) c.emit("closed", reason);
+        if (!c.userClosed) c.emit("closed", ending.reason, ending.code);
         throw err;
       }
       reportRefusal(c);
@@ -43,7 +46,7 @@ export async function connect(c: ClientCore): Promise<void> {
         !c.reconnectEnabled ||
         c.reconnectAttempt >= c.maxAttempts
       ) {
-        if (!c.userClosed) c.emit("closed", `failed to connect: ${err}`);
+        if (!c.userClosed) c.emit("closed", `failed to connect: ${err}`, "connect_failed");
         throw err;
       }
       c.reconnectAttempt++;
@@ -59,7 +62,7 @@ export async function connect(c: ClientCore): Promise<void> {
 function reportRefusal(c: ClientCore): void {
   const reason = c.refusedReason;
   c.refusedReason = null;
-  if (reason && !c.userClosed) c.emit("refused", reason);
+  if (reason && !c.userClosed) c.emit("refused", reason, "viewer_limit");
 }
 
 // nextDelayMs is the wait after failed attempt number reconnectAttempt:
@@ -148,16 +151,28 @@ export function establish(c: ClientCore): Promise<void> {
           // Only a code that says the session is over ends it; any other
           // error is a report, and the session (or its reconnect) goes on.
           const reason: string = signal.error || "server reported an error";
-          if (SESSION_OVER_CODES.has(signal.code)) {
-            c.sessionGone = reason;
-            c.serverTerminalError = reason;
+          const code: string | undefined = typeof signal.code === "string" ? signal.code : undefined;
+          if (code && SESSION_OVER_CODES.has(code)) {
+            c.sessionGone = { reason, code: code as GlassCloseCode };
+            c.serverTerminalError = c.sessionGone;
           }
-          c.emit("error", reason);
+          c.emit("error", reason, code);
           return;
         }
         // The engine's ICE servers come first on every connection, before
-        // the offer; each reconnect brings a fresh TURN credential.
+        // the offer; each reconnect brings a fresh TURN credential. The
+        // protocol version comes with them: a client that joined by link
+        // alone learns here whether it speaks the engine's contract.
         if (signal.type === "ice_config") {
+          const version = typeof signal.protocolVersion === "number" ? signal.protocolVersion : 1;
+          if (version !== SUPPORTED_PROTOCOL_VERSION) {
+            c.sessionGone = { reason: protocolMismatchMessage(version), code: "protocol_mismatch" };
+            c.serverTerminalError = c.sessionGone;
+            // 1000: a deliberate leave, so Glass holds nothing for a reconnect.
+            ws.close(1000, "protocol mismatch");
+            settle(() => reject(new Error(c.sessionGone!.reason)));
+            return;
+          }
           if (Array.isArray(signal.iceServers)) c.serverIceServers = signal.iceServers;
           return;
         }
@@ -185,10 +200,10 @@ export function establish(c: ClientCore): Promise<void> {
 
     ws.onclose = (event) => {
       c.signalingConnected = false;
-      const final: Record<number, string> = {
-        [CLOSE_SESSION_NOT_FOUND]: SESSION_NOT_FOUND_MESSAGE,
-        [CLOSE_LINK_EXPIRED]: LINK_EXPIRED_MESSAGE,
-        [CLOSE_LINK_REVOKED]: LINK_REVOKED_MESSAGE,
+      const final: Record<number, Ending> = {
+        [CLOSE_SESSION_NOT_FOUND]: { reason: SESSION_NOT_FOUND_MESSAGE, code: "session_not_found" },
+        [CLOSE_LINK_EXPIRED]: { reason: LINK_EXPIRED_MESSAGE, code: "link_expired" },
+        [CLOSE_LINK_REVOKED]: { reason: LINK_REVOKED_MESSAGE, code: "link_revoked" },
       };
       const gone = event?.code === undefined ? undefined : final[event.code];
       if (gone) {
@@ -199,7 +214,7 @@ export function establish(c: ClientCore): Promise<void> {
         onTerminalDrop(c);
       } else {
         if (event?.code === CLOSE_VIEWER_LIMIT) c.refusedReason = VIEWER_LIMIT_MESSAGE;
-        settle(() => reject(new Error(c.sessionGone ?? c.refusedReason ?? "signaling socket closed")));
+        settle(() => reject(new Error(c.sessionGone?.reason ?? c.refusedReason ?? "signaling socket closed")));
       }
     };
   });
@@ -255,13 +270,13 @@ export function onTerminalDrop(c: ClientCore): void {
     // source error, clean Close - not held for reconnect). Retrying the
     // same session ID via reconnectLoop can never succeed here, so skip
     // straight to "closed" instead of burning through maxAttempts first.
-    const reason = c.serverTerminalError;
+    const ending = c.serverTerminalError;
     c.serverTerminalError = null;
-    c.emit("closed", reason);
+    c.emit("closed", ending.reason, ending.code);
     return;
   }
   if (!c.reconnectEnabled) {
-    c.emit("closed", "connection lost");
+    c.emit("closed", "connection lost", "connection_lost");
     return;
   }
   if (c.supervising) return;
@@ -276,7 +291,7 @@ export async function reconnectLoop(c: ClientCore): Promise<void> {
       if (c.userClosed) return;
       c.reconnectAttempt++;
       if (c.reconnectAttempt > c.maxAttempts) {
-        c.emit("closed", "reconnection attempts exhausted");
+        c.emit("closed", "reconnection attempts exhausted", "reconnect_exhausted");
         return;
       }
       c.emit("reconnecting", c.reconnectAttempt, c.maxAttempts);
@@ -286,7 +301,7 @@ export async function reconnectLoop(c: ClientCore): Promise<void> {
       } catch {
         if (c.sessionGone) {
           c.serverTerminalError = null;
-          c.emit("closed", c.sessionGone);
+          c.emit("closed", c.sessionGone.reason, c.sessionGone.code);
           return;
         }
         reportRefusal(c);
@@ -314,9 +329,11 @@ export function disconnect(c: ClientCore): void {
     detachWs(c);
   }
   if (c.sessionId && c.deleteOnClose) {
-    deleteGlassSession(c.sessionId, c.sessionBaseUrl, c.apiToken);
+    deleteGlassSession({ id: c.sessionId, baseUrl: c.sessionBaseUrl, apiToken: c.apiToken }).catch(() => {
+      // Best-effort: the engine also ends a session its last connection left.
+    });
   }
-  c.emit("closed", "client disconnected");
+  c.emit("closed", "client disconnected", "client_disconnected");
 }
 
 // Tears down the PC/DC and detaches the WS handlers WITHOUT ending the
@@ -325,6 +342,8 @@ export function teardownInternals(c: ClientCore): void {
   // The PC this timer was watching is about to go away; a stale fire would
   // read connectionState off a replaced (or null) pc.
   cancelDisconnectedGrace(c);
+  // Glass can't answer a control request on a connection that is going.
+  handoff.dropControlRequests(c);
   // Inputs and frame tags belong to the connection going away.
   c.inputLatency.reset();
   if (c.mouseBatchTimer !== null) {
