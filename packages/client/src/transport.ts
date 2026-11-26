@@ -411,6 +411,9 @@ function onHello(c: ClientCore, pc: RTCPeerConnection, signal: any): void {
   if (typeof signal.connectionId === "string") c._connectionId = signal.connectionId;
   c._owner = signal.owner === true;
   c._rights = (signal.rights ?? null) as GlassRights | null;
+  // An engine that doesn't say takes what is offered.
+  c.sessionSimulcast = signal.simulcast !== false;
+  c.mayShare = signal.mayShare === true;
   const listed = new Set<string>();
   for (const raw of Array.isArray(signal.sources) ? signal.sources : []) {
     const info = sourceInfo(raw);
@@ -461,7 +464,14 @@ export async function handleSignal(c: ClientCore, signal: any): Promise<void> {
         break;
       case "answer":
         c.negotiation = c.negotiation.then(async () => {
-          await pc.setRemoteDescription({ type: "answer", sdp: answerSdp(c, String(signal.sdp ?? "")) });
+          try {
+            await pc.setRemoteDescription({ type: "answer", sdp: answerSdp(c, String(signal.sdp ?? "")) });
+          } catch (err) {
+            // The browser refused Glass's answer: this connection cannot come
+            // up, so say why rather than leave it reconnecting in silence.
+            c.emit("error", `the browser refused the engine's answer: ${err instanceof Error ? err.message : String(err)}`, "answer_refused");
+            return;
+          }
           await flushCandidates(c, pc);
         }).catch(() => undefined);
         break;

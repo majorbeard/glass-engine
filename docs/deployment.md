@@ -767,6 +767,11 @@ The gate allows 10 tickets a minute per visitor and 120 in all
 (`GLASS_GATE_RATE_PER_MINUTE`, `GLASS_GATE_TOTAL_PER_MINUTE`). The engine's
 own admission still applies: a ticket at capacity is refused, not spent.
 
+With `GLASS_GATE_OWNER_SHARES=true`, each session a ticket makes lets its
+owner share it: the reference viewer's share button then mints watch links
+with the session's own link, no API token anywhere in the page. See
+[Owner sharing](protocol.md#owner-sharing).
+
 Where it runs:
 
 - **Beside the engine, on one host** ([`examples/compose`](../examples/compose)).

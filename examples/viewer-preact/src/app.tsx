@@ -263,15 +263,21 @@ export function App() {
   // the resulting link in a second tab (or hand it to someone else), which
   // connects watch-only and can then click "Request control" there to see
   // this tab receive "Another viewer is requesting control".
+  // A session made with ownerMayShare lets its owner share with its own link;
+  // otherwise only a local development token can mint, and with neither the
+  // button is not shown.
+  const canShare = !!client?.mayShare() || !!API_TOKEN;
   const handleShareWatchOnlyLink = useCallback(async () => {
-    if (!sessionId) return;
+    if (!sessionId || !client) return;
     try {
-      const link = await mintGlassLink({
-        sessionId,
-        rights: { watch: "all" },
-        baseUrl: GLASS_ADDR,
-        apiToken: API_TOKEN,
-      });
+      const link = client.mayShare()
+        ? await client.shareLink({ watch: "all" })
+        : await mintGlassLink({
+            sessionId,
+            rights: { watch: "all" },
+            baseUrl: GLASS_ADDR,
+            apiToken: API_TOKEN,
+          });
       const attachUrl = new URL(window.location.href);
       attachUrl.search = "";
       attachUrl.searchParams.set("attachLink", link.url);
@@ -287,7 +293,7 @@ export function App() {
         type: "error",
       });
     }
-  }, [sessionId]);
+  }, [sessionId, client]);
 
   // --- Misc app-chrome effects ---
   useEffect(() => {
@@ -329,7 +335,13 @@ export function App() {
       }`}
     >
       {!isActive ? (
-        <WelcomeView onNavigate={handleNavigate} isConnected={isConnected} isLoading={isLoading} error={error} />
+        <WelcomeView
+          onNavigate={handleNavigate}
+          isConnected={isConnected}
+          isLoading={isLoading}
+          error={error}
+          canNavigate={session.isOwner || !isConnected}
+        />
       ) : (
         <Suspense
           fallback={
@@ -356,7 +368,7 @@ export function App() {
               canGoForward={session.canGoForward}
               producesInput={session.producesInput}
               otherHasFloor={session.otherHasFloor}
-              onShareWatchOnlyLink={handleShareWatchOnlyLink}
+              onShareWatchOnlyLink={canShare ? handleShareWatchOnlyLink : undefined}
               isOwner={session.isOwner}
               connections={session.connections}
               onGrantInput={handleGrantInput}

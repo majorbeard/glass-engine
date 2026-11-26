@@ -121,6 +121,8 @@ The session's own options:
   `recording`. Only for a session with sources.
 - `linkExpiresIn`: seconds until the session's own link stops admitting new
   connections; `0` for never. See "Link expiry".
+- `ownerMayShare`: `true` lets the session's own link mint links, without the
+  API token. Off by default. See "Owner sharing".
 
 The answer:
 
@@ -211,6 +213,26 @@ The kinds are `browser`, `playback`, `camera`, `microphone`, `screen` and
 Beyond a link's rights, the owner may deny a member a source and lift the
 denial, and grant or revoke its control of one (see "Owner-controlled
 handoff").
+
+### Owner sharing
+
+Minting a link takes the API token: your backend decides who gets which link,
+under its own sign-in, seats and records. A session made with
+`"ownerMayShare": true` (or a ticket's `glass.ownerMayShare`, which `glass gate`
+sets with `GLASS_GATE_OWNER_SHARES=true`) also lets its own link mint and revoke
+links, as `?token=` or `Authorization: Bearer`. It is for setups without a
+backend: a scoped link is better than handing out the owner's own.
+
+- **What it may mint:** any link within its own rights (watch, control,
+  publish), never `owner`, expiring no later than its own link. An
+  `expiresIn` that would be later is `400`; absent, it is the owner's.
+- **How many:** its live links (not revoked, not expired) at most the
+  session's connection ceiling (`maxMembers`, else
+  `GLASS_MAX_VIEWERS_PER_SESSION`), and 60 a minute. Past either, `429`
+  `rate_limited`. A revoked or expired link frees its place.
+- **Revoking:** only the links it minted (`403` `link_not_allowed` otherwise).
+- `hello`'s `mayShare` is `true` for the owner of such a session; the session
+  and its create answer carry `ownerMayShare`.
 
 Some links, for a browser session:
 
@@ -476,7 +498,7 @@ A message that leaves out `source` is about the session's default source
 
 | `type` | Fields | |
 |---|---|---|
-| `hello` | `protocolVersion`, `iceServers`, `connectionId`, `rights`, `owner`, `sources`, `members?` | The first message. `iceServers` is an `RTCConfiguration`'s; with the engine's own TURN it carries a credential minted for this connection, fresh on every reconnect. `members` (the other members, `{connectionId, owner, rights}`) for an owner only. Nothing is sent before it. |
+| `hello` | `protocolVersion`, `iceServers`, `connectionId`, `rights`, `owner`, `sources`, `members?`, `simulcast`, `mayShare` | The first message. `iceServers` is an `RTCConfiguration`'s; with the engine's own TURN it carries a credential minted for this connection, fresh on every reconnect. `members` (the other members, `{connectionId, owner, rights}`) for an owner only. `simulcast`: whether a picture published here is taken as layers (see [Publishing](sources/producers.md)). `mayShare`: whether this connection may mint links (see "Owner sharing"). Nothing is sent before it. |
 | `answer` | `sdp` | Glass's answer. |
 | `tracks` | `tracks: [{mid, kind, source}]` | Which receive slot carries which source, after every answer. |
 | `slots_needed` | `video`, `audio` | Add this many receive slots and offer again. |

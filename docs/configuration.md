@@ -160,6 +160,7 @@ itself. See [recording.md](recording.md).
 | `GLASS_GATE_ADDR` | `:8090` | Listen address without a certificate of its own. |
 | `GLASS_GATE_RATE_PER_MINUTE` | `10` | Tickets one visitor may get a minute. |
 | `GLASS_GATE_TOTAL_PER_MINUTE` | `120` | Tickets all visitors together may get a minute. |
+| `GLASS_GATE_OWNER_SHARES` | `false` | `true`: the sessions its tickets make let their owner share them, minting links no wider than its own. See [protocol.md](protocol.md#owner-sharing). |
 
 On the engine:
 

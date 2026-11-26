@@ -125,6 +125,12 @@ Make the session with `{"simulcast": true}`, and publish with
 `simulcast: true` (`@glass/client` picks the layers from the camera's height:
 three for 540 high or more, two for 360 or more, one below).
 
+Into a session made without it, Glass declines the layers in its answer (as
+RFC 8853 describes) and `@glass/client` sends one full-size encoding instead;
+`hello`'s `simulcast` says which a session is. A publisher of your own should
+do the same: a browser whose simulcast is declined sends only its *first*
+encoding, usually the smallest.
+
 - **Each viewer gets its own layer**, from its own link. A viewer moves down
   only while its link shows congestion, to a layer it can carry. It moves up
   once its estimate has covered the next layer with a quarter to spare for
