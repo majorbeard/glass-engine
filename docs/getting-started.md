@@ -73,7 +73,7 @@ Things to try:
 - Download a file. A prompt appears; nothing is saved until you click.
 - Start Glass with `-e GLASS_AUDIO_MODE=on` and play a video with sound.
 
-## 4. A relay stream from your camera
+## 4. Publish your camera
 
 In another terminal, serve the repository root:
 
@@ -81,14 +81,16 @@ In another terminal, serve the repository root:
 npx serve .     # from the glass-engine directory
 ```
 
-Open `http://localhost:3000/examples/quickstart/relay.html` and click **Start
-camera**. The page creates a relay session, publishes your camera into it with
-`GlassProducer`, and shows a watch link. Open the link in another tab: that
-tab is a viewer, receiving your camera through Glass.
+Open `http://localhost:3000/examples/quickstart/publish.html` and click **Start
+camera**. The page makes a session whose members publish, publishes your camera
+and microphone into it with `GlassClient.publish()`, and shows a watch link.
+Open the link in another tab: that tab is a viewer, receiving your camera
+through Glass.
 
 No browser runs in Glass for this. It forwards the camera's encoded stream to
-each viewer as it arrives. Close the producer tab and watch the viewer: its
-status changes to `stalled`, and the last frame stays on screen.
+each viewer as it arrives. Close the publishing tab and watch the viewer: its
+status changes to `stalled`, and the last frame stays on screen; after the
+reconnect grace the camera's source ends.
 
 ## 5. A call
 
@@ -115,18 +117,21 @@ docker run -d --name glass \
 Now every API call needs the token:
 
 ```sh
-curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" http://localhost:8080/v1/sessions
+curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
+  -H 'Content-Type: application/json' -d '{"sources": [{"kind": "browser"}]}' \
+  http://localhost:8080/v1/sessions
 ```
 
-The response's `signalingUrl` carries its own per-session token, and that URL
-is all a client needs. That is how a real application is built:
+The response's `link.url` carries its own per-session token, and that link is
+all a client needs. That is how a real application is built:
 
-1. Your backend holds `GLASS_API_TOKEN` and creates sessions, relay sessions
-   and calls.
-2. It gives each client only the URL that client should use: a
-   `signalingUrl` for a viewer, a `produceUrl` for a producer, a peer URL for
-   a call participant, or a minted watch-only URL for a guest.
-3. It deletes sessions when users are done.
+1. Your backend holds `GLASS_API_TOKEN`, makes sessions, and mints links
+   (`POST /v1/sessions/{id}/links`).
+2. It gives each person only the link they should use: the session's own for
+   its owner, a link that watches for a guest, one that publishes for a phone,
+   one that does both for each side of a call.
+3. It ends sessions when users are done, or lets each end when its last member
+   leaves.
 
 The reference viewer can take a token for local testing
 (`VITE_GLASS_API_TOKEN`). A real frontend never should: anything in a

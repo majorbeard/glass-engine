@@ -37,69 +37,86 @@ display's own (below). Measurements are in
 
 ```sh
 curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
-  http://glass.example.com/v1/sessions
+  -H 'Content-Type: application/json' \
+  -d '{"sources": [{"kind": "browser", "url": "https://example.com"}]}' \
+  https://glass.example.com/v1/sessions
 ```
 
 ```json
 {
   "id": "9ee60523-4129-4f4a-b43a-89e14189e89f",
-  "signalingUrl": "wss://glass.example.com/v1/sessions/9ee6…/signaling?token=…",
-  "protocolVersion": 2,
-  "sourceType": "browser",
-  "capabilities": {
-    "video": true, "navigation": true, "viewport": true, "clipboard": true,
-    "pauseResume": true, "mobileEmulation": true, "inspect": true,
-    "inputActions": ["back", "forward", "keydown", "keyup", "mousedown", "…"]
+  "protocolVersion": 3,
+  "link": {
+    "id": "4776be7c9390e016",
+    "url": "wss://glass.example.com/v1/sessions/9ee6…/connect?token=…",
+    "rights": {"watch": "all", "publish": [], "control": "all", "owner": true}
   },
-  "contentHint": "detail",
-  "codec": "h264",
-  "inputMode": "floor",
-  "inspect": false
+  "sources": [{
+    "id": "0d6c1f4e-…",
+    "kind": "browser",
+    "state": "live",
+    "capabilities": {
+      "video": true, "navigation": true, "viewport": true, "clipboard": true,
+      "pauseResume": true, "mobileEmulation": true, "inspect": true,
+      "inputActions": ["back", "forward", "keydown", "keyup", "mousedown", "…"]
+    },
+    "contentHint": "detail",
+    "codec": "h264",
+    "inputMode": "floor",
+    "inspect": false
+  }]
 }
 ```
 
-Each session reserves a browser from a pool. Glass keeps a few browsers warm
+Each browser source reserves a browser from a pool. Glass keeps a few warm
 (`GLASS_POOL_WARM_FLOOR`, default 2) and starts more on demand up to the
 session limit. A session that nobody connects to within 30 s is closed so it
 can't hold a browser.
 
-Send `{"audioInput": true}` as the body to get a browser that can receive the
-viewer's microphone (see [Microphone](#microphone)), and `"contentHint":
-"detail"` or `"motion"` to choose what the session protects when bitrate or
-CPU is short: the size (text, interfaces) or the frame rate (video, games).
-The body also takes `codec` (`h264`, `vp8` or `av1`; one this host can't serve
-is `400`), `inputMode` (`floor` or `free`, see
-[concepts.md](../concepts.md#several-people-in-control)), `inspect`,
-`record` and `linkExpiresIn`; each is in
-[protocol.md](../protocol.md#browser-sessions).
+A browser source's options: `url` (a page to open; checked before anything
+is made, and opened after the answer, so a slow page never holds the answer
+up), `audioInput` (a browser that can receive the viewer's microphone, see
+[Microphone](#microphone)), `contentHint` (`"detail"` or `"motion"`: what it
+protects when bitrate or CPU is short, the size for text and interfaces or the
+frame rate for video and games), `codec` (`h264`, `vp8` or `av1`; one this
+host can't serve is `400`), `inputMode` (`floor` or `free`, see
+[concepts.md](../concepts.md#several-people-in-control)) and `inspect`. The
+session's own options are `record` and `linkExpiresIn`. Each is in
+[protocol.md](../protocol.md#post-v1sessions).
 
-A session outlives its viewer's page: a reload or a closed tab holds it for
-the reconnect grace (60 s by default) with its page hidden, and the same
-`signalingUrl` resumes it. See
-[client-sdk.md](../client-sdk.md#a-sessions-lifetime).
+A session can hold more than one browser: name several in `sources`, or add
+one while it runs with `POST /v1/sessions/{id}/sources`. A viewer sees each as
+a source of its own.
+
+A session outlives its viewer's page: a reload or a closed tab holds the
+member for the reconnect grace (60 s by default) with its page hidden, and
+the same link resumes it. See [client-sdk.md](../client-sdk.md#connection).
 
 ## Connecting a viewer
 
 ```ts
-import { createGlassClient } from "@glass/client";
+import { GlassClient } from "@glass/client";
 import { mountGlassViewer } from "@glass/client/viewer";
 
-const client = createGlassClient({ sessionId: id, signalingUrl });
+const client = new GlassClient({ link: session.link.url });
+const browser = session.sources[0].id;
 mountGlassViewer(stage, client, {
+  source: browser,
   onNavigation: (nav) => updateAddressBar(nav.url),
 });
 await client.connect();
-client.navigate("https://example.com");
+client.source(browser).navigate("https://example.com");
 ```
 
-`mountGlassViewer` renders the video, maps pointer coordinates to the remote
-page, and captures mouse, keyboard, touch, scroll, gamepad and viewport
+`mountGlassViewer` renders the source's video, maps pointer coordinates to the
+remote page, and captures mouse, keyboard, touch, scroll, gamepad and viewport
 changes. Mount it **before** `connect()`, so the initial viewport (and whether
 the viewer is a phone) reaches Glass before the first page loads.
 
-If you build your own renderer instead, use the `videoTrack` event and the
-input methods on `GlassClient` (`mouseDown`, `dispatchKeyEvent`,
-`dispatchTouch`, …). See [client-sdk.md](../client-sdk.md).
+If you build your own renderer instead, use the `track` event (or
+`client.source(id).stream()`) and the input methods on the source's handle
+(`mouseDown`, `dispatchKeyEvent`, `dispatchTouch`, …). See
+[client-sdk.md](../client-sdk.md).
 
 ## Navigation
 
@@ -143,14 +160,14 @@ wheel step itself without waiting for the page, and modifier combinations
 such as Shift+wheel behave as they do locally. Touch, and all input on the
 screencast, go through Chrome's input events.
 
-Input is accepted only from a connection that holds `producesInput`
+Input is accepted only from a member that holds the source's input
 ([concepts.md](../concepts.md#owner-and-control-handoff)). With several
 connections in control, the session's input mode decides whose input reaches
 the page ([concepts.md](../concepts.md#several-people-in-control)). Input
 Glass can't accept (no control, navigation from a non-owner, too fast,
 out-of-range coordinates, too many touch points) is dropped and reported to
 the sender; the SDK fires `inputDropped`
-([client-sdk.md](../client-sdk.md#control-and-sharing)).
+([client-sdk.md](../client-sdk.md#control)).
 
 Your backend can also send input to a session without a WebRTC connection:
 
@@ -183,7 +200,7 @@ reads the viewer's clipboard directly.
 When a page downloads a file, Glass saves it on the server and emits
 `downloadReady(filename, guid)`. Nothing lands on the viewer's device unless
 your app acts on it: show a prompt, and on the user's click open
-`client.downloadUrl(guid)`. A download nobody collects is deleted after
+`client.source(id).downloadUrl(guid)`. A download nobody collects is deleted after
 10 minutes. At most 5 downloads per session can be in progress or waiting
 to be collected at once; a sixth is refused until one is collected or
 expires. A
@@ -193,7 +210,7 @@ PDF is downloaded too, not opened in Chrome's PDF viewer.
 
 When the page opens a file picker (`<input type="file">`), Glass emits
 `fileChooserOpened(multiple)`. Show the user a local file picker and pass the
-result to `client.uploadFiles(files)`. If nobody answers within 60 s, the
+result to `client.source(id).uploadFiles(files)`. If nobody answers within 60 s, the
 remote picker is cancelled and `fileChooserClosed` fires.
 
 ## Dialogs
@@ -202,7 +219,7 @@ A page's `alert`, `confirm`, `prompt` or "leave this page?" dialog stops its
 scripts until someone answers. Every viewer gets the `dialog` event, with the
 page's text. On a display (every capture method but the screencast) Chrome
 draws the dialog in the video and ordinary input answers it. With the
-screencast the video shows only the page, so show the dialog in your app and answer with `client.answerDialog(accept, text?)`.
+screencast the video shows only the page, so show the dialog in your app and answer with `client.source(id).answerDialog(accept, text?)`.
 The reference viewer does this. Your backend can answer through the API
 instead: see [page-inspection.md](../page-inspection.md#dialogs). Glass
 never answers a dialog on its own.

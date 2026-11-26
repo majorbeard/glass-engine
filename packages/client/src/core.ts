@@ -4,10 +4,11 @@
 
 import type { GlassClientOptions, GlassClientEventMap, GlassCloseCode } from "./index";
 import { DEFAULT_RECONNECT_DELAYS_MS, DEFAULT_MAX_RECONNECT_ATTEMPTS, originOf } from "./internal";
-import type { GlassConnectionQuality, GlassControlAnswer, GlassDialog, GlassPlaybackState, GlassRosterEntry, GlassSlotState } from "./types";
+import type { GlassConnectionQuality, GlassControlAnswer, GlassDialog, GlassMember, GlassPlaybackState, GlassRights, GlassSourceInfo } from "./types";
 import { InputLatencyTracker } from "./input_latency";
 import type { ReceiverCounters } from "./input_latency";
 import { EncodedStreamChecker } from "./encoded_stream_check";
+import type { GlassPublication } from "./publish";
 
 // Ending is a "closed" event's arguments: a sentence for people, a code for programs.
 export interface Ending {
@@ -68,6 +69,23 @@ export interface InternalGlassClientOptions {
   __internalJitterBufferTargetMs?: number | "native";
 }
 
+// SourceState is what this client knows of one of the session's sources: the
+// engine's description, the stream of the tracks it receives of it, and the
+// per-source state its messages carry.
+export interface SourceState {
+  info: GlassSourceInfo;
+  // The tracks this connection receives of the source, in one stream; null
+  // until the first arrives.
+  stream: MediaStream | null;
+  // The connections holding the source's input track, and who has its floor
+  // (input mode "floor"), from input_holders.
+  holders: string[];
+  floor: string | null;
+  // The page's open dialog (a browser), and a playback's state.
+  dialog: GlassDialog | null;
+  playback: GlassPlaybackState | null;
+}
+
 // Emit forwards to GlassClient's (protected) emit.
 export type Emit = <K extends keyof GlassClientEventMap>(event: K, ...args: GlassClientEventMap[K]) => void;
 
@@ -94,47 +112,36 @@ export class ClientCore {
   // and the browser's mic indicator stays on.
   micTrack: MediaStreamTrack | null = null;
   iceCandidateQueue: RTCIceCandidateInit[] = [];
-  // The latest received video stream, retained so a viewer that subscribes
-  // AFTER the track already arrived (very common: the app connects up front and
-  // mounts the viewer only on first navigation, long after ontrack fired) can
-  // still bind it via getVideoStream(). Without this, the "videoTrack" event is
-  // fire-and-forget and a late subscriber renders black.
-  currentStream: MediaStream | null = null;
-  // This connection's own identity + starting input-control state, learned
-  // from the server's very first "offer" message (its
-  // connectionId/producesInput fields, docs/protocol.md). Reset
-  // on every fresh establish() attempt (a reconnect gets a NEW connection
-  // ID server-side, unless the engine resumes the same one) and updated live thereafter by
-  // "capabilities_changed" (see handleSignal). _connectionId stays null
-  // only in the brief window before the first offer has ever arrived.
+  // Each receiving line's source, from Glass's "tracks"; tracks that arrived
+  // on a line not yet mapped; offers made one at a time (the client offers,
+  // Glass answers: protocol v3).
+  mids = new Map<string, string>();
+  pendingTracks = new Map<string, MediaStreamTrack>();
+  negotiation: Promise<void> = Promise.resolve();
+  // The session's sources, by id, in the order the engine announced them.
+  // Kept across a reconnect, so a viewer bound to one keeps it; the new
+  // hello replaces their descriptions.
+  sources = new Map<string, SourceState>();
+  // This connection's identity and what its link may do, from hello; null
+  // before the first. A resumed connection keeps its id.
   _connectionId: string | null = null;
-  _producesInput = false;
-  // Who has the page in input mode "floor", from input_floor; null when no
-  // one has it, and always null in mode "free". Reset with _connectionId.
-  _floorHolder: string | null = null;
+  _owner = false;
+  _rights: GlassRights | null = null;
+  // The sources this connection was denied watching or controlling by the
+  // owner, from rights_changed.
+  _deniedWatch: string[] = [];
+  _deniedControl: string[] = [];
+  // The other members, for an owner (hello's members, member_joined and
+  // member_left); empty for anyone else.
+  _members = new Map<string, GlassMember>();
   // Whether the session is being recorded, from the recording message the
-  // engine sends on connect and on every change. Reset with _connectionId.
+  // engine sends on connect and on every change.
   _recording = false;
-  // A playback session's state, from the playback message; null for any
-  // other session. Reset with _connectionId.
-  _playback: GlassPlaybackState | null = null;
-  // The page's dialog, from the dialog message; null when none is open.
-  // Reset with _connectionId: a reconnect is sent the open one again.
-  _dialog: GlassDialog | null = null;
-  // Whether THIS connection authenticated with the session's own unscoped
-  // credential rather than a minted, capability-scoped grant - see
-  // the offer's isOwner field (docs/protocol.md) for what this
-  // authorizes. Reset alongside _connectionId/_producesInput on every
-  // fresh establish() attempt, for the same reason.
-  _isOwner = false;
-  // Owner-only roster of every OTHER connection currently on this session -
-  // see docs/protocol.md's Control handoff section (connection_joined/
-  // connection_left/roster) and the "rosterChanged" event. Keyed by
-  // connectionId. Stays empty for a non-owner connection (isOwner() false)
-  // - it never receives roster traffic at all.
-  _connections = new Map<string, GlassRosterEntry>();
+  // What this client publishes (publish()), kept across a reconnect: each
+  // goes on every new connection's peer connection again.
+  publications: GlassPublication[] = [];
   // Control requests waiting for Glass's control_answer, by the id each was sent with.
-  controlPending = new Map<number, { action: GlassControlAnswer["action"]; connectionId?: string; resolve: (answer: GlassControlAnswer) => void }>();
+  controlPending = new Map<number, { action: GlassControlAnswer["action"]; source: string; connectionId?: string; resolve: (answer: GlassControlAnswer) => void }>();
   controlNextId = 1;
   // Client-side input latency (input_latency.ts); samples are reported to
   // Glass at most every INPUT_LATENCY_REPORT_MS.
@@ -142,8 +149,6 @@ export class ClientCore {
   lastInputLatencyReportAt = 0;
   // The receiver counters read with the last input_latency_report.
   lastReceiverCounters: ReceiverCounters | null = null;
-  // Last slot_state snapshot; empty for non-relay sessions.
-  _slotStates: Record<string, GlassSlotState> = {};
   // Last connection_quality Glass sent; null before the first.
   _connectionQuality: GlassConnectionQuality | null = null;
   // Coalescing state for locally withheld input; see drops.ts.
@@ -154,12 +159,15 @@ export class ClientCore {
   // torn down in teardownInternals alongside everything else PC-scoped.
   encodedStreamChecker: EncodedStreamChecker | null = null;
 
-  readonly signalingUrl: string;
-  readonly sessionId?: string;
+  // The link this client joins with: the member connection's URL, carrying
+  // the link's token.
+  readonly link: string;
+  // The engine's origin, for the source routes (downloads, uploads).
+  readonly engineOrigin: string;
   readonly iceServers: RTCIceServer[];
   // Whether the application gave its own iceServers. If it did not, the
-  // engine's are used: it sends them as the first message on every
-  // signaling connection (ice_config), TURN credential included.
+  // engine's are used: it sends them in hello, the first message of every
+  // connection, TURN credential included.
   readonly iceServersGiven: boolean;
   serverIceServers: RTCIceServer[] | null = null;
   readonly iceTransportPolicy?: RTCIceTransportPolicy;
@@ -192,9 +200,6 @@ export class ClientCore {
   readonly jitterBufferTargetMs: number | "native";
   // See GlassClientOptions.repairWait and repair_wait.ts.
   readonly repairWait: boolean;
-  readonly deleteOnClose: boolean;
-  readonly sessionBaseUrl: string;
-  readonly apiToken?: string;
 
   // Lifecycle state.
   userClosed = false;
@@ -230,7 +235,7 @@ export class ClientCore {
   disconnectedGraceTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Mouse-move batching.
-  mouseEventQueue: Array<{ x: number; y: number; dragging: boolean }> =
+  mouseEventQueue: Array<{ x: number; y: number; dragging: boolean; src: string }> =
     [];
   lastMouseSendTime = 0;
 
@@ -247,8 +252,8 @@ export class ClientCore {
     options: GlassClientOptions,
     readonly emit: Emit,
   ) {
-      this.signalingUrl = options.signalingUrl;
-      this.sessionId = options.sessionId;
+      this.link = options.link;
+      this.engineOrigin = originOf(options.link);
       this.iceServers = options.iceServers ?? [
         { urls: "stun:stun.l.google.com:19302" },
       ];
@@ -267,9 +272,6 @@ export class ClientCore {
       this._encodedStreamCheckEnabled = internalOpts.__internalEncodedStreamCheckEnabled ?? false;
       this._decodeReadbackEnabled = internalOpts.__internalDecodeReadbackEnabled ?? false;
       this.jitterBufferTargetMs = internalOpts.__internalJitterBufferTargetMs ?? 0;
-      this.deleteOnClose = options.deleteSessionOnClose ?? !!options.sessionId;
-      this.sessionBaseUrl = options.sessionBaseUrl ?? originOf(options.signalingUrl);
-      this.apiToken = options.apiToken;
   }
 
   wait(ms: number): Promise<void> {

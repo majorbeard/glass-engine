@@ -1,308 +1,239 @@
-# Relay producers
+# Publishing
 
-A relay session carries a stream that something else produces: a phone
-camera, a desktop capture, a drone, a hardware encoder, your own app. The
-producer publishes to Glass over WebRTC; Glass forwards the encoded stream to
-every viewer **without decoding or re-encoding it**. Relay sessions start no
-browser and use almost no CPU per stream.
+A member of a session can publish tracks into it: a camera, a microphone, a
+screen, or a device's own picture. Each published track becomes a **source**
+of the session, and every member whose link may watch it receives it. Glass
+forwards what arrives; it never decodes or re-encodes a published track.
 
-Read [concepts.md](../concepts.md) first; this page is the contract a producer
-must follow.
+**Coming from 0.1?** Relay sessions, produce URLs, slots and `GlassProducer`
+are gone. A publisher is a member like any other, joined with a link that may
+publish. See [Migrating from 0.1](../migrating-from-0.1.md).
 
-## The easy way: `GlassProducer`
-
-If your producer can run a browser engine (a web page, a Capacitor or
-Electron app, a WebView), use `GlassProducer` from `@glass/client`. It
-implements everything on this page, including reconnects:
+## The easy way: `GlassClient.publish()`
 
 ```ts
-import { GlassProducer } from "@glass/client";
+import { GlassClient } from "@glass/client";
 
 const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-
-const producer = new GlassProducer({
-  stream,
-  produceUrl,            // from your backend (POST /v1/relay-sessions)
-  maxBitrateKbps: 1000,  // keep below the uplink
-});
-producer.on("state", (state, detail) => console.log(state, detail));
-producer.on("stats", (s) => console.log(s.uploadBitrateKbps, s.frameWidth, s.encoder));
-await producer.start();
+const client = new GlassClient({ link: publishLink });   // from your backend
+const cam = client.publish(stream.getVideoTracks()[0], { kind: "camera" });
+const mic = client.publish(stream.getAudioTracks()[0], { kind: "microphone" });
+mic.on("silent", () => warn("your microphone is sending silence"));
+await client.connect();
 ```
 
-States: `idle` → `creating-session` → `connecting` → `streaming`, then
-`reconnecting` on a drop, `error` or `stopped`. For quick prototypes it can
-create the session itself (`serverUrl` and `apiToken` instead of
-`produceUrl`), but that puts your API token in the producer. Don't ship it.
-
-The `stream` can be anything that yields a video track: a camera,
-`getDisplayMedia()` screen capture, a `<canvas>` capture. The caller owns the
-tracks: `stop()` closes the session slot but doesn't stop them.
-
+It announces each track, offers, applies a start bitrate, caps the picture's
+bitrate (1000 kbit/s by default), runs simulcast's layers if asked, reports
+silence, and publishes everything again after a reconnect.
 [`examples/producer-capacitor`](../../examples/producer-capacitor) is a
-complete Android app built this way: it publishes the phone's camera and
-microphone, caps its bitrate, survives network changes, and shows a QR code
-with a watch link.
+complete Android app built on it, and
+[`examples/quickstart/publish.html`](../../examples/quickstart/publish.html)
+a single page. The options are in [client-sdk.md](../client-sdk.md#publishing).
 
-The rest of this page is for producers that implement the contract
-themselves (a native app, GStreamer, pion, a hardware device).
+## A session, and a link that publishes
 
-## Creating a session
+Your backend, with the API token, makes a session whose members publish and
+mints each publisher a link:
 
-```sh
-curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
-  http://glass.example.com/v1/relay-sessions
+```http
+POST /v1/sessions                     {"maxMembers"?, "simulcast"?, "linkExpiresIn"?}
+POST /v1/sessions/{id}/links          {"publish": ["camera", "microphone"]}
+POST /v1/sessions/{id}/links          {"watch": "all"}
 ```
 
-```json
-{
-  "id": "9ee60523-…",
-  "signalingUrl": "wss://glass.example.com/v1/relay-sessions/9ee6…/signaling?token=…",
-  "produceUrl": "wss://glass.example.com/v1/relay-sessions/9ee6…/produce?token=…",
-  "codec": "h264",
-  "protocolVersion": 2,
-  "sourceType": "relay",
-  "capabilities": { "video": true, "navigation": false, "…": "…" }
-}
-```
+A session made with no `sources` is one whose members publish. Hand the
+publishing link to the device, never the API token; hand watch links to
+viewers. A link may publish only the kinds it was minted with, and may also
+watch: two people seeing and hearing each other are two links that both
+watch and publish, on a session of `maxMembers: 2` (see
+[Calls](calls.md)).
 
-- `produceUrl` is for the producer. It is single-use: bound to the first
-  producer that connects, which can later resume on it.
-- `signalingUrl` is for viewers. They connect exactly as they would to any
-  other session ([client-sdk.md](../client-sdk.md)). To hand out a watch-only
-  link, mint a grant with `POST /v1/relay-sessions/{id}/connections` and
-  `{"consumesMedia": true}`.
-- `codec` is the one video codec this Glass instance accepts: `h264`, or
-  `vp8` when the operator enables VP8. **The producer must send it.**
+## Connecting your own publisher
 
-### Several streams in one session: slots
+For anyone writing a publisher of their own (pion, GStreamer, a native SDK).
+The messages are in [the protocol](../protocol.md#signaling).
 
-A session can hold several streams at once, for example the cameras on one
-vehicle feeding one dashboard. Declare **named slots** when creating the
-session:
+1. Open a WebSocket to the link's `url`. The first message is `hello`: the
+   protocol version (refuse any but 3), the ICE servers to use, this
+   connection's id and what its link may do.
+2. Add a send-only transceiver for each track you publish (with simulcast,
+   with its encodings, below), make an offer and set it as the local
+   description.
+3. For each send-only line, send
+   `{"type": "publish", "mid": "<its mid>", "kind": "camera" | "microphone" | "screen" | "device"}`
+   **before** the offer that carries it. Glass takes a line as a source only
+   when it was announced.
+4. Send the offer. Glass answers (`answer`); trickle ICE candidates both
+   ways.
+5. A line Glass takes becomes a source: every member who may watch it gets
+   `source_added`. A line it does not take is answered `inactive`, and you get
+   `publish_refused {mid, reason}`: `invalid` (no mid, or an unknown kind),
+   `not_allowed` (the link may not publish that kind) or `codec_mismatch` (no
+   codec the session can send on).
+6. To stop publishing a track, send `{"type": "unpublish", "mid": …}`: its
+   source ends for everyone.
 
-```json
-{ "slots": ["main", "forward", "rear"] }
-```
+You may publish more later on the same connection: add the line, announce
+it, offer again. One offer is in flight at a time; wait for its answer.
 
-The response then also has `slots` and `produceUrls`, one per slot;
-`produceUrl` is still `main`'s.
+## Media
 
-- The link is the slot. Each produce URL is bound to its slot, and nobody
-  holding one slot's link can publish into another.
-- `main` must be one of the names.
-- Slots may stay empty; an empty slot costs nothing.
-- One session is one seat against the license limit, however many slots it
-  has.
-- At most 4 slots by default (`GLASS_MAX_STREAM_SLOTS`).
-- Viewers receive every slot that has a producer.
-- Sessions with more than one slot don't accept producer audio yet. An offer
-  with audio gets `audio_not_supported_multi_slot`.
+**Video.** H.264 or VP8 (and AV1 where the engine has it): a browser lists
+every codec it has, and Glass answers with the one it sends on. Glass
+behaves as a normal WebRTC receiver, and your sender must respond like one:
 
-Viewers learn each slot's state from `slot_state` (`slotStateChanged` in the
-SDK): `live`, `stalled` or `empty`. A slot is `stalled` when its producer
-dropped, or has sent no media for 2 s (`GLASS_RELAY_STALL_THRESHOLD_MS`); the
-last frame stays on screen, and the slot is `live` again as soon as media
-arrives. A producer silent for 10 s (`GLASS_RELAY_STALL_CLOSE_MS`) is
-disconnected so that it reconnects (see [Disconnecting and
-reconnecting](#disconnecting-and-reconnecting)).
+- **NACK:** resend lost packets.
+- **PLI:** produce a keyframe when asked. Glass asks every 3 s, and when a
+  viewer joins or can't decode (at most twice a second); a simulcast
+  session makes no periodic request.
+- **Congestion feedback (TWCC):** adapt your bitrate to it. Browser WebRTC
+  does all three by default; lower-level libraries may need configuring.
+- **Cap your bitrate below your uplink.** Glass reports congestion but can't
+  fix an uplink that is too small. An uncapped phone climbs to about
+  1.6 Mbit/s; on a slower uplink the router's queue fills and latency swings
+  by seconds while no packet is lost, so nothing looks wrong. `@glass/client`
+  caps at 1000 kbit/s by default.
+- **Start bitrate:** a browser starts its congestion control low and takes
+  seconds to climb. `@glass/client` sets Chromium's start bitrate (500 kbit/s
+  by default) in Glass's answer.
 
-### Simulcast: several layers of the same picture
+**Audio.** A microphone is a source of its own: Opus, 48 kHz, forwarded as it
+arrives.
 
-Simulcast is opt-in and off by default. A producer can send its video
-as up to three layers of the same picture, at different sizes, and Glass
-gives each viewer the layer its own link carries: a viewer on a slow link
-gets a smaller picture without lowering anyone else's.
+**A silent microphone is not noticed by Glass.** A track that sends silence,
+or almost nothing, looks healthy to the engine. `@glass/client` checks a
+published microphone once as it is published, as LiveKit's SDK does, and
+fires the publication's `silent` event: show it, so a person whose
+microphone is muted at the system level, or broken, finds out.
 
-**Measure it on your own producers before you turn it on.** In v0.1.117,
-when every viewer got the same layer, it cost more than it helped on a
-phone with a thin uplink: an Android phone (Chrome, hardware H.264)
-streamed better without it on the same links, frozen 0.2% of the time
-against 6% on Wi-Fi, and 0.3% against 5% on mobile data. Since v0.1.118,
-each viewer has a layer of its own and the producer sends only the layers
-viewers need, which is what simulcast is for: viewers on different links.
-That has not been measured on phones yet.
+## Simulcast: several layers of the same picture
 
-Create the session with:
+Opt-in, off by default. A publisher can send its picture as up to three
+layers of different sizes, and Glass gives each viewer the layer its own link
+carries: a viewer on a slow link gets a smaller picture without lowering
+anyone else's.
 
-```json
-{ "simulcast": true }
-```
+**Measure it on your own publishers before you turn it on.** When every
+viewer got the same layer (v0.1.117), it cost more than it helped on a phone
+with a thin uplink: an Android phone (Chrome, hardware H.264) froze 0.2% of
+the time without it against 6% with it on Wi-Fi, and 0.3% against 5% on
+mobile data. Since v0.1.118 each viewer has a layer of its own and the
+publisher sends only the layers viewers need, which is what simulcast is for;
+that has not been measured on phones.
 
-With `GlassProducer`, set `simulcast: true`: when it creates the session
-it asks for one; a `produceUrl` you pass must be from a session created
-with `simulcast`. It picks the layers from the
-camera's height (three for 540 high or more, two for 360 or more, one
-below).
+Make the session with `{"simulcast": true}`, and publish with
+`simulcast: true` (`@glass/client` picks the layers from the camera's height:
+three for 540 high or more, two for 360 or more, one below).
 
-- **One slot only.** A body with both `simulcast` and more than one slot
-  gets `400`.
-- **Each viewer gets its own layer**, from its own link. A viewer moves
-  down only while its link shows congestion, to a layer the link can
-  carry. It moves up once its bandwidth estimate has covered the next
-  layer with a quarter to spare for 3 s, and not within 10 s of a move
-  down; a viewer whose estimate falls short of the next layer is probed
-  toward it, so that the estimate can grow. Each move needs a keyframe of
-  the new layer, so a viewer may see a short freeze, usually under a
-  second.
-- **A layer counts once it arrives steadily**: Glass moves no one onto a
-  layer until it has arrived steadily for 3 s, and moves everyone off one
-  that has sent nothing for half a second.
-- **The producer sends only the layers viewers need**, when it sends
-  `producer_report` (`GlassProducer` does): the layers viewers are on, and
-  the one below each of them, so that a move down lands at once, whatever
-  the producer's uplink: when it can't carry them all, the producer's own
-  encoder cuts its upper layers. With no viewer, Glass asks for the full
-  layer and the one below it, so a recording made with nobody watching gets
-  the full picture. A layer no viewer needs is turned off after 5 s.
-  `GlassProducer` turns off the layers Glass doesn't ask for, which saves
-  the device's upload and encoders. A producer that sends no report
-  sends every layer, as before.
-- **A recording takes the largest layer any viewer is on.**
+- **Each viewer gets its own layer**, from its own link. A viewer moves down
+  only while its link shows congestion, to a layer it can carry. It moves up
+  once its estimate has covered the next layer with a quarter to spare for
+  3 s, and not within 10 s of a move down; a viewer short of the next layer
+  is probed toward it. Each move needs a keyframe of the new layer, so a
+  viewer may see a short freeze, usually under a second.
+- **A layer counts once it arrives steadily** for 3 s, and stops counting
+  after half a second of nothing.
+- **The publisher sends only the layers viewers need**, when it sends
+  `producer_report` (`@glass/client` does): the layers viewers are on and
+  the one below each, so that a move down lands at once. With no viewer,
+  the full layer and the one below it. A layer no viewer needs is turned off
+  after 5 s, which saves the device's upload and encoders. A publisher that
+  never reports sends every layer.
 - **It costs the device more upload** (about a quarter more at 720p) and an
   encoder per layer.
-- **Keep the full layer's cap modest.** A browser's simulcast gets fragile
-  on a weak uplink when the full layer may use a lot: in Chrome, with the
-  uplink squeezed, a cap of 1500 kbps lost every layer at 500 kbps of
-  uplink, and 2000 at 900, while 1000 (`GlassProducer`'s default) held at
-  both. `maxBitrateKbps` caps the full layer only.
-- **Codecs:** H.264. VP8 travels the same path but is not yet called
-  supported: Chrome's VP8 simulcast has been seen to collapse under a
-  squeezed uplink.
+- **Keep the full layer's cap modest.** In Chrome, with the uplink squeezed,
+  a cap of 1500 kbit/s lost every layer at 500 kbit/s of uplink, and 2000 at
+  900, while 1000 (`@glass/client`'s default) held at both.
+- **Codecs:** H.264. VP8 travels the same path but is not called supported:
+  Chrome's VP8 simulcast has been seen to collapse under a squeezed uplink.
 - **A known Chrome limitation:** after a congested stretch, Chrome's H.264
-  simulcast can drop its full-size layer for minutes. Under congestion
-  Chrome shrinks the picture it encodes, and at 640x360 or smaller it
-  sends two layers instead of three; it brings the third back only when
-  it grows the picture again, which can take minutes however much
-  bandwidth there is. Viewers keep the smaller layers meanwhile. This is
-  the browser's own behaviour. A producer that reconnects starts afresh at
-  full size; Glass doesn't disconnect a producer that keeps sending.
+  simulcast can drop its full-size layer for minutes. Under congestion it
+  shrinks the picture, and at 640x360 or smaller it sends two layers instead
+  of three, bringing the third back only when it grows the picture again.
+  Viewers keep the smaller layers meanwhile. A publisher that reconnects
+  starts afresh at full size.
 
-`GET /v1/relay-sessions/{id}` reports what arrives and what each viewer
-gets, in a `simulcast` block: each layer's rate, loss and whether it is
-arriving; each viewer's layer, the layer it is moving to, its link's
-estimate and whether it is congested; the producer's own uplink estimate
-and the layers asked of it; and the keyframe requests Glass made (see
-[Protocol](../protocol.md#relay-sessions)).
+`GET /v1/sessions/{id}` reports what arrives and what each viewer gets, in a
+`simulcast` block on each published picture.
 
-**Your own producer** sends one video track with several encodings, each
-with an `a=rid` in its offer (`a=simulcast:send`), as browsers do:
+**Your own simulcast publisher** sends one video track with several
+encodings, each with an `a=rid` in its offer (`a=simulcast:send`), as
+browsers do:
 
 - **Every packet carries the `mid` and `rid` header extensions**
   (`urn:ietf:params:rtp-hdrext:sdes:mid`,
-  `urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id`); without them Glass
-  can't tell the layers apart and drops the stream. Browsers add them;
-  pion, as a sender, does not on its own.
-- **Every layer sends RTCP sender reports.** Glass needs each layer's
-  clock before it moves a viewer onto it.
-- **Answer a keyframe request (PLI) for any layer**, by its SSRC.
-  Answering with a keyframe on every layer, as Chrome does, is fine: Glass
-  asks at most twice a second across all layers, and makes no periodic
-  request in a simulcast session.
-- The layers' names are yours: Glass orders them by their measured rate.
-  It takes at most three; a producer sending one encoding into such a
-  session works, as a single layer.
+  `urn:ietf:params:rtp-hdrext:sdes:rtp-stream-id`); without them Glass can't
+  tell the layers apart. Browsers add them; pion, as a sender, does not on its
+  own.
+- **Resends (RTX) carry `repaired-rid`, not `rid`**, as browsers' do. pion
+  copies `rid` onto its RTX packets, which a receiver then loses: with pion,
+  negotiate no RTX and resend on each layer's own SSRC.
+- **Every layer sends RTCP sender reports**: Glass needs each layer's clock
+  before it moves a viewer onto it.
+- **Answer a keyframe request (PLI) for any layer**, by its SSRC. A keyframe
+  on every layer, as Chrome sends, is fine.
+- **Layers on demand:** send `producer_report {mid, uplinkKbps, layers}`
+  about once a second, and Glass sends `layers_wanted {mid, rids}`. Turn
+  encodings on and off with `setParameters`, one call at a time; with two or
+  more on, keep the picture size (`degradationPreference:
+  "maintain-resolution"`).
+- The layers' names are yours: Glass orders them by their measured rate,
+  and takes at most three. One encoding into a simulcast session works, as
+  one layer.
 
-## Connecting
+## While publishing
 
-Open a WebSocket to the produce URL. **The producer offers first**:
-
-| Direction | `type` | Fields |
-|---|---|---|
-| ← Glass | `ice_config` | `iceServers`: apply them (`pc.setConfiguration`) before the offer |
-| → Glass | `offer` | `sdp`: one video m-section (plus, optionally, one audio) |
-| → Glass | `ice-candidate` | `candidate`: `RTCIceCandidateInit` |
-| ← Glass | `answer` | `sdp` |
-| ← Glass | `ice-candidate` | `candidate` |
-| ← Glass | `error` | `code`, `message` |
-| ← Glass | `recording` | `active`: whether the session is being recorded, after the `answer` and on each change |
-| → Glass | `producer_report` | Simulcast, optional: `uplinkKbps` (the browser's `availableOutgoingBitrate`), `layers: [{rid, active, width, height}]` |
-| ← Glass | `layers_wanted` | Simulcast, to a producer that reports: `rids`, the layers to send; turn the others off |
-
-Wait for the WebSocket's `open` event and for `ice_config` before sending
-the offer: `ice_config` carries the TURN credential for this connection
-([protocol.md](../protocol.md#glass--client)). If none arrives within 2 s
-(an older engine), offer without it. Acquiring a
-camera can finish before the socket is open, and sending early fails without
-any sign on the server side.
-
-## Media requirements
-
-**Video.** Exactly one video track, in `codec`. Glass behaves as a normal
-WebRTC receiver, and your sender must respond to it like one:
-
-- **NACK:** resend lost packets.
-- **PLI:** produce a keyframe when asked. Glass asks every 3 s, and also when a
-  viewer joins or can't decode (at most once per 500 ms). A
-  [simulcast](#simulcast-several-layers-of-the-same-picture) session makes no
-  periodic request.
-- **Congestion feedback (TWCC):** adapt your bitrate to it. A sender without a
-  congestion controller won't degrade gracefully when the network gets worse.
-  Browser WebRTC does all three by default; lower-level libraries may need
-  configuring.
-- **Cap your bitrate below your uplink.** Glass reports congestion but can't
-  fix an uplink that is too small. An uncapped phone climbs to about 1.6 Mbps;
-  on a slower uplink the router's queue fills, latency swings by seconds, and
-  no packets are lost, so nothing looks wrong. Set a `maxBitrate` the link
-  can carry (the reference producer defaults to 1000 kbps).
-
-**Audio (optional).** At most one Opus track (48 kHz, stereo). Every viewer
-receives it. Viewers of a relay session always get an audio line; if the
-producer sends none, it is silent.
-
-## Errors Glass sends
-
-Over the produce WebSocket, as `{"type": "error", "code": "…", "message": "…"}`.
-Rely on `code`; `message` is for people.
-
-| `code` | Meaning | What to do |
-|---|---|---|
-| `codec_mismatch` | The offer doesn't list the session's codec. Sent instead of an answer. | Fix the offer and send it again on the same socket. |
-| `audio_not_supported_multi_slot` | Audio offered on a multi-slot session. | Offer without audio. |
-| `producer_not_connected` | WebRTC didn't connect within 20 s of the answer. Usually the wrong codec or no network path to Glass (UDP port, NAT, TURN). | Informational; a producer that connects late is still accepted. |
-
-A second producer on a slot that already has one is refused with HTTP `409`
-at the produce URL; the first producer is unaffected.
+- **A track that goes quiet** is shown to its viewers as paused
+  (`source_updated`, state `stalled`) after 2 s without media, or 10 s after
+  joining for one that has sent nothing yet, and live again on its next
+  packet. Glass never disconnects a publisher for being quiet.
+- **A connection that never comes up** is told so: an `error` with code
+  `not_connected` 20 s after the answer, usually the wrong codec or no
+  network path to Glass (its UDP port, NAT, TURN). The socket stays open: the
+  client may restart ICE or leave.
 
 ## Disconnecting and reconnecting
 
-| Close | Meaning |
+| What happens | |
 |---|---|
-| You close with `1000` | Deliberate stop. The slot is freed at once. |
-| Any other ending | The slot is held for the reconnect grace (60 s by default). Resume on the **same** produce URL. |
-| Glass closes with `4001` | You sent no media for 10 s (`GLASS_RELAY_STALL_CLOSE_MS`), or none within 10 s of connecting (`GLASS_RELAY_FIRST_MEDIA_GRACE_MS`). The slot is held; resume. |
-| Glass closes with `4401` | The produce link has expired. Don't resume; get a new link. |
-| Glass closes with `4403` | The produce link was revoked. Don't resume; get a new link. |
-| Glass closes with `4404` | The session is gone. Don't resume. |
+| You close with `1000` | A deliberate leave: your sources end at once. When you were the last member, the session ends. |
+| Any other ending | Your place is held for the reconnect grace (60 s by default). Reconnect with the same link and publish again: the same member resumes, and viewers keep their links. |
+| Glass closes with `4404` | The session has ended. Don't reconnect; your backend decides what next. |
+| Glass closes with `4401` or `4403` | The link expired or was revoked. Don't reconnect; get a new link. |
 
-A producer should reconnect on its own. `GlassProducer` does this:
+`@glass/client` does all of this. A publisher of your own should:
 
-1. Detect the drop: the WebSocket closes, the peer connection goes `failed`
-   (or `disconnected` for more than about 6 s), or `producer_not_connected`
-   arrives.
-2. Close the dead socket with a code other than 1000 (the reference uses
-   4000). A 1000 close tells Glass you meant to stop. Keep the camera
-   running.
-3. Resume on the same produce URL with a short backoff (1, 2, 3, 5 s), giving
-   the WebSocket handshake and negotiation one deadline together (20 s).
-   The session ID and every viewer's link stay valid.
-4. If resuming hasn't worked after about 45 s and you created the session,
-   create a new one and tell your viewers the new link.
-5. Treat camera denied, `401`/`403` on session creation, `codec_mismatch`,
-   and a close with `4401` or `4403` as fatal.
-6. Retry at once, without waiting out the backoff, when the app returns to the
-   foreground or the network comes back.
+1. Detect the drop: the WebSocket closes, or the peer connection goes
+   `failed` (or `disconnected` for more than a few seconds).
+2. Close a dead socket with a code other than 1000, which would tell Glass you
+   meant to leave. Keep the camera running.
+3. Reconnect with the same link with a short backoff (1, 2, 4, 8 s), and
+   publish again.
+4. Treat a close with `4404`, `4401` or `4403`, and `publish_refused` with
+   `not_allowed`, as final.
+5. Retry at once when the app returns to the foreground or the network comes
+   back.
 
-## Recording
-
-A relay session can be recorded: its main slot's video and the audio, whether or
-not anyone is watching. `GlassProducer` fires `recording` so your app can show
-it. See [recording.md](../recording.md).
+A publisher never makes a new session itself: that needs the API token. When
+the session ends it reports it, and your backend decides.
 
 ## Viewers
 
-Viewers use `createGlassClient` with the relay session's `signalingUrl` (or a
-minted watch-only one). Relay sessions have no navigation or page input.
-Every viewer receives the stream as the producer sends it, or, in a
-[simulcast](#simulcast-several-layers-of-the-same-picture) session, the layer
-its own link carries.
+Viewers join with a link that watches. Each published track is a source: a
+viewer gets `source_added`, then its media in a `track` event, and pauses a
+source it doesn't want with `source(id).receive(true)`. In a simulcast
+session each viewer gets the layer its own link carries.
+
+## Recording
+
+A session whose members publish can't be recorded in this release
+(`"record": true` is refused): recording such a session comes in a later
+release. A browser session, and a playback, can be; see
+[recording.md](../recording.md).
+
+## Known gaps
+
+- **A publisher is not told its source's id:** it knows its publications by
+  `mid`. Viewers see the source in `source_added`.
+- **A viewer can't send input to a publisher** (a remote-controlled device):
+  that is planned.

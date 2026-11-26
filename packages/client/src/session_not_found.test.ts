@@ -35,7 +35,7 @@ describe("GlassClient and an expired session", () => {
   it("rejects connect() with a clear reason and doesn't retry", async () => {
     vi.stubGlobal("WebSocket", ClosingWebSocket);
     const client = new GlassClient({
-      signalingUrl: "wss://glass/v1/relay-sessions/gone/signaling?token=t",
+      link: "wss://glass/v1/sessions/gone/connect?token=t",
       reconnect: { maxAttempts: 5 },
     });
     const closed = vi.fn();

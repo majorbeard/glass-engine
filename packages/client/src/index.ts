@@ -18,28 +18,32 @@ import { ClientCore, type Emit } from "./core";
 import { authHeaders, errorDetail } from "./internal";
 import * as lifecycle from "./lifecycle";
 import * as transport from "./transport";
-import * as inputs from "./input";
 import * as handoff from "./handoff";
 import * as mic from "./mic";
 import * as navigation from "./navigation";
-import * as fileTransfer from "./files";
 import * as statsTrace from "./stats_trace";
+import { GlassSource } from "./source";
+import * as publish from "./publish";
+import { GlassPublication, type GlassPublishKind, type GlassPublishOptions } from "./publish";
 import type {
   ElementState,
   GlassCapabilities,
-  GlassConnectionCapabilities,
-  GlassConnectionGrant,
   GlassControlAnswer,
-  GlassGrantRequest,
   GlassInputDrop,
   GlassInputDropCode,
-  GlassRosterEntry,
-  GlassSlotState,
   GlassConnectionQuality,
   GlassConnectionQualityLevel,
   GlassContentHint,
   GlassCreateSessionOptions,
   GlassEngine,
+  GlassLink,
+  GlassLinkRequest,
+  GlassMember,
+  GlassRights,
+  GlassSourceInfo,
+  GlassSourceKind,
+  GlassSourceRequest,
+  GlassSourceState,
   GlassVideoCodec,
   GlassInputMode,
   GlassDialog,
@@ -56,34 +60,31 @@ import type {
   UserAgentClientHints,
 } from "./types.js";
 
-export { GlassProducer } from "./producer";
+export { GlassSource, GlassPublication };
+export type { GlassPublishKind, GlassPublishOptions };
+export type { GlassPublicationEvents } from "./publish";
 import type { InputLatencySample, InputLatencyStats } from "./input_latency";
 export type { InputLatencySample, InputLatencyStats, InputLatencySummary } from "./input_latency";
-export type {
-  GlassProducerEvents,
-  GlassProducerOptions,
-  ProducerSession,
-  ProducerState,
-  ProducerStats,
-  ProducerLayerStats,
-} from "./producer";
 
 export type {
   ElementState,
   GlassCapabilities,
-  GlassConnectionCapabilities,
-  GlassConnectionGrant,
   GlassControlAnswer,
-  GlassGrantRequest,
   GlassInputDrop,
   GlassInputDropCode,
-  GlassRosterEntry,
-  GlassSlotState,
   GlassConnectionQuality,
   GlassConnectionQualityLevel,
   GlassContentHint,
   GlassCreateSessionOptions,
   GlassEngine,
+  GlassLink,
+  GlassLinkRequest,
+  GlassMember,
+  GlassRights,
+  GlassSourceInfo,
+  GlassSourceKind,
+  GlassSourceRequest,
+  GlassSourceState,
   GlassVideoCodec,
   GlassInputMode,
   GlassDialog,
@@ -93,12 +94,12 @@ export type {
   GlassStats,
   InteractiveElement,
   KeyEvent,
+  MouseButton,
   NavigationState,
   TouchDispatchType,
   TouchPoint,
   UserAgentClientHints,
 };
-
 
 export interface GlassReconnectOptions {
   // Max full-reconnect attempts before giving up (emitting "closed").
@@ -109,23 +110,18 @@ export interface GlassReconnectOptions {
 }
 
 export interface GlassClientOptions {
-  // The session's signaling WebSocket URL - typically obtained from your own
-  // backend (which called POST /v1/sessions), or from createGlassSession().
-  signalingUrl: string;
-  // Optional session id, used only to DELETE the session on final close.
-  sessionId?: string;
+  // The link to join with: the member connection's URL, carrying the link's
+  // own token. Your backend mints it (createGlassSession's link, or
+  // mintGlassLink) and hands each person theirs.
+  link: string;
   // ICE servers for the RTCPeerConnection. Without them the engine's are
   // used: it hands every connection its STUN and TURN servers, with a
   // short-lived TURN credential of its own when the engine mints them. Give
   // them only to use servers of your own instead.
   iceServers?: RTCIceServer[];
-  // Forces ICE candidate gathering/use to "relay" only (TURN) instead of the
-  // browser default "all". Not needed for normal operation - exists so a
-  // TURN deployment can be verified end-to-end: with "relay", this peer can
-  // only ever connect via a TURN relay candidate, so a successful connection
-  // actually proves the TURN server works rather than just being configured
-  // and silently unused because a direct/STUN path happened to succeed
-  // first (the common case on a LAN or same-machine test).
+  // Forces ICE to "relay" (TURN) only instead of the browser default "all",
+  // so a successful connection proves the TURN server works rather than a
+  // direct path having been used.
   iceTransportPolicy?: RTCIceTransportPolicy;
   // Reconnection behavior. true (default) uses defaults; false disables it;
   // an object customizes attempts/backoff.
@@ -140,22 +136,6 @@ export interface GlassClientOptions {
   // If > 0, emit a "stats" event this often (ms). Off by default; getStats()
   // is always available for one-shot snapshots regardless.
   statsIntervalMs?: number;
-  // DELETE the session (best-effort) when disconnect() is called. Defaults to
-  // true when sessionId is provided. A page unload sends nothing and the
-  // session is held for a reconnect; see GlassClient for its lifetime.
-  deleteSessionOnClose?: boolean;
-  // Base URL (origin) for the session DELETE call. Defaults to the origin
-  // derived from signalingUrl.
-  sessionBaseUrl?: string;
-  // GLASS_API_TOKEN, only needed if this session was created against a
-  // runtime that has it set - used solely for this client's own DELETE
-  // call (the final close in disconnect()); the
-  // signaling WebSocket needs no separate handling since the runtime
-  // already embeds the token in signalingUrl when it hands that back from
-  // POST /v1/sessions. See createGlassSession's doc comment for the trust
-  // model this assumes (a real deployment's token lives in your own
-  // backend, not a browser bundle).
-  apiToken?: string;
 }
 
 
@@ -163,56 +143,62 @@ export interface GlassClientOptions {
 // Record<string, unknown[]> constraint - interfaces don't get an implicit
 // index signature.
 export type GlassClientEventMap = {
-  // A remote video track arrived - bind it to a <video> element's srcObject.
-  videoTrack: [stream: MediaStream];
-  // Cursor / editable-focus state from the remote page.
-  elementState: [state: ElementState];
-  // URL-bar / navigation state from the remote page.
-  navigation: [nav: NavigationState];
-  // Text-editable candidate bounding boxes on the remote page, mobile-only,
-  // full-snapshot-replace (see mobileKeyboard.ts's three-case handleTap).
-  interactiveElements: [elements: InteractiveElement[]];
-  // The remote page's selected text, in response to copyText(). May be an
-  // empty string if nothing was selected - callers should check before
-  // writing to the OS clipboard.
-  clipboardText: [text: string];
-  // One real console.*() call (or uncaught exception, level "error") from
-  // the remote page's own JS - the "dev console" feature. level is Chrome's
-  // own console-method vocabulary verbatim ("log"/"warning"/"error"/
-  // "info"/"debug"/...), not remapped. text is a shallow, best-effort
-  // flattening of the call's arguments - see docs/protocol.md's
-  // ConsoleMessage row for why deep object inspection isn't attempted.
-  consoleMessage: [level: string, text: string];
-  // A remote-page-triggered download finished server-side and is ready to
-  // be pulled down. This is
-  // the prompt signal, not the file (prompt-then-save, not auto-save): GlassClient never fetches it on its own. The
-  // app is expected to surface filename to the operator and, only on their
-  // explicit click, use downloadUrl(guid) to trigger a real browser save
-  // (e.g. as an <a href> or window.open target).
-  downloadReady: [filename: string, guid: string];
-  // The remote page just opened a file input. The app is expected to raise
-  // the *operator's own* local file picker (a real <input type="file">,
-  // with its `multiple` attribute matching this event's argument) and,
-  // once they've picked something, call uploadFiles() with the result.
-  // Glass never opens anything server-side.
-  fileChooserOpened: [multiple: boolean];
-  // A previously-announced fileChooserOpened prompt is no longer valid -
-  // the operator's 60s window to respond elapsed, or a second file
-  // chooser opened before the first was answered. The app should dismiss
-  // whatever prompt UI it raised for fileChooserOpened. Not fired for the
-  // ordinary success path (a completed uploadFiles() call) - the app
-  // already knows that outcome from the promise it awaited.
-  fileChooserClosed: [];
-  // The remote page just called getUserMedia({audio:true}). Unlike every other event
-  // here, the remote page's own JS is genuinely blocked waiting for an
-  // answer: the app must call grantMicAccess() or denyMicAccess() within
-  // 60s, or the request is denied automatically (silence never grants -
-  // a live mic feed is privacy-sensitive). origin is the requesting
-  // page's own origin, for the app's own prompt UI only.
-  micAccessRequested: [origin: string];
-  // A fatal, session-level backend error (e.g. the encoder died). Distinct
-  // from a transport drop - there is no recovery, video is gone.
-  /** A report from Glass; `code` for programs when it has one (`encoder_failed`, `source_failed`, …). */
+  // hello arrived: who this connection is, and whether it is the owner's.
+  // On a reconnect it says it again; a resumed connection keeps its id.
+  hello: [connectionId: string, owner: boolean];
+  // A source joined the session, or one this connection can watch was
+  // announced; the hello's sources come this way too.
+  sourceAdded: [source: GlassSourceInfo];
+  // A source's description changed: its state (live, stalled), its
+  // capabilities, its codec.
+  sourceUpdated: [source: GlassSourceInfo];
+  // A source left the session, with the engine's reason.
+  sourceRemoved: [sourceId: string, reason: string];
+  // A source's stream gained a track: bind client.source(id).stream() to a
+  // <video> (it plays the picture and the sound alike).
+  track: [sourceId: string, stream: MediaStream];
+  // What this connection's link may do changed (the owner granted or denied
+  // it a source). client.rights() already reflects it.
+  rightsChanged: [rights: GlassClientRights];
+  // Who holds a source's input track changed, and who has its floor (input
+  // mode "floor"; null when no one has it). Fires for every source that
+  // takes input as the connection joins, then on every change.
+  inputHolders: [sourceId: string, holders: string[], floor: string | null];
+  // Someone asked for a source's input track that this connection holds,
+  // and there was no room to give them one: Glass relayed the ask here and
+  // decides nothing. It is the application's to prompt, decline or ignore.
+  inputRequested: [connectionId: string, sourceId: string];
+  // The owner only: the session's other members changed (one joined or
+  // left). members() already reflects it.
+  membersChanged: [members: GlassMember[]];
+  // Cursor and editable-focus state from a hosted browser's page.
+  elementState: [state: ElementState, sourceId: string];
+  // A hosted browser's URL-bar and navigation state.
+  navigation: [nav: NavigationState, sourceId: string];
+  // Text-editable candidates' boxes on a page, mobile only, the whole list
+  // each time (see the viewer's mobile keyboard).
+  interactiveElements: [elements: InteractiveElement[], sourceId: string];
+  // A page's selected text, answering copyText(); possibly empty.
+  clipboardText: [text: string, sourceId: string];
+  // One console call (or uncaught exception, level "error") from a page's
+  // own JavaScript; level is Chrome's own console method name.
+  consoleMessage: [level: string, text: string, sourceId: string];
+  // A page's download finished and is ready to save. A prompt, not the file:
+  // show filename and, on the person's click, open the source's
+  // downloadUrl(guid).
+  downloadReady: [filename: string, guid: string, sourceId: string];
+  // A page opened a file input: raise the person's own file picker
+  // (multiple as given) and pass what they pick to the source's
+  // uploadFiles().
+  fileChooserOpened: [multiple: boolean, sourceId: string];
+  // A file chooser announced by fileChooserOpened is no longer waiting: its
+  // 60 s ran out, or another replaced it. Dismiss the prompt.
+  fileChooserClosed: [sourceId: string];
+  // A page asked for the microphone (getUserMedia({audio: true})) and waits
+  // for the answer: call grantMicAccess() or denyMicAccess() within 60 s, or
+  // it is denied. origin is the page's own, for the prompt.
+  micAccessRequested: [origin: string, sourceId: string];
+  /** A report from Glass; `code` for programs when it has one (`encoder_failed`, `source_failed`, `not_connected`, …). */
   error: [message: string, code?: string];
   // The peer connection reached "connected" (initial connect or a reconnect).
   connected: [];
@@ -227,67 +213,25 @@ export type GlassClientEventMap = {
   refused: [reason: string, code: GlassRefusedCode];
   // Optional periodic transport/quality snapshot (see statsIntervalMs).
   stats: [stats: GlassStats];
-  // A connection's live producesInput actually changed (docs/protocol.md's
-  // "Control handoff" section) - broadcast to every connection on the
-  // session, including this one. isSelf is true when connectionId matches
-  // this client's own (see the connectionId() getter); producesInput()
-  // already reflects the new value by the time this fires.
-  capabilitiesChanged: [
-    connectionId: string,
-    producesInput: boolean,
-    isSelf: boolean
-  ];
-  // Someone without producesInput called requestInput() while this client
-  // already held it, and there was no fresh capacity to grant them one
-  // immediately - Glass relayed the ask here instead of deciding anything.
-  // Nothing changed server-side; it's entirely up to this app whether to
-  // prompt a human, auto-decline, or ignore it (see requestInput's own doc
-  // comment - Glass never queues, prompts, or auto-preempts on its own).
-  // Only ever fires for a connection that currently produces input.
-  inputRequested: [connectionId: string];
-  // Input mode "floor" only: who has the page now. connectionId is the
-  // connection whose input reaches the page, or null when no one has it;
-  // isSelf is true when it is this client. Fires once on connect and again
-  // whenever it changes. The controller stays named after going idle, until
-  // someone else takes the page or the controller leaves. floorHolder()
-  // already reflects it.
-  floorChanged: [connectionId: string | null, isSelf: boolean];
-  // Whether the session is being recorded. Fires on connect with the
-  // current state, and on every change. Recording starts only when the
-  // operator asks for it; every connection is told. recording() already
-  // reflects it.
+  // Whether the session is being recorded: on connect, then on every change.
   recording: [active: boolean];
-  // A playback session's state: on connect, on every change, and once a
-  // second while it plays. playbackState() already reflects it.
-  playback: [state: GlassPlaybackState];
-  // A playback session passed one event of its recording's timeline.
-  timeline: [event: GlassTimelineEvent];
-  // The page's JavaScript dialog opened (dialog.open) or closed, by any
-  // answer. Fires on connect too when one is already open. See GlassDialog
-  // for inPicture; answer it with answerDialog(). dialog() already reflects
-  // it.
-  dialog: [dialog: GlassDialog];
-  // Owner-only roster (docs/protocol.md's Control handoff section) - fires
-  // whenever the known set of other connections changes: someone joined,
-  // left, or had their producesInput granted/revoked. Never fires for a
-  // non-owner connection (see isOwner()) - it has no grantInput()/
-  // revokeInput() authority to act on this anyway. connections() already
-  // reflects the new state by the time this fires; the event exists so the
-  // app doesn't have to poll.
-  rosterChanged: [connections: GlassRosterEntry[]];
-  // Relay sessions only: every slot's state (docs/protocol.md, slot_state),
-  // once on connect and again whenever one changes. Use it to show "source
-  // paused" over a frozen frame while a producer is stalled. slotStates()
-  // already reflects it.
-  slotStateChanged: [slots: Record<string, GlassSlotState>];
+  // A playback's state: on connect, on every change, and once a second
+  // while it plays.
+  playback: [state: GlassPlaybackState, sourceId: string];
+  // A playback passed one event of its recording's timeline.
+  timeline: [event: GlassTimelineEvent, sourceId: string];
+  // A page's JavaScript dialog opened (dialog.open) or closed; on connect
+  // too when one is open. Answer it with the source's answerDialog().
+  dialog: [dialog: GlassDialog, sourceId: string];
   // This connection's quality as Glass measures it (docs/protocol.md, connection_quality): once it is known after
   // connecting, then on each change, at most every 5 s. Show "poor" ("Your connection is weak") and "lost"
   // ("Connection lost, reconnecting"); "excellent" and "good" need nothing. connectionQuality() already reflects it.
   connectionQuality: [quality: GlassConnectionQualityLevel, score: number];
   // Input was dropped: either this client withheld it (drop.local, when the
-  // connection has no control or isn't the owner) or Glass discarded it
-  // (rate limit, unsupported or invalid event). Coalesced: at most one
-  // report every 2 s per code and event type, with a count.
+  // connection does not hold the source's input track, or isn't the owner)
+  // or Glass discarded it (rate limit, unsupported or invalid event).
+  // Coalesced: at most one report every 2 s per code, event type and source,
+  // with a count.
   inputDropped: [drop: GlassInputDrop];
   // One input-latency sample, measured on this client's monotonic clock
   // (see input_latency.ts): from sending a click/key/tap to displaying the
@@ -298,14 +242,13 @@ export type GlassClientEventMap = {
   // Terminal: reconnection was exhausted/disabled, or disconnect() was called.
   // No further events will fire.
   closed: [reason: string, code: GlassCloseCode];
-  // The remote page tried to open a popup/new tab (window.open(),
-  // target="_blank", etc.) - the browser popup was blocked server-side
-  // and the URL it would have opened is handed to the app instead
-  // (docs/protocol.md's new_tab_request). Glass never opens it on its
-  // own; it's entirely up to the app whether to surface it, navigate the
-  // remote page there itself, or open it locally for the operator.
-  newTabRequested: [url: string];
+  // A page tried to open a popup or new tab: it was blocked, and its URL is
+  // handed to the application, which decides what to do with it.
+  newTabRequested: [url: string, sourceId: string];
 };
+
+/** What this connection's link may do, with the sources the owner denied it. */
+export type GlassClientRights = GlassRights & { denied: { watch: string[]; control: string[] } };
 
 
 /**
@@ -369,43 +312,36 @@ export type GlassRefusedCode = "viewer_limit";
 
 
 
-// Creates a browser session (POST {baseUrl}/v1/sessions) and returns its id
-// and link. For development and TypeScript backends: in a real app your own
-// backend creates sessions and hands each client only its link. The returned
-// signalingUrl carries the session's own token, so GlassClient needs no
-// other credential. audioInput asks for the microphone-capable browser
-// pool, which costs more and takes effect only where the operator set one
-// up. The engine refuses a content hint it does not know and a codec it
-// cannot serve.
+// Creates a session (POST {baseUrl}/v1/sessions) and returns it with its own
+// link, the owner's. With sources (a hosted browser) the engine runs them;
+// with none, the session's members publish. For TypeScript backends and
+// local development: a real application's backend makes sessions, holding
+// the API token, and hands each person only their link.
 export async function createGlassSession(options: GlassCreateSessionOptions = {}): Promise<GlassSession> {
-  const { baseUrl = "", apiToken, audioInput = false, contentHint, codec, inputMode, inspect, linkExpiresIn } = options;
-  // No body at all when nothing is asked for.
+  const { baseUrl = "", apiToken, sources, maxMembers, simulcast, record, linkExpiresIn } = options;
   const body: Record<string, unknown> = {};
-  if (audioInput) body.audioInput = true;
-  if (contentHint) body.contentHint = contentHint;
-  if (codec) body.codec = codec;
-  if (inputMode) body.inputMode = inputMode;
-  if (inspect) body.inspect = true;
+  if (sources) body.sources = sources;
+  if (maxMembers !== undefined) body.maxMembers = maxMembers;
+  if (simulcast) body.simulcast = true;
+  if (record) body.record = true;
   if (linkExpiresIn !== undefined) body.linkExpiresIn = linkExpiresIn;
-  const hasBody = Object.keys(body).length > 0;
   const res = await fetch(`${baseUrl}/v1/sessions`, {
     method: "POST",
-    headers: hasBody
-      ? { ...authHeaders(apiToken), "Content-Type": "application/json" }
-      : authHeaders(apiToken),
-    body: hasBody ? JSON.stringify(body) : undefined,
+    headers: { ...authHeaders(apiToken), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
   return readSession(res, "create session");
 }
 
 // Redeems a session ticket (POST {baseUrl}/v1/tickets) for a new session's
 // links: the session's own link, which controls it, and any watch links the
-// ticket asked for (watchUrls). This is how a browser starts a session with
+// ticket asked for (watchLinks). This is how a browser starts a session with
 // no API token anywhere near it: your backend signs a short-lived ticket
 // (a JWT, HS256, with the runtime's GLASS_TICKET_SECRET; at most 10 minutes;
 // a unique jti, since each ticket is accepted once) and hands it to the page.
 // The ticket's "glass" claim carries the session's options (audioInput,
-// contentHint, codec, inputMode, linkExpiresIn) and watchLinks.
+// contentHint, codec, inputMode, linkExpiresIn) and how many watch links to
+// make (watchLinks).
 export async function redeemGlassTicket({ ticket, baseUrl = "" }: { ticket: string; baseUrl?: string }): Promise<GlassSession> {
   const res = await fetch(`${baseUrl}/v1/tickets`, {
     method: "POST",
@@ -517,63 +453,57 @@ export async function deleteGlassSession({ id, baseUrl = "", apiToken }: GlassEn
   throw new Error(`Failed to delete session (${res.status}): ${await errorDetail(res)}`);
 }
 
-// Mints a fresh, capability-scoped connection to an already-created session
-// (POST {baseUrl}/v1/sessions/{id}/connections) - see docs/protocol.md's
-// "Connection capabilities" section. The returned signalingUrl connects
-// with exactly `capabilities`, nothing more, structurally: e.g.
-// `{ consumesMedia: true }` for a watch-only viewer that can never gain
-// input control no matter what it does, unless it later calls
-// requestInput() and the resolved license tier admits it (see
-// docs/protocol.md's "Control handoff" section) - minting a grant and
-// requesting input at runtime are two independent mechanisms.
-// `capabilities` may also set `expiresIn`, the link's lifetime in seconds (0 for
-// never); the result names the link (`linkId`) for revoking it.
-//
-// Takes the API token, as createGlassSession: a real app mints links from its
-// own backend, not from a browser bundle.
-export async function mintConnectionGrant({
+// Mints a link to a session (POST {baseUrl}/v1/sessions/{id}/links) with the
+// rights asked for: watch, publish and control by kind of source, and its
+// lifetime (expiresIn, seconds, 0 for never). A link never has more than it
+// was minted with; a watch link's holder may still ask for control at
+// runtime (a source's requestInput()), which the owner or the license
+// decides. Takes the API token: a real application mints links from its own
+// backend.
+export async function mintGlassLink({
   sessionId,
-  capabilities,
+  rights,
   baseUrl = "",
   apiToken,
-}: GlassEngine & { sessionId: string; capabilities: GlassGrantRequest }): Promise<GlassConnectionGrant> {
-  const res = await fetch(`${baseUrl}/v1/sessions/${sessionId}/connections`, {
+}: GlassEngine & { sessionId: string; rights: GlassLinkRequest }): Promise<GlassLink> {
+  const res = await fetch(`${baseUrl}/v1/sessions/${sessionId}/links`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...authHeaders(apiToken),
-    },
-    body: JSON.stringify(capabilities),
+    headers: { "Content-Type": "application/json", ...authHeaders(apiToken) },
+    body: JSON.stringify(rights),
   });
   if (!res.ok) {
-    const detail = await errorDetail(res);
-    throw new Error(
-      `Failed to mint connection grant (${res.status}): ${detail}`
-    );
+    throw new Error(`Failed to mint link (${res.status}): ${await errorDetail(res)}`);
   }
   return res.json();
 }
 
+// Revokes a link (DELETE {baseUrl}/v1/sessions/{id}/links/{linkId}): what
+// joined with it is closed, and it admits nothing again, a resume included.
+// The session goes on for everyone else. Takes the API token.
+export async function revokeGlassLink({ sessionId, linkId, baseUrl = "", apiToken }: GlassEngine & { sessionId: string; linkId: string }): Promise<void> {
+  const res = await fetch(`${baseUrl}/v1/sessions/${sessionId}/links/${linkId}`, {
+    method: "DELETE",
+    headers: authHeaders(apiToken),
+  });
+  if (!res.ok) {
+    throw new Error(`Failed to revoke link (${res.status}): ${await errorDetail(res)}`);
+  }
+}
+
 // A session's lifetime, as a client sees it:
 //
-// - A session lives until disconnect() is called (which also DELETEs it when
-//   deleteSessionOnClose is on), DELETE /v1/sessions/{id} is sent, or its
-//   last connection has been gone for the runtime's reconnect grace
-//   (GLASS_RECONNECT_GRACE_SECONDS, 60 s by default).
-// - Leaving the page - a reload, a closed tab, navigating away - does NOT end
-//   the session. The browser closes the signaling socket, Glass cannot tell
-//   that from a network drop, and holds the session for the reconnect grace.
-//   While held, its remote page is kept as it was and hidden, so it costs
-//   little CPU, but it still counts against the runtime's session capacity.
-// - Connecting to the same signalingUrl within the grace resumes that
-//   session, its page as it was. This is how a reloaded tab gets back to its
-//   session: keep the session's id and signalingUrl (in sessionStorage, say,
-//   which is per tab) and connect with them on load; create a new session
-//   only if that fails. After the grace the session is gone, and connecting
-//   fails with "session not found".
-// - To end a session at once (the user signs out, the app is done with it),
-//   call disconnect(); a page that is about to unload cannot reliably send
-//   anything, so do it while the page is still in use.
+// - A session lives until DELETE /v1/sessions/{id} (deleteGlassSession, from
+//   your backend), or until its last member has been gone for the engine's
+//   reconnect grace (GLASS_RECONNECT_GRACE_SECONDS, 60 s by default).
+//   disconnect() leaves; it does not end the session for anyone else.
+// - Leaving the page - a reload, a closed tab, navigating away - is not a
+//   leave Glass can tell from a network drop: it holds this member's place
+//   for the grace.
+// - Connecting with the same link within the grace resumes this member: a
+//   reloaded tab gets back to its session by keeping its link (in
+//   sessionStorage, say, which is per tab) and connecting with it on load.
+//   After the grace, or if the session ended, connecting closes with
+//   "session not found" and the application's backend decides what next.
 export class GlassClient extends Emitter<GlassClientEventMap> {
   private readonly core: ClientCore;
 
@@ -591,117 +521,63 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
     return lifecycle.connect(this.core);
   }
 
-  // --- Input sending ---
-  // @internal Whether mountGlassViewer should instantiate PixelTraceSampler
-  // against its <video> element - see InternalGlassClientOptions'
-  // __internalPixelTraceEnabled doc comment for why this lives here rather
-  // than the viewer owning its own separate opt-in flag (GlassClient is
-  // this whole SDK's single source of truth for what diagnostics are
-  // enabled for a given session).
-  /** @internal */
-  get pixelTraceEnabled(): boolean {
-    return this.core._pixelTraceEnabled;
+  // --- The session's sources ---
+
+  // Every source the engine has told this connection of, in the order it
+  // announced them.
+  sources(): GlassSourceInfo[] {
+    return [...this.core.sources.values()].map((st) => ({ ...st.info }));
   }
 
-  // @internal Mirrors pixelTraceEnabled exactly - see
-  // InternalGlassClientOptions.__internalDecodeReadbackEnabled.
-  /** @internal */
-  get decodeReadbackEnabled(): boolean {
-    return this.core._decodeReadbackEnabled;
+  // A handle on one source: its stream, and every action on it.
+  source(id: string): GlassSource {
+    return new GlassSource(this.core, id);
   }
 
-  // @internal Reports one batch of real capture-to-paint samples (see
-  // pixel_trace.ts's PixelTraceSampler) to the backend - same wire
-  // mechanism as collectAndSendTraceReport (sendInput over the existing
-  // reliable DataChannel), just triggered by the viewer right after a
-  // discrete input dispatch rather than on a fixed interval. Not part of
-  // the documented public API (see traceReportIntervalMs' own doc comment
-  // for why this whole diagnostic channel stays internal-only for now).
-  /** @internal */
-  reportPixelTraceSamples(samples: { rtpTimestamp: number; paintedAtMs: number }[]): void {
-    return statsTrace.reportPixelTraceSamples(this.core, samples);
+  // Publishes a track of this person's (a camera, a microphone, a screen)
+  // into the session, on this connection: it becomes a source the session's
+  // members watch, if this connection's link may publish its kind. Before
+  // connect() it waits, and is published as the connection comes up; it
+  // stays published across a reconnect. A refused one fires "refused" on the
+  // publication. stop() on it unpublishes.
+  publish(track: MediaStreamTrack, options: GlassPublishOptions): GlassPublication {
+    const pub = new GlassPublication(this.core, track, options);
+    this.core.publications.push(pub);
+    publish.checkForSilence(pub);
+    if (this.core.pc) {
+      publish.attach(this.core, pub);
+      transport.offer(this.core);
+    }
+    return pub;
   }
 
-  // Navigation travels over the signaling socket, not the DataChannel.
-  navigate(url: string): void {
-    return navigation.navigate(this.core, url);
+  // What this client publishes now.
+  publications(): GlassPublication[] {
+    return [...this.core.publications];
   }
 
-  // --- Input handoff (docs/protocol.md's "Control handoff" section) ---
-  // Asks Glass for control of the page (producesInput). Resolves with Glass's
-  // answer: "granted" (a "capabilitiesChanged" event follows), "relayed"
-  // (there was no room, so whoever holds control got an "inputRequested"
-  // event and decides), or "refused" with the reason. Glass never queues,
-  // prompts or takes control from anyone on its own.
-  requestInput(): Promise<GlassControlAnswer> {
-    return handoff.requestInput(this.core);
-  }
+  // --- This connection ---
 
-  // The real operator consent answer for a pending "micAccessRequested"
-  // event - captures the OPERATOR's own
-  // real microphone (this device's getUserMedia, NOT the remote page's),
-  // swaps it onto the placeholder sender attachMicPlaceholder already
-  // negotiated, then tells the backend. Real device/permission failures
-  // (no mic, operator denies the browser's own native prompt) fall back
-  // to denyMicAccess() automatically - a real "I don't have a working
-  // mic" is not different from "I said no" from the remote page's own
-  // point of view. Safe to call even if no request is currently pending
-  // (the backend's own ResolveMicConsent is itself a no-op then).
-  //
-  // Rejects (rather than swallowing) a real device/permission failure -
-  // the remote page is still denied promptly either way (see the catch
-  // below), but the caller gets the real error back to show the operator
-  // WHY, instead of a silent no-op that looks identical to success.
-  async grantMicAccess(): Promise<void> {
-    return mic.grantMicAccess(this.core);
-  }
-
-  // Explicit denial for a pending "micAccessRequested" event - see
-  // grantMicAccess's own doc comment. A no-op backend-side if nothing is
-  // actually pending.
-  denyMicAccess(): void {
-    return mic.denyMicAccess(this.core);
-  }
-
-  // Gives up control of the page, and the interactive slot with it, at once.
-  // Resolves "released", whether this connection held control or not.
-  releaseInput(): Promise<GlassControlAnswer> {
-    return handoff.releaseInput(this.core);
-  }
-
-  // This connection's own id, as assigned by the backend - null until the
-  // first "offer" has arrived (see the field's own doc comment). Compare
-  // against a "capabilitiesChanged" event's connectionId yourself if you
-  // need to, though isSelf already does that for you.
+  // This connection's id, from hello; null before it.
   connectionId(): string | null {
-    return handoff.connectionId(this.core);
+    return this.core._connectionId;
   }
 
-  // Whether THIS connection currently produces input - the live state
-  // requestInput()/releaseInput() (and a connection's own mint-time grant)
-  // control. Starts at whatever the initial "offer" reported and stays
-  // current via "capabilitiesChanged".
-  producesInput(): boolean {
-    return handoff.producesInput(this.core);
+  // Whether this connection joined with the session's own link, the owner's:
+  // it navigates, grants and revokes, and sees the other members.
+  isOwner(): boolean {
+    return this.core._owner;
   }
 
-  // Input mode "floor" only: the connection whose input reaches the page,
-  // or null when no one has it (see the "floorChanged" event).
-  floorHolder(): string | null {
-    return this.core._floorHolder;
+  // What this connection's link may do, by kind of source, with the sources
+  // the owner denied it; null before hello.
+  rights(): GlassClientRights | null {
+    return handoff.rights(this.core);
   }
 
-  // A playback session's state, or null for any other session (see the
-  // "playback" event).
-  playbackState(): GlassPlaybackState | null {
-    return this.core._playback;
-  }
-
-  // Plays, pauses or seeks a playback session; a seek lands on the
-  // recording's keyframe at or before positionMs. Needs a connection that
-  // may give input (the session's own link, or one granted control).
-  controlPlayback(action: "play" | "pause" | "seek", positionMs?: number): void {
-    return inputs.controlPlayback(this.core, action, positionMs);
+  // The owner only: the session's other members; empty for anyone else.
+  members(): GlassMember[] {
+    return handoff.members(this.core);
   }
 
   // Whether the session is being recorded (see the "recording" event).
@@ -709,38 +585,30 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
     return this.core._recording;
   }
 
-  // The page's open JavaScript dialog, or null (see the "dialog" event).
-  dialog(): GlassDialog | null {
-    return this.core._dialog;
+  // This connection's last reported quality (see "connectionQuality"); null before the first report.
+  connectionQuality(): GlassConnectionQuality | null {
+    return this.core._connectionQuality ? { ...this.core._connectionQuality } : null;
   }
 
-  // Answers the page's open JavaScript dialog, as its OK (accept true) or
-  // Cancel button; text is a prompt's answer. Input like any other: in
-  // input mode "floor" it needs the floor, and is dropped ("inputDropped")
-  // without it.
-  answerDialog(accept: boolean, text?: string): void {
-    return inputs.answerDialog(this.core, accept, text);
+  // The viewport a hosted browser starts with, and whether to emulate a
+  // phone (with the user agent and its client hints), sent before its first
+  // picture.
+  sendInitialViewport(width: number, height: number, isMobile?: boolean, userAgent?: string, userAgentData?: UserAgentClientHints): void {
+    return navigation.sendInitialViewport(this.core, width, height, isMobile, userAgent, userAgentData);
   }
 
-  // Whether THIS connection is the session owner - the offer's isOwner
-  // field (docs/protocol.md) - which (authenticated with the session's own unscoped credential, not a
-  // minted grant). Only an owner connection ever receives roster traffic
-  // (connections() stays empty otherwise) or has grantInput()/
-  // revokeInput() actually take effect server-side - both are still safe
-  // to call from a non-owner connection, they just get silently denied
-  // (see handleGrantInputMessage/handleRevokeInputMessage's own IsOwner
-  // check), so use this to decide whether to show owner-only UI at all.
-  isOwner(): boolean {
-    return handoff.isOwner(this.core);
+  // Answers a page's "micAccessRequested": captures this person's own
+  // microphone (this device's getUserMedia, not the page's) onto the line
+  // this connection publishes as its microphone, then tells Glass. A device
+  // or permission failure denies the page instead, and rejects with the
+  // reason so the application can say why.
+  async grantMicAccess(): Promise<void> {
+    return mic.grantMicAccess(this.core);
   }
 
-  // The current known roster of every OTHER connection on this session -
-  // see docs/protocol.md's Control handoff section and the
-  // "rosterChanged" event. Always empty for a non-owner connection (see
-  // isOwner()). A snapshot at call time, not a live view - listen for
-  // "rosterChanged" rather than polling this.
-  connections(): GlassRosterEntry[] {
-    return handoff.connections(this.core);
+  // Denies a page's "micAccessRequested". A no-op when nothing is waiting.
+  denyMicAccess(): void {
+    return mic.denyMicAccess(this.core);
   }
 
   // Reports that the frame with this RTP timestamp was presented at
@@ -758,156 +626,8 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
     return statsTrace.inputLatencyStats(this.core);
   }
 
-  // This connection's last reported quality (see "connectionQuality"); null before the first report.
-  connectionQuality(): GlassConnectionQuality | null {
-    return this.core._connectionQuality ? { ...this.core._connectionQuality } : null;
-  }
-
-  // Each relay slot's last reported state (see "slotStateChanged"); empty
-  // for a browser session or before the first report.
-  slotStates(): Record<string, GlassSlotState> {
-    return handoff.slotStates(this.core);
-  }
-
-  // The owner gives control to another connection. The same license and
-  // capacity check as requestInput() applies. Resolves "granted", or
-  // "refused" with the reason (not_owner, no_capacity, unknown_connection).
-  grantInput(connectionId: string): Promise<GlassControlAnswer> {
-    return handoff.grantInput(this.core, connectionId);
-  }
-
-  // The owner takes control from another connection, however it got it.
-  // Resolves "revoked", or "refused" with the reason.
-  revokeInput(connectionId: string): Promise<GlassControlAnswer> {
-    return handoff.revokeInput(this.core, connectionId);
-  }
-
-  sendInitialViewport(
-    width: number,
-    height: number,
-    isMobile?: boolean,
-    userAgent?: string,
-    userAgentData?: UserAgentClientHints
-  ): void {
-    return navigation.sendInitialViewport(this.core, width, height, isMobile, userAgent, userAgentData);
-  }
-
-  navigateBack(): void {
-    return navigation.navigateBack(this.core);
-  }
-
-  navigateForward(): void {
-    return navigation.navigateForward(this.core);
-  }
-
-  refresh(): void {
-    return navigation.refresh(this.core);
-  }
-
-  mouseMove(x: number, y: number, dragging: boolean): void {
-    return inputs.mouseMove(this.core, x, y, dragging);
-  }
-
-  // button defaults to "left", modifiers to 0, clickCount to 1 - see
-  // docs/protocol.md's mousedown/mouseup rows for the three real gaps this
-  // closes: right-click never reached the remote page at all before
-  // `button` existed, Ctrl/Shift/Alt+click never reached it either before
-  // `modifiers` did (silently breaking Shift+click multi-select, Ctrl/Cmd+
-  // click, and Alt-drag-to-duplicate), and a real double-click never
-  // produced a genuine multi-click DOM event before `clickCount` did.
-  // modifiers is the same Alt=1/Ctrl=2/Meta=4/Shift=8 bitmask as
-  // dispatchKeyEvent/scroll; clickCount should be the browser's own native
-  // click-run counter (DOM MouseEvent.detail).
-  mouseDown(x: number, y: number, button: MouseButton = "left", modifiers = 0, clickCount = 1): void {
-    return inputs.mouseDown(this.core, x, y, button, modifiers, clickCount);
-  }
-
-  mouseUp(x: number, y: number, button: MouseButton = "left", modifiers = 0, clickCount = 1): void {
-    return inputs.mouseUp(this.core, x, y, button, modifiers, clickCount);
-  }
-
-  // deltaX/modifiers default to 0 - see docs/protocol.md's scroll row for
-  // the real gap this closes (a page's own `wheel`-event-driven pan/zoom,
-  // e.g. a canvas design tool, never received scroll input through Glass
-  // at all before this dispatched a real wheel event). modifiers is the
-  // same Alt=1/Ctrl=2/Meta=4/Shift=8 bitmask as dispatchKeyEvent.
-  scroll(deltaY: number, deltaX = 0, modifiers = 0): void {
-    return inputs.scroll(this.core, deltaY, deltaX, modifiers);
-  }
-
-  setViewport(width: number, height: number): void {
-    return inputs.setViewport(this.core, width, height);
-  }
-
-  copyText(): void {
-    return inputs.copyText(this.core);
-  }
-
-  pasteText(text: string): void {
-    return inputs.pasteText(this.core, text);
-  }
-
-  // Builds the retrieval URL for a completed download announced by a
-  // "downloadReady" event - see that event's own doc comment for the
-  // prompt-then-save flow this is meant to be used in. Session id is parsed
-  // out of signalingUrl rather than relying on the options.sessionId field,
-  // which is optional and unrelated (used only for the DELETE-on-close
-  // call) - signalingUrl always has the real one, since the WS connection
-  // couldn't exist without it. Reuses signalingUrl's own ?token= query
-  // param, if present, as the retrieval credential - the same session-scoped
-  // token that already authorizes this client's signaling/stats routes (see
-  // backend's sessionTokenAuthorizes), so a deployment with GLASS_API_TOKEN
-  // set doesn't need this SDK to also carry that runtime-wide secret just to
-  // let the operator save a file.
-  downloadUrl(guid: string): string {
-    return fileTransfer.downloadUrl(this.core, guid);
-  }
-
-  // Uploads the operator's already-picked local file(s) in response to a
-  // "fileChooserOpened" event - see that event's own doc comment for the
-  // full flow. Rejects if the backend rejects the request (session
-  // gone, no pending prompt - it already timed out or was already
-  // answered, size limits) so the caller can surface a real failure
-  // instead of assuming success. There's no download-side equivalent of
-  // this method (downloadUrl() only builds a URL, letting a real <a
-  // download> anchor be the actual save trigger) because there is no
-  // similar browser-native mechanism to hand a POST body off to - the
-  // fetch here IS the transport, not just a link the operator clicks.
-  async uploadFiles(files: FileList | File[]): Promise<void> {
-    return fileTransfer.uploadFiles(this.core, files);
-  }
-
-  dispatchKeyEvent(keyEvent: KeyEvent): void {
-    return inputs.dispatchKeyEvent(this.core, keyEvent);
-  }
-
-  // gestureId is required on every call (see TouchInputCallbacks.onTouchPoints
-  // in viewer/touchInput.ts) - the backend needs it on touchstart/touchmove/
-  // touchend/touchcancel alike to gate touchmove against whichever gesture is
-  // actually active. moveCount is
-  // diagnostic-only, set only on "touchend".
-  //
-  // "touchmove" alone travels over the unreliable fast channel - see
-  // sendInputFast's doc comment. Every other touch type stays on the
-  // reliable channel like all other input, since CDP's touch state machine
-  // needs start/end to arrive in order and not be silently dropped.
-  dispatchTouch(
-    type: TouchDispatchType,
-    points: TouchPoint[],
-    gestureId: number,
-    moveCount?: number
-  ): void {
-    return inputs.dispatchTouch(this.core, type, points, gestureId, moveCount);
-  }
-
   isConnected(): boolean {
     return transport.isConnected(this.core);
-  }
-
-  // The current video stream, if a track has arrived. Lets a viewer that mounts
-  // after "videoTrack" already fired still bind the video (see currentStream).
-  getVideoStream(): MediaStream | null {
-    return transport.getVideoStream(this.core);
   }
 
   // One-shot transport/quality snapshot from RTCPeerConnection.getStats().
@@ -916,10 +636,28 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
     return statsTrace.getStats(this.core);
   }
 
+  // @internal Whether mountGlassViewer should instantiate PixelTraceSampler
+  // against its <video> element (InternalGlassClientOptions).
+  /** @internal */
+  get pixelTraceEnabled(): boolean {
+    return this.core._pixelTraceEnabled;
+  }
+
+  /** @internal */
+  get decodeReadbackEnabled(): boolean {
+    return this.core._decodeReadbackEnabled;
+  }
+
+  /** @internal */
+  reportPixelTraceSamples(samples: { rtpTimestamp: number; paintedAtMs: number }[]): void {
+    return statsTrace.reportPixelTraceSamples(this.core, samples);
+  }
+
   // --- Cleanup ---
-  // Permanently closes the client: stops reconnection, tears down the peer
-  // connection and signaling socket, and (best-effort) deletes the session.
-  // After this, no further events fire. Safe to call more than once.
+  // Leaves the session for good: stops reconnecting and closes this
+  // connection (a deliberate leave, so Glass holds nothing for it). The
+  // session goes on for everyone else; ending it is DELETE, from your
+  // backend. After this, no further events fire. Safe to call more than once.
   disconnect(): void {
     lifecycle.disconnect(this.core);
     this.removeAllListeners();

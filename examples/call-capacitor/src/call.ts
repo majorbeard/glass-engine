@@ -1,28 +1,16 @@
-// Two-party calling against the /v1/calls API - the reference client for real, bidirectional two-party
-// calling, cloned from examples/producer-capacitor/src/producer.ts's own
-// getUserMedia/permission handling but genuinely different in shape: both
-// sides here send AND receive, there is no producer/consumer split.
+// Two people seeing and hearing each other over Glass: a session of at most
+// two members, each with a link that watches and publishes a camera and a
+// microphone. Each member publishes its own camera and microphone on
+// @glass/client's one connection, and receives the other's (never its own).
 //
-// Pairing UX: no QR code, unlike the producer example's watch-link flow.
-// The person creating a call gets back TWO distinct, already-complete
-// signaling URLs (peerAUrl for themselves, peerBUrl for the other party) -
-// see handleCreateCall's own doc comment for why they're per-peer grants,
-// not one shared token. peerBUrl has to reach a genuinely different
-// physical device to be useful, and the two test phones this was built
-// against are not guaranteed to be in the same room (an in-app QR scanner
-// would be useless across a real distance) - so it's shared the same way
-// any other link is: copy it out of this app and paste it into whatever
-// channel (chat app, SMS) actually reaches the other phone, then paste it
-// into the "Join a call" field there.
+// Pairing: no QR code. The person starting the call gets two links, one for
+// themselves and one for the other person, and shares the other through
+// whatever channel reaches them (a chat app, SMS); they paste it into the
+// "Join a call" field.
 
-export type CallState =
-  | "idle"
-  | "requesting-media"
-  | "creating-call"
-  | "connecting"
-  | "in-call"
-  | "error"
-  | "stopped";
+import { createGlassSession, GlassClient, mintGlassLink, type GlassLinkRequest } from "@glass/client";
+
+export type CallState = "idle" | "requesting-media" | "creating-call" | "connecting" | "in-call" | "error" | "stopped";
 
 export interface CallHandle {
   stop(): void;
@@ -30,86 +18,48 @@ export interface CallHandle {
 
 export interface CallInfo {
   id: string;
-  peerAUrl: string;
-  peerBUrl: string;
-  codec: "h264" | "vp8";
+  /** This person's own link. */
+  myLink: string;
+  /** The link to send to the other person. */
+  otherLink: string;
 }
 
 export interface StartCallOptions {
   /**
-   * "create" mints a brand-new call (POST /v1/calls) and joins it as peer
-   * A. "join" connects directly to an already-minted signaling URL (what
-   * the OTHER party's "create" call produced as peerBUrl, or peerAUrl if
-   * they're the one rejoining) - no server URL needed for this mode, the
-   * pasted URL is already a complete ws(s):// endpoint with its own
-   * per-peer token embedded.
+   * "create" makes a session (POST /v1/sessions, at most two members) and two links, and joins with the
+   * first. "join" connects with a link the other person sent; no server URL is needed for it.
    */
   mode: "create" | "join";
   /** Required for mode "create": base HTTP(S) URL of the Glass server. */
   serverUrl?: string;
-  /** Optional GLASS_API_TOKEN - only relevant to mode "create"'s POST; the signaling URL itself carries its own per-peer grant token and needs no separate bearer auth. */
+  /** GLASS_API_TOKEN, for mode "create": making a session takes it; a link needs nothing more. */
   apiToken?: string;
-  /** Required for mode "join": the full pasted peerAUrl/peerBUrl. */
-  signalingUrl?: string;
-  /** A TURN server of your own. Without one, Glass's are used: it sends each connection its STUN and TURN servers first, with a short-lived TURN credential of its own. */
+  /** Required for mode "join": the pasted link. */
+  link?: string;
+  /** A TURN server of your own. Without one, the engine's are used, with a short-lived TURN credential of its own. */
   turnServer?: { url: string; username: string; credential: string };
   onStateChange: (state: CallState, detail?: string) => void;
   onLocalStream: (stream: MediaStream) => void;
-  /** Fires as the other peer's tracks arrive - may fire once or twice (video/audio can arrive as separate ontrack events). */
+  /** Fires as the other person's camera and microphone arrive, with one stream holding both. */
   onRemoteStream: (stream: MediaStream) => void;
-  /** Only fires for mode "create", once the call is minted - this is what the UI needs to show/copy peerBUrl from. */
+  /** Mode "create" only, once the session and its links exist: the UI shows and copies otherLink. */
   onCallCreated?: (info: CallInfo) => void;
 }
 
-interface WSSignal {
-  type: string;
-  sdp?: string;
-  candidate?: RTCIceCandidateInit;
-  iceServers?: RTCIceServer[];
-  protocolVersion?: number;
-}
+// Both links watch everything and publish a camera and a microphone.
+const MEMBER: GlassLinkRequest = { watch: "all", publish: ["camera", "microphone"] };
 
-/**
- * The Glass protocol version this app speaks. Glass sends its own in the first message on every
- * connection; on any other, this app stops, since it would otherwise misread what Glass sends.
- */
-const PROTOCOL_VERSION = 2;
-
-/** How long to wait for Glass's ICE servers before offering without them: a Glass that sends them does so the moment the socket opens. */
-const ICE_CONFIG_WAIT_MS = 2000;
-
-function authHeaders(apiToken?: string): HeadersInit {
-  return apiToken ? { Authorization: `Bearer ${apiToken}` } : {};
-}
-
-async function createCall(serverUrl: string, apiToken?: string): Promise<CallInfo> {
-  const res = await fetch(`${serverUrl.replace(/\/$/, "")}/v1/calls`, {
-    method: "POST",
-    headers: authHeaders(apiToken),
-  });
-  if (!res.ok) {
-    throw new Error(`create call failed: ${res.status} ${await res.text()}`);
-  }
-  return res.json();
-}
-
-// Synchronous on purpose - NOT async. See producer.ts's startProducer for
-// the full rationale: a caller must have a working stop() before any await
-// inside this function runs, or a Stop click during setup (getUserMedia
-// prompt, call creation, ICE/TURN negotiation) is a silent no-op on a
-// still-null handle ref while the connection races ahead to completion.
+// Synchronous on purpose, not async: a caller must have a working stop()
+// before any await inside runs, or a Stop click during setup (the camera
+// prompt, making the session, connecting) is a no-op on a still-null handle.
 export function startCall(options: StartCallOptions): CallHandle {
-  const { mode, serverUrl, apiToken, turnServer, onStateChange, onLocalStream, onRemoteStream, onCallCreated } =
-    options;
-  let signalingUrl = options.signalingUrl;
+  const { mode, serverUrl, apiToken, turnServer, onStateChange, onLocalStream, onRemoteStream, onCallCreated } = options;
   let stopped = false;
-  let pc: RTCPeerConnection | undefined;
-  let ws: WebSocket | undefined;
+  let client: GlassClient | undefined;
   let localStream: MediaStream | undefined;
 
   const cleanup = () => {
-    ws?.close(1000, "call ended");
-    pc?.close();
+    client?.disconnect();
     localStream?.getTracks().forEach((t) => t.stop());
   };
 
@@ -122,134 +72,67 @@ export function startCall(options: StartCallOptions): CallHandle {
   };
 
   void (async () => {
-  try {
-    if (mode === "create" && !serverUrl) {
-      throw new Error("serverUrl is required to create a call");
-    }
-    if (mode === "join" && !signalingUrl) {
-      throw new Error("a signaling link is required to join a call");
-    }
-
-    onStateChange("requesting-media");
-    // getUserMedia rejects the WHOLE call if any requested kind fails, not
-    // just the failing one - see producer.ts's own doc comment for the
-    // same fallback.
     try {
-      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      if (mode === "create" && !serverUrl) throw new Error("serverUrl is required to create a call");
+      if (mode === "join" && !options.link) throw new Error("a call link is required to join a call");
+
+      onStateChange("requesting-media");
+      // getUserMedia rejects the whole call if any requested kind fails, so
+      // a missing or denied microphone falls back to video only.
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      } catch (err) {
+        console.warn("[call] getUserMedia({video,audio}) failed, retrying video-only:", err);
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      }
+      onLocalStream(localStream);
+      if (stopped) return cleanup();
+
+      let link = options.link;
+      if (mode === "create") {
+        onStateChange("creating-call");
+        const base = { baseUrl: serverUrl!.replace(/\/$/, ""), apiToken };
+        const session = await createGlassSession({ ...base, maxMembers: 2 });
+        const mine = await mintGlassLink({ ...base, sessionId: session.id, rights: MEMBER });
+        const theirs = await mintGlassLink({ ...base, sessionId: session.id, rights: MEMBER });
+        if (stopped) return cleanup();
+        onCallCreated?.({ id: session.id, myLink: mine.url, otherLink: theirs.url });
+        link = mine.url;
+      }
+
+      onStateChange("connecting");
+      const iceServers: RTCIceServer[] | undefined = turnServer?.url
+        ? [{ urls: "stun:stun.l.google.com:19302" }, { urls: turnServer.url, username: turnServer.username, credential: turnServer.credential }]
+        : undefined;
+      client = new GlassClient({ link: link!, ...(iceServers ? { iceServers } : {}) });
+
+      const video = localStream.getVideoTracks()[0];
+      if (video) client.publish(video, { kind: "camera" });
+      const audio = localStream.getAudioTracks()[0];
+      if (audio) client.publish(audio, { kind: "microphone" });
+
+      // The other person's camera and microphone are two sources, each with
+      // its own stream: one stream of both plays them in one <video>.
+      const remote = new MediaStream();
+      client.on("track", (_source, stream) => {
+        for (const t of stream.getTracks()) if (!remote.getTracks().includes(t)) remote.addTrack(t);
+        onRemoteStream(remote);
+      });
+      client.on("connected", () => onStateChange("in-call"));
+      client.on("reconnecting", (attempt, max) => onStateChange("connecting", `reconnecting ${attempt}/${max}`));
+      client.on("error", (message, code) => {
+        if (code === "not_connected") onStateChange("connecting", message);
+      });
+      client.on("closed", (reason, code) => {
+        if (stopped) return;
+        onStateChange("error", code === "session_not_found" ? "the call has ended" : reason);
+      });
+      await client.connect();
+      if (stopped) cleanup();
     } catch (err) {
-      console.warn("[call] getUserMedia({video,audio}) failed, retrying video-only:", err);
-      localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-    }
-    onLocalStream(localStream);
-    if (stopped) {
+      if (!stopped) onStateChange("error", err instanceof Error ? err.message : String(err));
       cleanup();
-      return;
     }
-
-    if (mode === "create") {
-      onStateChange("creating-call");
-      const call = await createCall(serverUrl!, apiToken);
-      if (stopped) {
-        cleanup();
-        return;
-      }
-      onCallCreated?.(call);
-      signalingUrl = call.peerAUrl;
-    }
-
-    onStateChange("connecting");
-    const iceServers: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
-    if (turnServer?.url) {
-      iceServers.push({ urls: turnServer.url, username: turnServer.username, credential: turnServer.credential });
-    }
-    pc = new RTCPeerConnection({ iceServers });
-    const activePc = pc;
-
-    // addTrack (not addTransceiver with an explicit direction) - per spec
-    // this creates a sendrecv transceiver when no compatible one already
-    // exists, matching what the server side expects: it has already bound
-    // its own outgoing tracks before it ever sees this offer, so the answer
-    // it returns declares sendrecv on both m-lines.
-    const videoTrack = localStream.getVideoTracks()[0];
-    activePc.addTrack(videoTrack, localStream);
-    const audioTrack = localStream.getAudioTracks()[0];
-    if (audioTrack) {
-      activePc.addTrack(audioTrack, localStream);
-    }
-
-    const remoteStream = new MediaStream();
-    activePc.addEventListener("track", (e) => {
-      remoteStream.addTrack(e.track);
-      onRemoteStream(remoteStream);
-    });
-
-    ws = new WebSocket(signalingUrl!);
-    const activeWs = ws;
-
-    const wsOpen = new Promise<void>((resolve, reject) => {
-      activeWs.addEventListener("open", () => resolve(), { once: true });
-      activeWs.addEventListener("error", (e) => reject(e), { once: true });
-    });
-
-    activePc.addEventListener("icecandidate", (e) => {
-      if (e.candidate && activeWs.readyState === WebSocket.OPEN) {
-        activeWs.send(JSON.stringify({ type: "ice-candidate", candidate: e.candidate.toJSON() }));
-      }
-    });
-    activePc.addEventListener("connectionstatechange", () => {
-      if (activePc.connectionState === "connected") {
-        onStateChange("in-call");
-      } else if (activePc.connectionState === "failed" || activePc.connectionState === "closed") {
-        if (!stopped) onStateChange("error", activePc.connectionState);
-      }
-    });
-
-    let gotIceConfig!: (servers: RTCIceServer[]) => void;
-    const iceConfig = new Promise<RTCIceServer[]>((r) => (gotIceConfig = r));
-    activeWs.addEventListener("message", (event) => {
-      const msg: WSSignal = JSON.parse(event.data);
-      if (msg.type === "ice_config") {
-        const version = typeof msg.protocolVersion === "number" ? msg.protocolVersion : 1;
-        if (version !== PROTOCOL_VERSION) {
-          stopped = true;
-          activeWs.close(1000, "protocol mismatch");
-          onStateChange("error", `this app speaks Glass protocol v${PROTOCOL_VERSION}, the engine v${version}: update the app`);
-          return;
-        }
-        if (Array.isArray(msg.iceServers)) gotIceConfig(msg.iceServers);
-      } else if (msg.type === "answer" && msg.sdp) {
-        void activePc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
-      } else if (msg.type === "ice-candidate" && msg.candidate) {
-        void activePc.addIceCandidate(msg.candidate);
-      }
-    });
-    activeWs.addEventListener("close", (e) => {
-      // 4401: Glass no longer admits this link; a new one is needed.
-      if (!stopped) onStateChange("error", e.code === 4401 ? "this call link has expired" : "signaling connection closed");
-    });
-
-    // See producer.ts's own doc comment - getUserMedia (all local) can
-    // finish before the WS handshake does; sending on a not-yet-open
-    // socket throws and silently kills the whole attempt.
-    await wsOpen;
-    if (stopped) {
-      cleanup();
-      return;
-    }
-
-    // Glass sends its ICE servers first; this side offers, and gathers,
-    // only after taking them (unless a TURN server of your own was given).
-    if (!turnServer?.url) {
-      const servers = await Promise.race([iceConfig, new Promise<null>((r) => setTimeout(() => r(null), ICE_CONFIG_WAIT_MS))]);
-      if (servers) activePc.setConfiguration({ ...activePc.getConfiguration(), iceServers: servers });
-    }
-    const offer = await activePc.createOffer();
-    await activePc.setLocalDescription(offer);
-    activeWs.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
-  } catch (err) {
-    if (!stopped) onStateChange("error", err instanceof Error ? err.message : String(err));
-    cleanup();
-  }
   })();
 
   return handle;

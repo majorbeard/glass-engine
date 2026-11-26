@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "preact/hooks";
 import { lazy, Suspense } from "preact/compat";
-import { mintConnectionGrant } from "@glass/client";
+import { mintGlassLink } from "@glass/client";
 import { mountGlassViewer, type GlassViewer } from "@glass/client/viewer";
 import { Toast } from "./components/Toast";
 import { BrowserHeader } from "./components/BrowserHeader";
@@ -72,7 +72,7 @@ export function App() {
 
   const session = useGlassSession(setToastMessage);
   const {
-    client, isActive, isConnected, isLoading, error, setError, sessionId,
+    client, isActive, isConnected, isLoading, error, setError, sessionId, sourceId,
     hijackedUrl, setHijackedUrl, pendingDownloads, setPendingDownloads,
     fileChooserMultiple, setFileChooserMultiple, uploading, setUploading, uploadError, setUploadError,
     micAccessOrigin, setMicAccessOrigin, micError, setMicError, micGranting, setMicGranting,
@@ -80,8 +80,11 @@ export function App() {
   // A playback session has no statistics stream (it encodes nothing).
   const { fps, perfStats } = useStatsStream(session.browserSession ? sessionId : null, session.linkToken, session.engine);
   const closeContextMenu = useCallback(() => setContextMenu({ show: false, x: 0, y: 0 }), []);
+  // The shown source's handle: every action of this viewer goes to it.
+  const source = client && sourceId ? client.source(sourceId) : null;
   const { handleNavigate, handleNavigateBack, handleNavigateForward, handleRefresh } = useNavigation({
     client,
+    sourceId,
     isActive,
     setIsActive: session.setIsActive,
     setError,
@@ -113,8 +116,9 @@ export function App() {
   // --- Mount the viewer into the content area once the client + container
   // exist. The viewer captures all input and renders the video itself. ---
   useEffect(() => {
-    if (!client || !isActive || !containerRef.current) return;
+    if (!client || !sourceId || !isActive || !containerRef.current) return;
     const viewer = mountGlassViewer(containerRef.current, client, {
+      source: sourceId,
       // Gated on Shift so a plain right-click reaches the remote page's own
       // context menu (now properly forwarded - see viewer/index.ts's
       // onContextMenu doc comment) instead of this app's local copy/paste
@@ -132,7 +136,7 @@ export function App() {
       viewerRef.current = null;
       setViewerReady(false);
     };
-  }, [client, isActive]);
+  }, [client, sourceId, isActive]);
 
   const handleToggleMute = useCallback(() => {
     const video = viewerRef.current?.video;
@@ -142,17 +146,17 @@ export function App() {
   }, []);
 
   const handleCopy = useCallback(() => {
-    client?.copyText();
-  }, [client]);
+    source?.copyText();
+  }, [source]);
   const handlePaste = useCallback(async () => {
-    if (!client?.isConnected()) return;
+    if (!client?.isConnected() || !source) return;
     try {
       const text = await navigator.clipboard.readText();
-      client.pasteText(text);
+      source.pasteText(text);
     } catch (e) {
       console.error("Clipboard paste failed", e);
     }
-  }, [client]);
+  }, [client, source]);
 
   // Fires when the operator picks file(s) from the hidden input the
   // fileChooserOpened prompt below raises. The prompt stays visible
@@ -174,11 +178,11 @@ export function App() {
       // what we're about to upload.
       const files = Array.from(input.files ?? []);
       input.value = "";
-      if (!client || files.length === 0) return;
+      if (!source || files.length === 0) return;
       setUploading(true);
       setUploadError(null);
       try {
-        await client.uploadFiles(files);
+        await source.uploadFiles(files);
         setFileChooserMultiple(null);
       } catch (err: any) {
         setUploadError(err?.message || "Upload failed");
@@ -186,7 +190,7 @@ export function App() {
         setUploading(false);
       }
     },
-    [client]
+    [source]
   );
 
   // Mic access prompt handlers -
@@ -239,22 +243,22 @@ export function App() {
   // Glass answers each grant and revoke; a refusal is shown, not left silent.
   const handleGrantInput = useCallback(
     async (connectionId: string) => {
-      const answer = await client?.grantInput(connectionId);
+      const answer = await source?.grantInput(connectionId);
       if (answer?.outcome === "refused") setToastMessage({ message: controlRefusal(answer.reason), type: "error" });
     },
-    [client]
+    [source]
   );
   const handleRevokeInput = useCallback(
     async (connectionId: string) => {
-      const answer = await client?.revokeInput(connectionId);
+      const answer = await source?.revokeInput(connectionId);
       if (answer?.outcome === "refused") setToastMessage({ message: controlRefusal(answer.reason), type: "error" });
     },
-    [client]
+    [source]
   );
 
   // Mints a watch-only grant for the current session and turns it into an
-  // attach-mode URL for THIS SAME app (see the attachSessionId/
-  // attachSignalingUrl handling in useGlassSession) - the
+  // attach-mode URL for THIS SAME app (see the attachLink handling in
+  // useGlassSession) - the
   // simplest way to actually exercise the handoff flow end to end: open
   // the resulting link in a second tab (or hand it to someone else), which
   // connects watch-only and can then click "Request control" there to see
@@ -262,16 +266,15 @@ export function App() {
   const handleShareWatchOnlyLink = useCallback(async () => {
     if (!sessionId) return;
     try {
-      const grant = await mintConnectionGrant({
+      const link = await mintGlassLink({
         sessionId,
-        capabilities: { consumesMedia: true },
+        rights: { watch: "all" },
         baseUrl: GLASS_ADDR,
         apiToken: API_TOKEN,
       });
       const attachUrl = new URL(window.location.href);
       attachUrl.search = "";
-      attachUrl.searchParams.set("attachSessionId", sessionId);
-      attachUrl.searchParams.set("attachSignalingUrl", grant.signalingUrl);
+      attachUrl.searchParams.set("attachLink", link.url);
       await navigator.clipboard.writeText(attachUrl.toString());
       setToastMessage({
         message: "Watch-only link copied to clipboard",
@@ -394,7 +397,7 @@ export function App() {
                 <PlaybackBar
                   state={session.playback}
                   canControl={session.producesInput}
-                  onControl={(action, positionMs) => session.client?.controlPlayback(action, positionMs)}
+                  onControl={(action, positionMs) => source?.controlPlayback(action, positionMs)}
                 />
               )}
               {isConnected && session.recording && (
@@ -466,7 +469,7 @@ export function App() {
         <DialogPrompt
           dialog={session.pageDialog}
           otherHasFloor={session.otherHasFloor}
-          onAnswer={(accept, text) => client?.answerDialog(accept, text)}
+          onAnswer={(accept, text) => source?.answerDialog(accept, text)}
         />
       )}
       {hijackedUrl && (

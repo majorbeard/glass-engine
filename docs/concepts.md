@@ -1,146 +1,151 @@
 # Concepts
 
-This page describes the model every Glass source shares. The source-specific
-pages ([hosted browser](sources/browser.md), [relay producers](sources/producers.md),
+This page describes the model every Glass session shares. The source pages
+([hosted browser](sources/browser.md), [publishing](sources/producers.md),
 [calls](sources/calls.md)) describe only what differs.
 
-## Sources and sessions
+## Sessions and sources
 
-A **source** is where the media comes from: a browser Glass runs, an external
-producer, or the two peers of a call. A **session** is one running source plus
-everyone connected to it. You create a session over HTTP; the response gives
-you URLs to connect to it:
+A **session** holds **sources**. A source is where media comes from:
 
-| Session type | Create | You get back |
-|---|---|---|
-| Hosted browser | `POST /v1/sessions` | `signalingUrl` |
-| Relay | `POST /v1/relay-sessions` | `signalingUrl` for viewers, `produceUrl` (one per slot) for producers |
-| Call | `POST /v1/calls` | `peerAUrl`, `peerBUrl` |
-| Playback | `POST /v1/recordings/{id}/play` | `signalingUrl`, to watch a [recording](recording.md) |
+| Kind | Where it comes from |
+|---|---|
+| `browser` | A browser Glass runs for the session. |
+| `playback` | A [recording](recording.md) played back. |
+| `camera`, `microphone`, `screen`, `device` | A track a member publishes into the session. |
 
-Every response also carries `protocolVersion`, `sourceType` (`"browser"`,
-`"relay"`, `"call"`, `"playback"`) and, for browser and relay sessions, `capabilities`: what
-this source can do (video, navigation, viewport, clipboard, the input actions it
-accepts). A client reads `capabilities` instead of guessing from the source type.
+Each source has an id, a kind, a state (`live`, `stalled`, `ended`) and
+`capabilities`: what it can do (video, navigation, viewport, clipboard, the
+input actions it takes). A client reads `capabilities` instead of guessing
+from the kind.
+
+You make a session over HTTP:
+
+| What | Make it with |
+|---|---|
+| A hosted browser | `POST /v1/sessions` with `{"sources": [{"kind": "browser"}]}` |
+| A session whose members publish (a phone's camera, a call) | `POST /v1/sessions` with no `sources` |
+| A recording's playback | `POST /v1/recordings/{id}/play` |
+
+Every one answers the same shape: `{id, protocolVersion, link, sources}`. A
+browser added to a running session (`POST /v1/sessions/{id}/sources`) and a
+track a member publishes join the session's sources while it runs; every
+member who may watch them is told.
 
 ### Lifecycle
 
-- A new session is `pending`. If nobody connects in time it is closed: 30 s for
-  a browser session (it holds a browser), 10 min for relay and call sessions.
+- A new session is `pending`. If nobody connects within 30 s it is closed, so
+  an abandoned session holds no browser.
 - The first connection makes it `active`. It stays active while anyone is
   connected.
-- It is `closed` when you `DELETE` it, or when its last connection is gone
-  and that connection's reconnect grace has run out.
+- It ends when you `DELETE` it, or when its last member has left: closed
+  deliberately, or gone for longer than the reconnect grace.
+- A source can end alone (removed, or its browser failed, or its publisher
+  left): the session goes on.
 
-`GET /v1/sessions/{id}` (and the relay and call equivalents) report the state.
+`GET /v1/sessions/{id}` reports the state and the sources.
 
-## Connections and capabilities
+## Members and links
 
-A session accepts many connections at once. Each connection has four
-capabilities:
+A session accepts many connections at once, each a **member**. A member joins
+with a **link**: a URL whose **rights** say what it may do.
 
-| Capability | Meaning |
+| Right | Meaning |
 |---|---|
-| `consumesMedia` | Receives the session's video and audio. |
-| `producesInput` | May send input to the source (mouse, keyboard, touch, …). |
-| `producesMedia` | May publish media into the session (relay producers, call peers). |
-| `consumesInput` | Reserved. Refused with `400` until the source-side control direction exists. |
+| `watch` | The sources it receives: `"all"`, `"none"`, or a list of kinds. |
+| `publish` | The kinds it may publish. |
+| `control` | The kinds whose input it may hold (mouse, keyboard, touch, navigation for the owner). |
 
-The URL returned at session creation carries the **default** capabilities for
-its role: full control for a hosted browser's `signalingUrl`, publish for a
-`produceUrl`, send and receive for a call peer.
-
-To hand out narrower access, **mint a grant**:
+The link returned when the session is made is the session's own: the
+**owner's**. It watches and controls everything. To hand out narrower access,
+**mint a link**:
 
 ```sh
 curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"consumesMedia": true}' \
-  http://glass.example.com/v1/sessions/$ID/connections
+  -d '{"watch": "all"}' \
+  https://glass.example.com/v1/sessions/$ID/links
 ```
 
-The response has its own `signalingUrl`, limited to what you asked for. The
-limits are enforced by the server: input from a connection without
-`producesInput` is dropped by Glass, not merely hidden by the client, and the
-sender is told why ([protocol.md](protocol.md#dropped-input)). For relay
-sessions, use `POST /v1/relay-sessions/{id}/connections`; the response includes
-a `produceUrl` only if you asked for `producesMedia`.
-
-Watch-only links can be shared and reused. A session admits at most 50
-connections by default (`GLASS_MAX_VIEWERS_PER_SESSION`).
+The answer is `{id, url, rights, expiresAt}`. The limits are enforced by the
+server: input from a member that doesn't hold a source's input is dropped by
+Glass, not merely hidden by the client, and the sender is told why. Revoke a
+link with `DELETE /v1/sessions/{id}/links/{linkId}`: it admits nobody again,
+and its connections are closed.
 
 A watch link watches, and nothing more, until someone gives it control: it
-can't download or upload files, answer the page's microphone request, or
-read the session's statistics. Treat one as public once shared. A relay
-session's `signalingUrl` is a watch link; its `produceUrl` produces and may
-watch. The API token is not a call peer.
+can't download or upload files, answer the page's microphone request, or read
+the session's statistics. Treat one as public once shared. A session admits at
+most 50 connections by default (`GLASS_MAX_VIEWERS_PER_SESSION`), or the
+session's own `maxMembers`.
 
 Every link expires for joining after 24 hours by default
 (`GLASS_LINK_TTL_HOURS`), so one published by mistake stops working on its
-own; set your own lifetime per link, or none. A connection already in the
-session is never cut off. See [protocol.md](protocol.md#link-expiry).
+own; set your own lifetime per link, or none. A member already in the session
+is never cut off. See [protocol.md](protocol.md#link-expiry).
 
 ### Tokens in URLs
 
-When `GLASS_API_TOKEN` is set, every URL Glass returns ends in `?token=…`. That
-token is **not** the API token. It is a per-session (or per-grant) credential
-that only opens that session's WebSocket, stats stream and file endpoints, and
-stops working when the session closes. It lives in the URL because a browser's
-`WebSocket` can't send an `Authorization` header. Treat these URLs as secrets
-anyway: anyone holding one gets its capabilities.
+A link's URL ends in `?token=…`. That token is **not** the API token: it is a
+credential for one session, that opens only its connection, its statistics
+stream and its file routes, and stops working when the session ends. It lives
+in the URL because a browser's `WebSocket` can't send an `Authorization`
+header. Treat links as secrets anyway: anyone holding one gets its rights.
 
 Keep the API token on your backend. The intended flow:
 
-1. Your backend creates the session (and any grants) with the API token.
-2. It gives each client only the URL that client should have.
-3. Your backend deletes the session when the user is done.
+1. Your backend makes the session (and any further links) with the API token.
+2. It gives each person only the link they should have.
+3. It ends the session when the people are done, or lets it end when the last
+   one leaves.
 
 Or, when the browser should start the session itself: your backend signs a
-[session ticket](protocol.md#session-tickets), and the browser redeems it
-once for the session's links (`redeemGlassTicket`).
+[session ticket](protocol.md#session-tickets), and the browser redeems it once
+for the session (`redeemGlassTicket`). `glass gate` does this for you.
 
 ## Owner and control handoff
 
-The connection that uses the session's own URL, rather than a minted grant, is
-the session's **owner**. The owner can navigate (hosted browser), sees who
-else is connected, and can move control between connections.
+The member that joined with the session's own link is the **owner**. The owner
+can navigate a hosted browser, sees who else is there, and can move control
+between members.
 
-Any connection can:
+Each source that takes input has its own **input**: the members that hold it.
+Any member can:
 
-- `request_input`: ask for control. If it can be admitted, Glass grants it at
-  once and tells every connection (`capabilities_changed`). If not, Glass
-  forwards the request to whoever holds control now (`input_requested`) and
-  changes nothing. Your app decides whether to prompt a person or decline.
-  Glass never queues or preempts on its own.
-- `release_input`: give control back.
+- `request_input`: ask to hold a source's input. If it can be admitted, Glass
+  grants it at once and tells everyone (`input_holders`). If not, Glass passes
+  the request to whoever holds it now (`input_requested`) and changes nothing.
+  Your app decides whether to ask a person or decline. Glass never queues or
+  takes control on its own.
+- `release_input`: give it back.
 
 The owner can also:
 
-- `grant_input` / `revoke_input`: give control to, or take it from, a specific
-  connection.
-- receive the roster: `roster` once on connect, then `connection_joined` and
-  `connection_left`.
+- `grant_input` / `revoke_input`: give a member a source's input, or take it.
+- `deny_watch` / `grant_watch`: stop a member receiving a source, or let it
+  again.
+- see the members: in `hello`, then `member_joined` and `member_left`.
 
-A viewer that holds control uses a seat from the license's session limit, the
-same as a session does. Watch-only viewers use none.
+A member holding a browser's input uses a seat from the license's session
+limit, as a session does. Watch-only members use none.
 
 ## Several people in control
 
-Any number of connections can hold control of one hosted-browser session. The
-page they share has one pointer, one keyboard focus and one set of held keys,
-so the session's **input mode** decides whose input reaches it. Choose it when
-you create the session (`inputMode`); a session with one controller behaves
-the same in both.
+Any number of members can hold one hosted browser's input. The page they share
+has one pointer, one keyboard focus and one set of held keys, so the source's
+**input mode** decides whose input reaches it. Choose it when you make the
+source (`inputMode`); a source with one holder behaves the same in both.
 
-- **`floor` (the default): one controller at a time.** The first connection to
-  send input has the page. It keeps it while it holds anything down (a key, a
-  mouse button, a finger) and until it pauses: 100 ms after a pointer or touch
-  event, 1 s after a key or wheel event, so no one can take over between two
-  keystrokes. Meanwhile everyone else's input is dropped and reported to them
-  (`floor_taken`), and every connection is told who has the page
-  (`input_floor`), so your app can show "Ana is in control". The page frees at
-  once when its controller disconnects, gives up control or has it revoked.
-- **`free`: everyone at once.** Every controller's input reaches the page as it
+- **`floor` (the default): one at a time.** The first member to send input has
+  the page. It keeps it while it holds anything down (a key, a mouse button, a
+  finger) and until it pauses: 100 ms after a pointer or touch event, 1 s after
+  a key or wheel event, so no one can take over between two keystrokes.
+  Meanwhile everyone else's input is dropped and reported to them
+  (`floor_taken`), and every member is told who has the page
+  (`input_holders`' `floor`), so your app can show "Ana is in control". The
+  page frees at once when its controller leaves, gives up the input or has it
+  revoked.
+- **`free`: everyone at once.** Every holder's input reaches the page as it
   arrives. **With more than one active person this is chaos:** the one pointer
   jumps between them, one person's drag is moved by another's pointer, and keys
   land in whichever field was focused last. Use it only where that is the point
@@ -148,65 +153,60 @@ the same in both.
 
 Two rules hold in both modes:
 
-- **One connection sets the page size**: the owner's while it holds control,
-  otherwise the controller connected longest. Another controller's window size
-  is ignored. When that connection leaves or loses control, the page takes the
-  next one's size.
-- **Held keys and buttons are released per connection.** When a connection
-  disconnects, gives up control or is revoked, Glass releases what it was
-  holding down, and nothing anyone else holds.
+- **One member sets the page size**: the owner's while it holds the input,
+  otherwise the holder connected longest. When that member leaves or loses the
+  input, the page takes the next one's size.
+- **Held keys and buttons are released per member.** When a member leaves,
+  gives up the input or has it revoked, Glass releases what it was holding
+  down, and nothing anyone else holds.
 
 Navigation stays the owner's in both modes. Input your backend sends with
-`POST /v1/sessions/{id}/input` is not arbitrated: it reaches the page in either
-mode and takes the page from no one.
+`POST /v1/sessions/{id}/sources/{sourceId}/input` is not arbitrated: it
+reaches the page in either mode and takes it from no one (unless it asks for
+the floor).
 
-`@glass/client` exposes all of this as `requestInput()`, `releaseInput()`,
-`grantInput()`, `revokeInput()` (each resolves with Glass's answer: granted,
-relayed to the holder, released, revoked or refused, with the reason),
-`isOwner()`, `connections()`, `floorHolder()`
-and the `capabilitiesChanged`, `inputRequested`, `rosterChanged` and
-`floorChanged` events. Glass
-provides the mechanism; the policy (who should get control, and when) belongs
-to your app.
+`@glass/client` exposes all of this on a source's handle (`requestInput()`,
+`releaseInput()`, `grantInput()`, `revokeInput()`, `grantWatch()`,
+`denyWatch()`, `holders()`, `floorHolder()`) and on the client (`isOwner()`,
+`members()`, and the `inputHolders`, `inputRequested`, `membersChanged` and
+`rightsChanged` events). Glass provides the mechanism; the policy (who should
+get control, and when) belongs to your app.
 
 ## Reconnects
 
 Networks drop: phones lock, Wi-Fi hands over to cellular. Glass treats a
 connection that ends without a deliberate close as **lost, not finished**:
 
-- A WebSocket closed with code `1000` is a deliberate leave. The connection is
-  gone at once.
+- A WebSocket closed with code `1000` is a deliberate leave. The member is
+  gone at once, and so are the sources it published.
 - Any other ending (another close code, a TCP reset, a timeout) holds the
-  connection for the **reconnect grace**, 60 s by default
-  (`GLASS_RECONNECT_GRACE_SECONDS`). Reopening the same URL resumes it. A
-  hosted browser keeps its page and history; a relay slot stays reserved for
-  its producer.
-- While every connection of a session is in grace, Glass pauses the source's
-  encoding.
+  member for the **reconnect grace**, 60 s by default
+  (`GLASS_RECONNECT_GRACE_SECONDS`). Reconnecting with the same link resumes
+  it: a hosted browser keeps its page and history, and a publisher publishes
+  again as the same member.
+- While every member of a session is in grace, Glass pauses a hosted
+  browser's encoding.
 - When the session no longer exists, Glass closes the WebSocket with code
-  `4404`. Don't retry that URL.
+  `4404`. Don't retry that link.
 
 `@glass/client` handles all of this for you: it retries at once, then after
 1, 2, 4, 8 and 16 s, up to 8 attempts by default, and emits `reconnecting`,
 `connected` and `closed`.
-`GlassProducer` does the same for producers, and starts a new relay session if
-the old one can't be resumed.
 
 ## Media
 
-- Video arrives as a normal WebRTC video track, in the codec the session
-  was created with: H.264 by default, VP8 or AV1 where the operator enables
-  them (`codec` on session creation; `GET /v1/info` lists what the host
-  serves). Relay and call sessions use the host's default codec and report
-  it as `codec`; producers must send that codec.
-- Audio, when present, is an Opus track.
+- Video arrives as a normal WebRTC video track, one per source, in the
+  session's codec: H.264 by default, VP8 or AV1 where the operator enables
+  them (`codec` when making a browser source; `GET /v1/info` lists what the
+  host serves). A publisher sends what the session takes.
+- Audio, when present, is an Opus track, again one per source.
 - Input and state messages travel on a WebRTC DataChannel; video never does.
 - Each viewer gets its own bandwidth estimate (Google Congestion Control), and
   lost packets are retransmitted. A hosted browser adapts its encoding to the
-  viewers' bandwidth: when a viewer's path can't carry what's captured,
-  frames are dropped before they're encoded, never after, so every encoded
-  frame is sent to the viewer. Relay streams are forwarded as the producer sent
-  them; with simulcast, each viewer gets the layer its own link carries.
+  viewers' bandwidth: when a viewer's path can't carry what's captured, frames
+  are dropped before they're encoded, never after, so every encoded frame is
+  sent. Published tracks are forwarded as the publisher sent them; with
+  simulcast, each viewer gets the layer its own link carries.
 
-The wire-level detail is in [protocol.md](protocol.md), and the path media takes
-through the engine is in [architecture.md](architecture.md).
+The wire-level detail is in [protocol.md](protocol.md), and the path media
+takes through the engine is in [architecture.md](architecture.md).

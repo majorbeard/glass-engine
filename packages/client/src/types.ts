@@ -32,84 +32,99 @@ export interface GlassCapabilities {
   [key: string]: unknown;
 }
 
-// What ONE connection to a session is declared to do - a distinct concept
-// from GlassCapabilities above (what the SOURCE can do overall). Mirrors
-// the engine's connection capabilities exactly (see docs/concepts.md,
-// "Connections and capabilities"): producesMedia/consumesMedia/
-// producesInput/consumesInput, each independent (a connection can be both
-// a media consumer and an input producer at once).
-export interface GlassConnectionCapabilities {
-  producesMedia: boolean;
-  consumesMedia: boolean;
-  producesInput: boolean;
-  // RESERVED: no endpoint control direction exists yet, so the backend refuses to
-  // mint a grant with consumesInput: true (HTTP 400) instead of accepting and
-  // ignoring it. Always false on a connection today.
-  consumesInput: boolean;
+// What a link may do, by kind of source (protocol v3, docs/protocol.md,
+// "Links"): watch which kinds, publish which, control which ("all", "none" for
+// watch, or a list of kinds), and whether it is the session's own link.
+export interface GlassRights {
+  watch: "all" | "none" | GlassSourceKind[];
+  publish: "all" | GlassSourceKind[];
+  control: "all" | GlassSourceKind[];
+  owner: boolean;
 }
 
-// Returned by mintConnectionGrant / the backend's POST
-// /v1/sessions/{id}/connections - a fresh, capability-scoped signalingUrl
-// for an additional connection to an existing session (e.g. a watch-only
-// link). produceUrl is present only for a relay session's grant, never for a browser
-// session's. linkId names the link for revoking it (DELETE
-// /v1/sessions/{id}/connections/{linkId}); expiresAt is when it stops admitting new
-// connections, absent for a link that never expires.
-export interface GlassConnectionGrant {
-  signalingUrl: string;
-  connectionCapabilities: GlassConnectionCapabilities;
-  produceUrl?: string;
-  linkId: string;
+// A session's kinds of source: a hosted browser and a recording's playback,
+// which the engine runs, and what a member publishes.
+export type GlassSourceKind = "browser" | "playback" | "camera" | "microphone" | "screen" | "device" | (string & {});
+
+// Where a source stands: "live"; "stalled", live but sending nothing for now
+// (its publisher dropped or went quiet, and may come back); "ended".
+export type GlassSourceState = "live" | "stalled" | "ended";
+
+// One source of a session, as the engine describes it everywhere: the
+// session's creation answer, GET /v1/sessions/{id}, and the hello,
+// source_added and source_updated messages.
+export interface GlassSourceInfo {
+  id: string;
+  kind: GlassSourceKind;
+  state: GlassSourceState;
+  // Why it ended, or why it is stalled, when the engine says.
+  reason?: string;
+  capabilities: GlassCapabilities;
+  codec?: GlassVideoCodec;
+  contentHint?: GlassContentHint;
+  inputMode: GlassInputMode;
+  inspect: boolean;
+}
+
+// A link to a session: what to share, or connect with. url is the member
+// connection's, carrying the link's own token. id names it for revoking.
+// expiresAt is when it stops admitting new connections (RFC 3339), absent
+// when it never does.
+export interface GlassLink {
+  id: string;
+  url: string;
+  rights: GlassRights;
   expiresAt?: string;
 }
 
-// What mintConnectionGrant asks for: the connection's capabilities, and
-// optionally how long the link admits new connections, in seconds (0 for
-// never; absent, the server's default lifetime). The HTTP body, as is.
-export type GlassGrantRequest = Partial<GlassConnectionCapabilities> & { expiresIn?: number };
+// What mintGlassLink asks for: the rights by kind, and optionally the link's
+// lifetime in seconds (0 for never; absent, the engine's default).
+export interface GlassLinkRequest {
+  watch?: "all" | GlassSourceKind[];
+  publish?: "all" | GlassSourceKind[];
+  control?: "all" | GlassSourceKind[];
+  expiresIn?: number;
+}
 
-// One other connection in the session owner's roster - see
-// docs/protocol.md's Control handoff section (connection_joined/
-// connection_left/roster) and GlassClient.connections(). Owner-only: a
-// non-owner connection never receives roster traffic at all, since it has
-// no grantInput()/revokeInput() authority to act on it (see
-// GlassClient.isOwner()).
+// Another member of the session, as its owner sees it: the connection, and
+// what its link may do.
+export interface GlassMember {
+  connectionId: string;
+  owner: boolean;
+  rights: GlassRights;
+}
+
 /**
- * Glass's one answer to a control request: requestInput(), releaseInput(), grantInput() or
- * revokeInput(). `outcome` is the state the request leaves: asking for what this connection
- * already holds is "granted", not refused. "relayed" means nobody could be given control now, so
- * the request went to whoever holds it (their "inputRequested" event). `reason` says why a
- * refusal: Glass's own (`not_allowed`: this link never included control; `not_owner`;
- * `no_capacity`; `unknown_connection`; `rate_limited`; `invalid`) or this client's
- * (`not_connected`, `disconnected`: the connection went before Glass answered).
+ * Glass's one answer to a control request on a source: requestInput(),
+ * releaseInput(), grantInput(), revokeInput(), grantWatch() or denyWatch().
+ * `outcome` is the state the request leaves: asking for what this connection
+ * already holds is "granted", not refused. "relayed" means nobody could be
+ * given control now, so the request went to whoever holds it (their
+ * "inputRequested" event). `reason` says why a refusal: Glass's own
+ * (`not_allowed`: this link never included control of that kind; `not_owner`;
+ * `no_capacity`; `unknown_connection`; `unknown_source`; `rate_limited`;
+ * `invalid`) or this client's (`not_connected`, `disconnected`: the
+ * connection went before Glass answered).
  */
 export interface GlassControlAnswer {
-  action: "request_input" | "release_input" | "grant_input" | "revoke_input";
+  action: "request_input" | "release_input" | "grant_input" | "revoke_input" | "grant_watch" | "deny_watch";
   outcome: "granted" | "relayed" | "released" | "revoked" | "refused";
   reason?:
     | "not_allowed"
     | "not_owner"
     | "no_capacity"
     | "unknown_connection"
+    | "unknown_source"
     | "rate_limited"
     | "invalid"
     | "not_connected"
     | "disconnected"
     | (string & {});
+  /** The source the request was about. */
+  source: string;
   /** The connection a grant or revoke was about. */
   connectionId?: string;
 }
-
-export interface GlassRosterEntry {
-  connectionId: string;
-  producesInput: boolean;
-  isOwner: boolean;
-}
-
-// A relay slot's state, from the slot_state signaling message
-// (docs/protocol.md): "stalled" means its producer dropped or stopped sending
-// media and may come back; "empty" means no producer.
-export type GlassSlotState = "empty" | "live" | "stalled";
 
 // This connection's quality as Glass measures it from the video it sends (docs/protocol.md, connection_quality):
 // "excellent" and "good" need nothing shown; "poor" is a weak link (a smaller picture, the odd freeze); "lost" is no
@@ -140,6 +155,8 @@ export interface GlassInputDrop {
   eventType: string;
   count: number;
   local: boolean;
+  // The source the dropped input was for.
+  source: string;
   seq?: number;
 }
 
@@ -209,57 +226,59 @@ export interface GlassEngine {
   apiToken?: string;
 }
 
-// Options for createGlassSession. All are optional.
-export interface GlassCreateSessionOptions extends GlassEngine {
-  // Requests the mic-capable browser pool. See createGlassSession.
+// One engine-run source a session is created with (docs/protocol.md,
+// "POST /v1/sessions request"). kind is "browser", the one engine-run kind a
+// session takes. All the rest are optional.
+export interface GlassSourceRequest {
+  kind: "browser";
+  // A page to open once the browser is up.
+  url?: string;
+  // Requests the microphone-capable browser pool, where the operator set
+  // one up.
   audioInput?: boolean;
-  // Absent, the session uses the runtime's own default.
+  // Absent, the engine's default.
   contentHint?: GlassContentHint;
-  // Absent, the session uses the runtime's default codec. A codec the
-  // runtime cannot serve is refused (the session is not created), never
-  // replaced by another.
+  // Absent, the engine's default codec. A codec the engine cannot serve is
+  // refused (the session is not made), never replaced by another.
   codec?: GlassVideoCodec;
   // Absent, "floor". See GlassInputMode.
   inputMode?: GlassInputMode;
-  // Allows page inspection on the session: its structure through the API's
-  // /page routes, for your backend with the API token. Off by default.
+  // Allows page inspection: the page's structure through the API's /page
+  // routes, for your backend with the API token. Off by default.
   inspect?: boolean;
-  // Seconds until the session's link stops admitting new connections; 0 is
-  // never. Absent, the runtime's default (24 hours unless the operator
+}
+
+// Options for createGlassSession. With no sources the session's members
+// publish: each joins on a link and publishes what its link allows.
+export interface GlassCreateSessionOptions extends GlassEngine {
+  sources?: GlassSourceRequest[];
+  // The most members connected at once, its own link's included; a join past
+  // it is refused. Absent, no limit.
+  maxMembers?: number;
+  // A session whose members publish: each camera or screen published as
+  // layers (simulcast), so each viewer gets the one its link carries.
+  simulcast?: boolean;
+  // Starts recording at once (the engine needs GLASS_RECORDING_DIR).
+  record?: boolean;
+  // Seconds until the session's own link stops admitting new connections; 0
+  // is never. Absent, the engine's default (24 hours unless the operator
   // changed it).
   linkExpiresIn?: number;
 }
 
-// Returned by createGlassSession, redeemGlassTicket and the backend's
-// POST /v1/sessions.
+// Returned by createGlassSession, redeemGlassTicket and the engine's
+// POST /v1/sessions: the session, its own link (the owner's), and its sources.
 export interface GlassSession {
   id: string;
-  signalingUrl: string;
-  // When the session's links stop admitting new connections (RFC 3339).
-  // Absent when they never do, and from runtimes that predate link expiry.
-  linksExpireAt?: string;
-  // Watch-only links to share, as many as the ticket asked for. Only from
+  // Major version of the public wire contract (3 for this client).
+  protocolVersion: number;
+  link: GlassLink;
+  sources: GlassSourceInfo[];
+  // Watch links to share, as many as the ticket asked for. Only from
   // redeemGlassTicket.
-  watchUrls?: string[];
-  // The content hint the session is running with. Absent from runtimes that
-  // predate it and from sources that have none.
-  contentHint?: GlassContentHint;
-  // The video codec the session is encoded with. Absent from runtimes that
-  // predate per-session codecs and from sources that do not encode video.
-  codec?: GlassVideoCodec;
-  // How several input holders share the page. Absent from runtimes that
-  // predate it.
-  inputMode?: GlassInputMode;
-  // Whether page inspection is allowed on the session. Absent from runtimes
-  // that predate it.
-  inspect?: boolean;
-  // Major version of the public wire contract. Absent from runtimes predating
-  // the handshake, which are treated as version 1. See createGlassSession.
-  protocolVersion?: number;
-  // Stable identifier for the kind of source backing this session ("browser",
-  // and someday "camera"/"joystick"); "unknown" if the source doesn't say.
-  sourceType?: string;
-  capabilities?: GlassCapabilities;
+  watchLinks?: GlassLink[];
+  maxMembers?: number;
+  simulcast?: boolean;
 }
 
 // Element/cursor state pushed from the backend (protocol 0x05).

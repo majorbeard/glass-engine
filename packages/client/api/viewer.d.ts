@@ -86,6 +86,7 @@ declare class MobileKeyboardController {
 }
 
 interface GlassViewerOptions {
+    source: string;
     onNavigation?: (nav: NavigationState) => void;
     onContextMenu?: (x: number, y: number, shiftKey: boolean) => void;
     isMobile?: boolean;
@@ -96,7 +97,7 @@ interface GlassViewer {
     readonly video: HTMLVideoElement;
     destroy(): void;
 }
-declare function mountGlassViewer(container: HTMLElement, client: GlassClient, options?: GlassViewerOptions): GlassViewer;
+declare function mountGlassViewer(container: HTMLElement, client: GlassClient, options: GlassViewerOptions): GlassViewer;
 
 export {
     DEFAULT_GAMEPAD_MAPPING,

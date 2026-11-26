@@ -1,95 +1,74 @@
 # Calls
 
-A call session connects exactly two peers. Each sends its camera and
-microphone to Glass and receives the other's, over one peer connection per
-peer. Media is forwarded without decoding. Calls are for two people; for
-many-way conferencing, use a dedicated conferencing server.
+Two people seeing and hearing each other are a session of two members, each
+publishing a camera and a microphone and watching the other's. There is no
+separate call API: a call is a [session whose members publish](producers.md),
+with two links. Media is forwarded without decoding. Glass is built for a
+small number of members a session; for many-way conferencing, use a
+dedicated conferencing server.
 
 Read [concepts.md](../concepts.md) first.
 
-## Creating a call
+**Coming from 0.1?** `/v1/calls` and its peer URLs are gone; see
+[Migrating from 0.1](../migrating-from-0.1.md).
+
+## Making a call
+
+Your backend, with the API token:
 
 ```sh
+# A session of at most two members
 curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
-  http://glass.example.com/v1/calls
+  -H 'Content-Type: application/json' -d '{"maxMembers": 2}' \
+  https://glass.example.com/v1/sessions
+
+# One link for each person: each watches everything and publishes a camera and a microphone
+curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"watch": "all", "publish": ["camera", "microphone"]}' \
+  https://glass.example.com/v1/sessions/<id>/links
 ```
 
-```json
-{
-  "id": "5c0b…",
-  "peerAUrl": "wss://glass.example.com/v1/calls/5c0b…/peers/a/signaling?token=…",
-  "peerBUrl": "wss://glass.example.com/v1/calls/5c0b…/peers/b/signaling?token=…",
-  "codec": "h264",
-  "protocolVersion": 2,
-  "sourceType": "call"
-}
-```
-
-Give `peerAUrl` to one participant and `peerBUrl` to the other. Each URL
-carries that peer's identity: it only works for its own peer, and only one
-connection holds it at a time. There is no unscoped URL for a call. A call
-nobody joins is closed after 10 minutes.
-
-The peer links stop admitting new connections after the server's link
-lifetime (24 h by default); a body `{"linkExpiresIn": <seconds>}` sets it
-for this call (`0` for never), and the response then carries
-`linksExpireAt`. A peer whose link has expired is closed with `4401` and
-can't rejoin with it. See
-[protocol.md](../protocol.md#link-expiry).
-
-`GET /v1/calls/{id}` reports its state; `DELETE /v1/calls/{id}` ends it.
+Mint the link twice, and give one `url` to each person. A third join is
+refused (`409` `session_full`). Each link stops admitting new connections
+after the engine's link lifetime (24 h by default; `expiresIn` sets it).
+`DELETE /v1/sessions/{id}` ends the call for both; it also ends on its own
+when both have left.
 
 ## Joining
 
 [`examples/call-capacitor`](../../examples/call-capacitor) is a complete
-Android call app; [`examples/quickstart/call.html`](../../examples/quickstart/call.html)
-is the same flow in one web page.
-
-The peer offers, Glass answers, the same as a relay producer
-([producers.md](producers.md#connecting)):
+Android call app, and [`examples/quickstart/call.html`](../../examples/quickstart/call.html)
+the same in one web page.
 
 ```ts
-const pc = new RTCPeerConnection();
+import { GlassClient } from "@glass/client";
+
 const local = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-local.getTracks().forEach((t) => pc.addTrack(t, local));
+const client = new GlassClient({ link });
+client.publish(local.getVideoTracks()[0], { kind: "camera" });
+client.publish(local.getAudioTracks()[0], { kind: "microphone" });
 
+// The other person's camera and microphone are two sources, each with its
+// own stream: one stream of both plays them in one <video>.
 const remote = new MediaStream();
-pc.ontrack = (e) => { remote.addTrack(e.track); showRemote(remote); };
-
-const ws = new WebSocket(peerUrl);
-pc.onicecandidate = (e) => {
-  if (e.candidate) ws.send(JSON.stringify({ type: "ice-candidate", candidate: e.candidate.toJSON() }));
-};
-ws.onmessage = async (event) => {
-  const msg = JSON.parse(event.data);
-  if (msg.type === "ice_config") {              // first message: this peer's STUN and TURN
-    pc.setConfiguration({ iceServers: msg.iceServers });
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    ws.send(JSON.stringify({ type: "offer", sdp: offer.sdp }));
-  }
-  if (msg.type === "answer") await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
-  if (msg.type === "ice-candidate") await pc.addIceCandidate(msg.candidate);
-};
+client.on("track", (_sourceId, stream) => {
+  for (const t of stream.getTracks()) if (!remote.getTracks().includes(t)) remote.addTrack(t);
+  remoteVideo.srcObject = remote;
+});
+await client.connect();
 ```
 
-The offer waits for `ice_config`, Glass's first message: it carries the TURN
-credential for this peer's connection when Glass mints them
-([deployment.md](../deployment.md#turn)). An engine older than v0.1.89
-sends none; offer once the socket opens instead.
-
-- Send video in the call's `codec`, and optionally one Opus audio track.
-  Glass doesn't check a peer's offer for it, as it does a relay producer's:
-  there is no `codec_mismatch` on a call, so make sure of the codec yourself.
-- A peer that joins first sees a silent, black remote track until the other
-  peer arrives. No renegotiation is needed when it does.
-- Glass sends WebSocket pings; a peer must answer within 30 s or it is treated
-  as disconnected. Browsers answer pings automatically; with another WebSocket
-  library, make sure it does.
+Each member receives the other's camera and microphone, never its own. A
+member who joins first sees nothing until the other arrives
+(`source_added`). Without the SDK, follow
+[Connecting your own publisher](producers.md#connecting-your-own-publisher):
+it is the same connection, with a link that also watches.
 
 ## Dropped connections
 
-The reconnect rules in [concepts.md](../concepts.md#reconnects) apply per
-peer. If one peer's network drops, the other stays connected; the dropped
-peer reconnects on its own URL within the grace window and the call resumes.
-Close with code `1000` only when the user hangs up.
+The reconnect rules in [concepts.md](../concepts.md#reconnects) apply to
+each member. If one person's network drops, the other stays connected; the
+dropped one reconnects with the same link within the grace and the call goes
+on. Leave with `disconnect()` (close code `1000`) only when the person hangs
+up.

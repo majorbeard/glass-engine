@@ -12,7 +12,12 @@ function fakeClient(connected: boolean) {
   return {
     isConnected: vi.fn(() => connected),
     on: vi.fn(() => () => {}),
-    getVideoStream: vi.fn(() => null),
+    // The viewer's source: its input goes to it. The fake is its own
+    // source, so a test reads the input from the one object.
+    source(this: unknown) {
+      return this;
+    },
+    stream: vi.fn(() => null),
     sendInitialViewport: vi.fn(),
     setViewport: vi.fn(),
     reportPixelTraceSamples: vi.fn(),
@@ -68,7 +73,7 @@ describe("viewport reporting", () => {
     // Mounted after "connected" fired but before the input channel opened:
     // isConnected() is still false, and "connected" won't fire again.
     const client = fakeClient(false);
-    viewer = mountGlassViewer(container, client as any, { isMobile: false });
+    viewer = mountGlassViewer(container, client as any, { source: "src1", isMobile: false });
     expect(client.sendInitialViewport).toHaveBeenCalledTimes(1);
     expect(client.sendInitialViewport.mock.calls[0]!.slice(0, 2)).toEqual([1278, 744]);
   });
@@ -76,7 +81,7 @@ describe("viewport reporting", () => {
   it("corrects a wrong first reading even when the stage never resizes", () => {
     rect = { width: 1265, height: 200 };
     const client = fakeClient(true);
-    viewer = mountGlassViewer(container, client as any, { isMobile: false });
+    viewer = mountGlassViewer(container, client as any, { source: "src1", isMobile: false });
     expect(client.sendInitialViewport.mock.calls[0]!.slice(0, 2)).toEqual([1264, 240]);
 
     // The layout settles; no resize is reported.
@@ -88,7 +93,7 @@ describe("viewport reporting", () => {
 
   it("sends nothing more when the first reading was right", () => {
     const client = fakeClient(true);
-    viewer = mountGlassViewer(container, client as any, { isMobile: false });
+    viewer = mountGlassViewer(container, client as any, { source: "src1", isMobile: false });
     vi.advanceTimersByTime(600);
     observedResize();
     vi.advanceTimersByTime(600);
@@ -99,7 +104,7 @@ describe("viewport reporting", () => {
     let connected = false;
     const client = fakeClient(false);
     client.isConnected.mockImplementation(() => connected);
-    viewer = mountGlassViewer(container, client as any, { isMobile: false });
+    viewer = mountGlassViewer(container, client as any, { source: "src1", isMobile: false });
 
     // A resize while the input channel is still closed: nothing can be sent.
     rect = { width: 1000, height: 600 };

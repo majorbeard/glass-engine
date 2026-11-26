@@ -2,8 +2,9 @@
 
 How much machine Glass needs depends almost entirely on which sources you
 run. A hosted browser renders and encodes video, and costs real CPU for as long
-as its page changes. Relay streams and calls are forwarded without decoding,
-so they cost little CPU; your network's upload capacity usually runs out first.
+as its page changes. Published tracks (a phone's camera, a call) are forwarded
+without decoding, so they cost little CPU; your network's upload capacity
+usually runs out first.
 
 The numbers below were measured on AWS Graviton instances (c6g, c7g). Use
 them to pick a starting point, then measure your own workload.
@@ -38,10 +39,12 @@ news site, the CPU split was **Chrome 81%, encoder 15%, the Glass engine 4%**.
   about half used, so the CPU, not the GPU, sets the count
   ([performance.md](performance.md#how-many-sessions-one-gpu-carries)).
 
-## Relay streams and calls
+## Published streams and calls
 
 The engine forwards packets and doesn't decode them. Measured on 4 vCPU (c6g.xlarge,
-arm64), each viewer receiving about 1 Mbit/s, producers sending three simulcast layers:
+arm64), each viewer receiving about 1 Mbit/s, publishers sending three simulcast
+layers. These were measured on 0.1's relay sessions; a published track takes the
+same forwarding path in 0.2.
 
 | Resource | Cost |
 |---|---|
@@ -54,28 +57,28 @@ So a host serving S streams to V viewers in all needs about 7.5 × S + 4.5 × V
 millicores at 1 Mbit/s a viewer: 100 streams to 1,000 viewers about 5.3 cores. It
 grows linearly.
 
-In practice, **upload bandwidth is usually the limit** for relay deployments. A
+In practice, **upload bandwidth is usually the limit** where members publish. A
 1 Gbit/s link carries about 500 viewers at 2 Mbit/s. Check the CPU too: 500
 viewers at 1 Mbit/s took 2.7 of 4 cores; expect the cost per viewer to grow with its
 bitrate (only 1 Mbit/s was measured).
 
-**Relays and browser sessions on one host.** Their costs add, with a little more:
-on a 12-vCPU GPU host, browser sessions and 250 relay viewers together took about
-16% more CPU than each alone, the extra in the relay's work. Size the relay part
-20% higher when a host runs both. For heavy mixed loads, run relays and browsers on
-separate engines, best on separate hosts: that removes the extra entirely.
+**Forwarding and browser sessions on one host.** Their costs add, with a little
+more: on a 12-vCPU GPU host, browser sessions and 250 forwarded viewers together
+took about 16% more CPU than each alone, the extra in the forwarding. Size the
+forwarding part 20% higher when a host runs both. For heavy mixed loads, run them
+on separate engines, best on separate hosts: that removes the extra entirely.
 
-### Relay viewers and admission
+### Viewers of published streams, and admission
 
-New relay sessions pass the same CPU check as browser sessions (below), but a relay
-session costs little when it starts; its cost arrives with its viewers, and an
-engine that forwards video has no lower picture quality to fall back on. So set a
-budget for them, `GLASS_RELAY_MAX_VIEWERS`: the most viewers of relay sessions at
-once on the engine. A viewer past it is refused before it joins, with a reason, and
+New sessions whose members publish pass the same CPU check as browser sessions
+(below), but such a session costs little when it starts; its cost arrives with its
+viewers, and an engine that forwards video has no lower picture quality to fall
+back on. So set a budget for them, `GLASS_RELAY_MAX_VIEWERS`: the most watching
+members of such sessions at once on the engine. A viewer past it is refused before it joins, with a reason, and
 can try again later; `GET /v1/info` shows `capacity.relayViewers` against
 `capacity.relayViewerLimit`. Work it out from the cost per viewer: at 1 Mbit/s,
 about 4.5 millicores, 5.5 when the host also runs browser sessions, so 500 viewers
-take about 2.7 cores. Scale it with your producers' top-layer bitrate.
+take about 2.7 cores. Scale it with your publishers' top-layer bitrate.
 
 ## Viewers through the built-in TURN relay
 
@@ -137,10 +140,10 @@ doesn't refuse work.
 
 ## Admission under load
 
-Glass protects the host itself. A new browser or relay session is admitted only
+Glass protects the host itself. A new session is admitted only
 while host CPU is below 85% (`GLASS_HARD_CAP_CPU_THRESHOLD_PERCENT`). Each new browser
-session reserves a core's worth of headroom until its own load shows (a relay session
-far less, what its first viewer costs), so a burst of
+session reserves a core's worth of headroom until its own load shows (one whose
+members publish far less, what its first viewer costs), so a burst of
 requests can't oversubscribe the host. Refused sessions get `503` after a
 short wait. Once it has started refusing, Glass admits again only when CPU is
 back below 75% (`GLASS_HARD_CAP_CPU_READMIT_PERCENT`, the threshold minus 10), so

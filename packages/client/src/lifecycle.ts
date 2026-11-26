@@ -7,6 +7,7 @@ import * as transport from "./transport";
 import * as mic from "./mic";
 import * as handoff from "./handoff";
 import { stopRepairWait } from "./repair_wait";
+import * as publish from "./publish";
 import {
   CLOSE_LINK_EXPIRED,
   CLOSE_LINK_REVOKED,
@@ -15,7 +16,6 @@ import {
   LINK_EXPIRED_MESSAGE,
   LINK_REVOKED_MESSAGE,
   VIEWER_LIMIT_MESSAGE,
-  deleteGlassSession,
   type GlassCloseCode,
 } from "./index";
 import { SUPPORTED_PROTOCOL_VERSION, protocolMismatchMessage } from "./protocol_version";
@@ -24,6 +24,10 @@ import { DEFAULT_RECONNECT_DELAYS_MS, SESSION_NOT_FOUND_MESSAGE, SIGNALING_TIMEO
 // Signaling `error` codes after which the session cannot continue, so the
 // client closes instead of reconnecting (docs/protocol.md, "error").
 const SESSION_OVER_CODES = new Set(["source_failed", "session_not_resumable"]);
+
+// HELLO: the first message of every connection, which says who it
+// is; nothing else comes before it (protocol v3).
+const HELLO = "hello";
 
 // See GlassClient.connect.
 export async function connect(c: ClientCore): Promise<void> {
@@ -73,7 +77,8 @@ export function nextDelayMs(c: ClientCore): number {
   return c.delaysMs[i] ?? DEFAULT_RECONNECT_DELAYS_MS[0]!;
 }
 
-// One full connection attempt: signaling WS -> offer/answer -> PC/DC. Resolves
+// One full connection attempt: the socket, hello, this client's offer and
+// Glass's answer, the peer connection and its data channels. Resolves
 // when the PC reaches "connected"; rejects on any failure/timeout during the
 // handshake. Once resolved, a later drop is handled by the state-change
 // handlers (ICE restart for a transient PC drop, background full reconnect
@@ -83,24 +88,17 @@ export function establish(c: ClientCore): Promise<void> {
   c.signalingConnected = false;
   c.peerConnected = false;
   c.iceCandidateQueue = [];
-  // Reset here, not just left stale, for the same reason iceCandidateQueue
-  // is cleared above - the fresh "offer" this attempt is about to request
-  // reports the authoritative current values immediately (see handleSignal's
-  // "offer" case), whether this resumes the same backend Connection (same
-  // id, current producesInput) or joins as a genuinely new one.
-  c._connectionId = null;
-  c._producesInput = false;
-  c._floorHolder = null;
-  c._dialog = null;
+  // This attempt's hello says afresh who the connection is and what holds
+  // what; the sources stay, so a viewer bound to one keeps it, and hello
+  // updates or removes them. A resumed connection keeps its id.
   c._recording = false;
-  c._playback = null;
-  c._isOwner = false;
-  // Cleared, not carried over - a fresh "roster" snapshot always follows
-  // the next offer for an owner connection (see HandleSessionSignaling's
-  // own doc comment on this), even on a reconnect, specifically so stale
-  // entries from before a reconnect gap (someone left/joined/changed
-  // state while this connection was down) never linger.
-  c._connections = new Map();
+  c._deniedWatch = [];
+  c._deniedControl = [];
+  for (const st of c.sources.values()) {
+    st.holders = [];
+    st.floor = null;
+    st.dialog = null;
+  }
 
   return new Promise<void>((resolve, reject) => {
     // Settled is this attempt's own: a timer or event of an earlier attempt
@@ -120,7 +118,7 @@ export function establish(c: ClientCore): Promise<void> {
 
     let ws: WebSocket;
     try {
-      ws = new WebSocket(c.signalingUrl);
+      ws = new WebSocket(c.link);
     } catch (err) {
       settle(() => reject(err));
       return;
@@ -159,11 +157,11 @@ export function establish(c: ClientCore): Promise<void> {
           c.emit("error", reason, code);
           return;
         }
-        // The engine's ICE servers come first on every connection, before
-        // the offer; each reconnect brings a fresh TURN credential. The
-        // protocol version comes with them: a client that joined by link
-        // alone learns here whether it speaks the engine's contract.
-        if (signal.type === "ice_config") {
+        // hello comes first, with the protocol version and the engine's ICE
+        // servers (each reconnect brings a fresh TURN credential): a client
+        // that joined by link alone learns here whether it speaks the
+        // engine's contract, and refuses one it doesn't before anything else.
+        if (signal.type === HELLO && !c.pc) {
           const version = typeof signal.protocolVersion === "number" ? signal.protocolVersion : 1;
           if (version !== SUPPORTED_PROTOCOL_VERSION) {
             c.sessionGone = { reason: protocolMismatchMessage(version), code: "protocol_mismatch" };
@@ -174,9 +172,6 @@ export function establish(c: ClientCore): Promise<void> {
             return;
           }
           if (Array.isArray(signal.iceServers)) c.serverIceServers = signal.iceServers;
-          return;
-        }
-        if (!c.pc && signal.type === "offer") {
           transport.initPeerConnection(c, () => {
             // onConnected for this attempt
             settle(() => resolve());
@@ -328,11 +323,6 @@ export function disconnect(c: ClientCore): void {
     }
     detachWs(c);
   }
-  if (c.sessionId && c.deleteOnClose) {
-    deleteGlassSession({ id: c.sessionId, baseUrl: c.sessionBaseUrl, apiToken: c.apiToken }).catch(() => {
-      // Best-effort: the engine also ends a session its last connection left.
-    });
-  }
   c.emit("closed", "client disconnected", "client_disconnected");
 }
 
@@ -369,10 +359,14 @@ export function teardownInternals(c: ClientCore): void {
     c.encodedStreamChecker.stop();
     c.encodedStreamChecker = null;
   }
-  // The stream belongs to the peer connection we're tearing down; drop it so
-  // a viewer mounting mid-reconnect doesn't bind a dead track (a fresh
-  // ontrack will replace it when the reconnect completes).
-  c.currentStream = null;
+  // The streams hold the peer connection's tracks, going with it; the
+  // reconnect's lines bring fresh ones. The lines' mappings and the offers in
+  // flight are the old connection's too.
+  for (const st of c.sources.values()) st.stream = null;
+  publish.detachAll(c);
+  c.mids = new Map();
+  c.pendingTracks = new Map();
+  c.negotiation = Promise.resolve();
 
   if (c.dataChannel) {
     try {

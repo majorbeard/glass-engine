@@ -1,15 +1,17 @@
 // The peer connection, its DataChannels, and the two inbound paths:
 // binary DataChannel messages and signaling messages. See GlassClient (index.ts) for the public API.
 
-import type { ClientCore } from "./core";
+import type { ClientCore, SourceState } from "./core";
 import * as drops from "./drops";
 import * as lifecycle from "./lifecycle";
 import * as handoff from "./handoff";
 import * as mic from "./mic";
 import * as statsTrace from "./stats_trace";
-import type { ElementState, GlassDialog, GlassRosterEntry, GlassSlotState, GlassTimelineEvent, InteractiveElement, NavigationState } from "./types";
+import type { ElementState, GlassDialog, GlassMember, GlassRights, GlassSourceInfo, GlassTimelineEvent, InteractiveElement, NavigationState } from "./types";
 import { EncodedStreamChecker } from "./encoded_stream_check";
 import { startRepairWait } from "./repair_wait";
+import * as publish from "./publish";
+import { withStartBitrate } from "./sdp";
 
 // Binary DataChannel message types pushed from the engine. Must match
 // docs/protocol.md.
@@ -87,28 +89,17 @@ export function initPeerConnection(c: ClientCore, onConnectedThisAttempt: () => 
       });
       c.encodedStreamChecker.start();
     }
-    // Built from individual tracks, not event.streams[0]: a session with
-    // both video and audio has
-    // Glass construct each track with its OWN distinct stream
-    // ID ("glass-screencast" for video, "glass-audio" for audio) - so the browser delivers
-    // them as two SEPARATE ontrack events, each with its own
-    // single-track event.streams[0]. Reassigning this.currentStream
-    // wholesale to whichever arrived most recently (the original
-    // behavior here) meant audio's ontrack firing after video's would
-    // silently replace the <video> element's srcObject with an
-    // audio-only stream - a real bug, caught before it ever shipped:
-    // the element would go blank the instant a session's audio track
-    // was negotiated, video track included or not. Instead, every track
-    // that arrives (regardless of kind, and regardless of arrival
-    // order) is added to one persistent MediaStream this connection
-    // owns - video and audio end up in the same stream a <video>
-    // element plays both from natively, exactly as if they'd arrived
-    // together in one event.streams[0] to begin with.
-    if (!c.currentStream) {
-      c.currentStream = new MediaStream();
+    // An idle receive line fires a track too: only a line Glass has mapped to
+    // a source ("tracks") joins that source's stream; one not yet mapped
+    // waits for its mapping.
+    const mid = event.transceiver?.mid;
+    if (!mid) return;
+    const source = c.mids.get(mid);
+    if (source === undefined) {
+      c.pendingTracks.set(mid, event.track);
+      return;
     }
-    c.currentStream.addTrack(event.track);
-    c.emit("videoTrack", c.currentStream);
+    addToSource(c, source, event.track);
   };
 
   pc.ondatachannel = (event) => {
@@ -146,6 +137,7 @@ export function initPeerConnection(c: ClientCore, onConnectedThisAttempt: () => 
         c.peerConnected = true;
         c.reconnectAttempt = 0;
         c.emit("connected");
+        publish.onConnected(c);
         onConnectedThisAttempt();
         statsTrace.startStatsPollingIfEnabled(c);
         statsTrace.startInternalTraceReportingIfEnabled(c);
@@ -182,6 +174,13 @@ export function setupDataChannel(c: ClientCore): void {
   };
 }
 
+// sourceOf is the source a DataChannel message names (protocol v3: each
+// message about a source names it, the first source's included).
+function sourceOf(body: unknown): string {
+  const s = (body as { source?: unknown } | null)?.source;
+  return typeof s === "string" ? s : "";
+}
+
 export function handleBinaryMessage(c: ClientCore, data: ArrayBuffer): void {
   if (data.byteLength < 1) return;
   const view = new DataView(data);
@@ -192,18 +191,22 @@ export function handleBinaryMessage(c: ClientCore, data: ArrayBuffer): void {
     switch (messageType) {
       case MessageType.NavigationState:
         if (data.byteLength > offset) {
-          const nav: NavigationState = JSON.parse(
+          const nav: NavigationState & { source?: string } = JSON.parse(
             decoder.decode(new Uint8Array(view.buffer, offset))
           );
-          c.emit("navigation", nav);
+          const source = sourceOf(nav);
+          delete nav.source;
+          c.emit("navigation", nav, source);
         }
         break;
       case MessageType.ElementStateUpdate:
         if (data.byteLength > offset) {
-          const state: ElementState = JSON.parse(
+          const state: ElementState & { source?: string } = JSON.parse(
             decoder.decode(new Uint8Array(view.buffer, offset))
           );
-          c.emit("elementState", state);
+          const source = sourceOf(state);
+          delete state.source;
+          c.emit("elementState", state, source);
         }
         break;
       case MessageType.ViewportSize:
@@ -214,7 +217,7 @@ export function handleBinaryMessage(c: ClientCore, data: ArrayBuffer): void {
           const parsed: { elements?: InteractiveElement[] } = JSON.parse(
             decoder.decode(new Uint8Array(view.buffer, offset))
           );
-          c.emit("interactiveElements", parsed.elements || []);
+          c.emit("interactiveElements", parsed.elements || [], sourceOf(parsed));
         }
         break;
       case MessageType.ClipboardText:
@@ -222,7 +225,7 @@ export function handleBinaryMessage(c: ClientCore, data: ArrayBuffer): void {
           const parsed: { text?: string } = JSON.parse(
             decoder.decode(new Uint8Array(view.buffer, offset))
           );
-          c.emit("clipboardText", parsed.text || "");
+          c.emit("clipboardText", parsed.text || "", sourceOf(parsed));
         }
         break;
       case MessageType.ConsoleMessage:
@@ -230,7 +233,7 @@ export function handleBinaryMessage(c: ClientCore, data: ArrayBuffer): void {
           const parsed: { level?: string; text?: string } = JSON.parse(
             decoder.decode(new Uint8Array(view.buffer, offset))
           );
-          c.emit("consoleMessage", parsed.level || "log", parsed.text || "");
+          c.emit("consoleMessage", parsed.level || "log", parsed.text || "", sourceOf(parsed));
         }
         break;
       case MessageType.DownloadReady:
@@ -239,7 +242,7 @@ export function handleBinaryMessage(c: ClientCore, data: ArrayBuffer): void {
             decoder.decode(new Uint8Array(view.buffer, offset))
           );
           if (parsed.guid) {
-            c.emit("downloadReady", parsed.filename || "download", parsed.guid);
+            c.emit("downloadReady", parsed.filename || "download", parsed.guid, sourceOf(parsed));
           }
         }
         break;
@@ -248,12 +251,14 @@ export function handleBinaryMessage(c: ClientCore, data: ArrayBuffer): void {
           const parsed: { multiple?: boolean } = JSON.parse(
             decoder.decode(new Uint8Array(view.buffer, offset))
           );
-          c.emit("fileChooserOpened", !!parsed.multiple);
+          c.emit("fileChooserOpened", !!parsed.multiple, sourceOf(parsed));
         }
         break;
-      case MessageType.FileChooserClosed:
-        c.emit("fileChooserClosed");
+      case MessageType.FileChooserClosed: {
+        const parsed = data.byteLength > offset ? JSON.parse(decoder.decode(new Uint8Array(view.buffer, offset))) : {};
+        c.emit("fileChooserClosed", sourceOf(parsed));
         break;
+      }
       case MessageType.InputFrame:
         if (data.byteLength > offset) {
           const parsed: { f?: number; i?: { s: number }[] } = JSON.parse(
@@ -277,7 +282,7 @@ export function handleBinaryMessage(c: ClientCore, data: ArrayBuffer): void {
           const parsed: { origin?: string } = JSON.parse(
             decoder.decode(new Uint8Array(view.buffer, offset))
           );
-          c.emit("micAccessRequested", parsed.origin || "");
+          c.emit("micAccessRequested", parsed.origin || "", sourceOf(parsed));
         }
         break;
       case MessageType.InputDropped:
@@ -287,10 +292,13 @@ export function handleBinaryMessage(c: ClientCore, data: ArrayBuffer): void {
         break;
       case MessageType.Dialog:
         if (data.byteLength > offset) {
-          const parsed: GlassDialog = JSON.parse(decoder.decode(new Uint8Array(view.buffer, offset)));
+          const parsed: GlassDialog & { source?: string } = JSON.parse(decoder.decode(new Uint8Array(view.buffer, offset)));
+          const source = sourceOf(parsed);
+          delete parsed.source;
           const d: GlassDialog = { ...parsed, open: !!parsed.open, inPicture: !!parsed.inPicture };
-          c._dialog = d.open ? d : null;
-          c.emit("dialog", d);
+          const st = c.sources.get(source);
+          if (st) st.dialog = d.open ? d : null;
+          c.emit("dialog", d, source);
         }
         break;
       case MessageType.Error:
@@ -307,38 +315,174 @@ export function handleBinaryMessage(c: ClientCore, data: ArrayBuffer): void {
   }
 }
 
+// addToSource adds a received track to its source's stream and tells the
+// application. The stream is the source's own, kept across tracks, so a
+// <video> bound to it plays its picture and its sound alike.
+function addToSource(c: ClientCore, sourceId: string, track: MediaStreamTrack): void {
+  const st = c.sources.get(sourceId);
+  if (!st) return;
+  if (!st.stream) st.stream = new MediaStream();
+  st.stream.addTrack(track);
+  c.emit("track", sourceId, st.stream);
+}
+
+// Receive lines a connection opens with: three of each kind, as LiveKit's
+// single connection does; Glass asks for more with slots_needed.
+const START_VIDEO = 3;
+const START_AUDIO = 3;
+
+function addReceiveLines(pc: RTCPeerConnection, video: number, audio: number): void {
+  for (let i = 0; i < video; i++) pc.addTransceiver("video", { direction: "recvonly" });
+  for (let i = 0; i < audio; i++) pc.addTransceiver("audio", { direction: "recvonly" });
+}
+
+// offer makes and sends an offer, after any offer before it: on hello, when
+// Glass asks for more lines, and when this client publishes.
+export function offer(c: ClientCore): void {
+  c.negotiation = c.negotiation
+    .then(async () => {
+      const pc = c.pc;
+      if (!pc) return;
+      const o = await pc.createOffer();
+      await pc.setLocalDescription(o);
+      // What this connection publishes is announced before the offer that
+      // carries it: the microphone a hosted browser takes, and each track
+      // published.
+      const micLine = c.micSender && pc.getTransceivers().find((t) => t.sender === c.micSender);
+      if (micLine?.mid) c.ws?.send(JSON.stringify({ type: "publish", mid: micLine.mid, kind: "microphone" }));
+      publish.announce(c);
+      c.ws?.send(JSON.stringify({ type: "offer", sdp: o.sdp || "" }));
+    })
+    .catch(() => undefined);
+}
+
+// answerSdp is Glass's answer with the rate a published picture's congestion
+// control starts from (Chromium's x-google-start-bitrate): without it a
+// camera starts low and takes seconds to climb.
+function answerSdp(c: ClientCore, sdp: string): string {
+  const pictures = c.publications.filter((p) => p.track.kind === "video");
+  if (pictures.length === 0) return sdp;
+  return withStartBitrate(sdp, Math.min(...pictures.map((p) => p.startBitrateKbps)));
+}
+
+// sourceInfo reads a source as the engine describes it, or null for one
+// without an id.
+function sourceInfo(raw: unknown): GlassSourceInfo | null {
+  const r = raw as Partial<GlassSourceInfo> | null;
+  if (!r || typeof r.id !== "string" || r.id === "") return null;
+  return {
+    ...r,
+    id: r.id,
+    kind: String(r.kind ?? ""),
+    state: r.state === "stalled" || r.state === "ended" ? r.state : "live",
+    capabilities: r.capabilities ?? {},
+    inputMode: r.inputMode === "free" ? "free" : "floor",
+    inspect: !!r.inspect,
+  };
+}
+
+// putSource adds a source or updates its description, telling the
+// application which.
+function putSource(c: ClientCore, info: GlassSourceInfo): void {
+  const st = c.sources.get(info.id);
+  if (st) {
+    st.info = info;
+    c.emit("sourceUpdated", { ...info });
+    return;
+  }
+  const fresh: SourceState = { info, stream: null, holders: [], floor: null, dialog: null, playback: null };
+  c.sources.set(info.id, fresh);
+  c.emit("sourceAdded", { ...info });
+}
+
+function removeSource(c: ClientCore, id: string, reason: string): void {
+  const st = c.sources.get(id);
+  if (!st) return;
+  c.sources.delete(id);
+  for (const [mid, src] of c.mids) if (src === id) c.mids.delete(mid);
+  c.emit("sourceRemoved", id, reason);
+}
+
+// onHello takes the first message: who this connection is, what its link may
+// do, the session's sources, and for an owner the other members. A
+// reconnect's hello replaces what the last one said: a source the engine no
+// longer lists has gone.
+function onHello(c: ClientCore, pc: RTCPeerConnection, signal: any): void {
+  if (typeof signal.connectionId === "string") c._connectionId = signal.connectionId;
+  c._owner = signal.owner === true;
+  c._rights = (signal.rights ?? null) as GlassRights | null;
+  const listed = new Set<string>();
+  for (const raw of Array.isArray(signal.sources) ? signal.sources : []) {
+    const info = sourceInfo(raw);
+    if (!info) continue;
+    listed.add(info.id);
+    putSource(c, info);
+  }
+  for (const id of [...c.sources.keys()]) if (!listed.has(id)) removeSource(c, id, "gone");
+  c._members = new Map();
+  for (const raw of Array.isArray(signal.members) ? signal.members : []) {
+    const m = raw as GlassMember;
+    if (m && typeof m.connectionId === "string") c._members.set(m.connectionId, { connectionId: m.connectionId, owner: !!m.owner, rights: m.rights });
+  }
+  c.emit("hello", c._connectionId ?? "", c._owner);
+  if (c._owner) c.emit("membersChanged", handoff.members(c));
+  if (c._rights?.watch !== "none") addReceiveLines(pc, START_VIDEO, START_AUDIO);
+  // The microphone a hosted browser takes from its member: a silent
+  // placeholder, published as this member's microphone, that grantMicAccess()
+  // replaces with the real one. Only where a browser is there to take it.
+  if ([...c.sources.values()].some((st) => st.info.kind === "browser")) mic.attachMicPlaceholder(c, pc, true);
+  // What this client publishes, on the new connection.
+  for (const pub of c.publications) publish.attach(c, pub);
+  // Glass opens its data channels on the client's data section; this one makes it.
+  pc.createDataChannel("glass-client");
+  offer(c);
+}
+
+async function flushCandidates(c: ClientCore, pc: RTCPeerConnection): Promise<void> {
+  while (c.iceCandidateQueue.length > 0) {
+    const candidate = c.iceCandidateQueue.shift();
+    if (candidate) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch {
+        // ignore a single bad queued candidate
+      }
+    }
+  }
+}
+
 export async function handleSignal(c: ClientCore, signal: any): Promise<void> {
   const pc = c.pc;
   if (!pc) return;
   try {
     switch (signal.type) {
-      case "offer": {
-        if (typeof signal.connectionId === "string") {
-          c._connectionId = signal.connectionId;
-        }
-        if (typeof signal.producesInput === "boolean") {
-          c._producesInput = signal.producesInput;
-        }
-        if (typeof signal.isOwner === "boolean") {
-          c._isOwner = signal.isOwner;
-        }
-        await pc.setRemoteDescription({ type: "offer", sdp: signal.sdp });
-        mic.attachMicPlaceholder(c, pc);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        c.ws?.send(JSON.stringify({ type: "answer", sdp: answer.sdp || "" }));
-        while (c.iceCandidateQueue.length > 0) {
-          const candidate = c.iceCandidateQueue.shift();
-          if (candidate) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(candidate));
-            } catch {
-              // ignore a single bad queued candidate
+      case "hello":
+        onHello(c, pc, signal);
+        break;
+      case "answer":
+        c.negotiation = c.negotiation.then(async () => {
+          await pc.setRemoteDescription({ type: "answer", sdp: answerSdp(c, String(signal.sdp ?? "")) });
+          await flushCandidates(c, pc);
+        }).catch(() => undefined);
+        break;
+      case "tracks":
+        if (Array.isArray(signal.tracks)) {
+          for (const t of signal.tracks) {
+            if (t && typeof t.mid === "string") c.mids.set(t.mid, String(t.source ?? ""));
+          }
+          for (const [mid, track] of c.pendingTracks) {
+            const source = c.mids.get(mid);
+            if (source !== undefined) {
+              c.pendingTracks.delete(mid);
+              addToSource(c, source, track);
             }
           }
         }
         break;
-      }
+      case "slots_needed":
+        addReceiveLines(pc, Number(signal.video) || 0, Number(signal.audio) || 0);
+        offer(c);
+        break;
       case "ice-candidate":
         if (signal.candidate && signal.candidate.candidate) {
           const candidate = new RTCIceCandidate(signal.candidate);
@@ -353,111 +497,88 @@ export async function handleSignal(c: ClientCore, signal: any): Promise<void> {
           }
         }
         break;
-      // docs/protocol.md's "Control handoff" section.
-      case "capabilities_changed": {
-        const connectionId = String(signal.connectionId ?? "");
-        const producesInput = !!signal.producesInput;
-        const isSelf = connectionId !== "" && connectionId === c._connectionId;
-        if (isSelf) {
-          c._producesInput = producesInput;
-        } else {
-          // Keep an owner's roster in sync with a change to someone
-          // else's producesInput (e.g. their own request_input got
-          // granted, or another owner revoked them) - only relevant if
-          // this connectionId is already a roster entry (a non-owner
-          // never has one to update - this._connections stays empty for
-          // it, see the field's own doc comment).
-          const existing = c._connections.get(connectionId);
-          if (existing) {
-            c._connections.set(connectionId, { ...existing, producesInput });
-            c.emit("rosterChanged", handoff.connections(c));
-          }
+      case "source_added":
+      case "source_updated": {
+        const info = sourceInfo(signal.source);
+        if (info) putSource(c, info);
+        break;
+      }
+      case "source_removed":
+        removeSource(c, String(signal.id ?? ""), String(signal.reason ?? ""));
+        break;
+      case "rights_changed":
+        c._rights = (signal.rights ?? c._rights) as GlassRights | null;
+        c._deniedWatch = Array.isArray(signal.denied?.watch) ? signal.denied.watch.map(String) : [];
+        c._deniedControl = Array.isArray(signal.denied?.control) ? signal.denied.control.map(String) : [];
+        {
+          const r = handoff.rights(c);
+          if (r) c.emit("rightsChanged", r);
         }
-        c.emit("capabilitiesChanged", connectionId, producesInput, isSelf);
+        break;
+      // docs/protocol.md's "Control handoff" section.
+      case "input_holders": {
+        const source = String(signal.source ?? "");
+        const st = c.sources.get(source);
+        if (!st) break;
+        st.holders = Array.isArray(signal.holders) ? signal.holders.map(String) : [];
+        st.floor = typeof signal.floor === "string" && signal.floor !== "" ? signal.floor : null;
+        c.emit("inputHolders", source, [...st.holders], st.floor);
         break;
       }
       case "input_requested":
-        c.emit("inputRequested", String(signal.connectionId ?? ""));
+        c.emit("inputRequested", String(signal.connectionId ?? ""), String(signal.source ?? ""));
         break;
       case "control_answer":
         handoff.answerControl(c, signal);
         break;
-      case "input_floor": {
-        const holder = typeof signal.connectionId === "string" && signal.connectionId !== "" ? signal.connectionId : null;
-        c._floorHolder = holder;
-        c.emit("floorChanged", holder, holder !== null && holder === c._connectionId);
+      case "member_joined": {
+        const m = signal as GlassMember;
+        if (typeof m.connectionId === "string" && m.connectionId !== "") {
+          c._members.set(m.connectionId, { connectionId: m.connectionId, owner: !!m.owner, rights: m.rights });
+          c.emit("membersChanged", handoff.members(c));
+        }
         break;
       }
+      case "member_left":
+        if (c._members.delete(String(signal.connectionId ?? ""))) c.emit("membersChanged", handoff.members(c));
+        break;
       case "recording":
         c._recording = signal.active === true;
         c.emit("recording", c._recording);
         break;
-      case "playback":
-        c._playback = {
+      case "playback": {
+        const source = String(signal.source ?? "");
+        const st = c.sources.get(source);
+        const state = {
           playing: signal.playing === true,
           positionMs: Number(signal.positionMs) || 0,
           durationMs: Number(signal.durationMs) || 0,
           ended: signal.ended === true,
         };
-        c.emit("playback", c._playback);
+        if (st) st.playback = state;
+        c.emit("playback", state, source);
         break;
+      }
       case "timeline":
         if (signal.event && typeof signal.event === "object") {
-          c.emit("timeline", signal.event as GlassTimelineEvent);
+          c.emit("timeline", signal.event as GlassTimelineEvent, String(signal.source ?? ""));
         }
         break;
       case "new_tab_request":
         if (typeof signal.url === "string") {
-          c.emit("newTabRequested", signal.url);
+          c.emit("newTabRequested", signal.url, String(signal.source ?? ""));
         }
         break;
-      // Roster (docs/protocol.md's Control handoff section) - owner-only;
-      // a non-owner connection never receives any of these three types at
-      // all, so
-      // this._connections simply stays empty for it rather than needing
-      // its own separate gate here.
-      case "connection_joined": {
-        const entry: GlassRosterEntry = {
-          connectionId: String(signal.connectionId ?? ""),
-          producesInput: !!signal.producesInput,
-          isOwner: !!signal.isOwner,
-        };
-        if (entry.connectionId) {
-          c._connections.set(entry.connectionId, entry);
-          c.emit("rosterChanged", handoff.connections(c));
-        }
-        break;
-      }
-      case "connection_left": {
-        const connectionId = String(signal.connectionId ?? "");
-        if (c._connections.delete(connectionId)) {
-          c.emit("rosterChanged", handoff.connections(c));
-        }
-        break;
-      }
-      case "roster": {
-        // A one-time catch-up snapshot, not an incremental update -
-        // replaces this._connections outright rather than merging, so a
-        // reconnect's fresh snapshot can't leave a stale entry behind
-        // from before the gap.
-        const fresh = new Map<string, GlassRosterEntry>();
-        if (Array.isArray(signal.connections)) {
-          for (const raw of signal.connections as Array<Record<string, unknown>>) {
-            const connectionId = String(raw?.connectionId ?? "");
-            if (!connectionId) continue;
-            fresh.set(connectionId, {
-              connectionId,
-              producesInput: !!raw?.producesInput,
-              isOwner: !!raw?.isOwner,
-            });
-          }
-        }
-        c._connections = fresh;
-        c.emit("rosterChanged", handoff.connections(c));
-        break;
-      }
       case "clock_probe":
         answerClockProbe(c, "signaling", Number(signal.id));
+        break;
+      case "layers_wanted":
+        if (Array.isArray(signal.rids)) {
+          publish.onLayersWanted(c, typeof signal.mid === "string" ? signal.mid : undefined, signal.rids.map(String));
+        }
+        break;
+      case "publish_refused":
+        publish.onRefused(c, String(signal.mid ?? ""), String(signal.reason ?? ""));
         break;
       case "connection_quality": {
         const quality = signal.quality;
@@ -466,18 +587,6 @@ export async function handleSignal(c: ClientCore, signal: any): Promise<void> {
           c._connectionQuality = { quality, score: Number.isFinite(score) ? score : 0 };
           c.emit("connectionQuality", quality, c._connectionQuality.score);
         }
-        break;
-      }
-      case "slot_state": {
-        const fresh: Record<string, GlassSlotState> = {};
-        const raw = (signal.slots ?? {}) as Record<string, unknown>;
-        for (const [slot, state] of Object.entries(raw)) {
-          if (state === "empty" || state === "live" || state === "stalled") {
-            fresh[slot] = state;
-          }
-        }
-        c._slotStates = fresh;
-        c.emit("slotStateChanged", handoff.slotStates(c));
         break;
       }
     }
@@ -508,14 +617,16 @@ export function answerClockProbe(c: ClientCore, transport: "datachannel" | "sign
   }
 }
 
-export function sendInput(c: ClientCore, type: string, data: Record<string, unknown>): void {
+// source names the session source the input is for (protocol v3); "" sends
+// none, for what is about no source (telemetry).
+export function sendInput(c: ClientCore, type: string, data: Record<string, unknown>, source = ""): void {
   const dc = c.dataChannel;
   if (!dc || dc.readyState !== "open") return;
   // `t`: client send time (epoch ms). Glass converts it onto its own clock
   // with the offset answerClockProbe lets it measure.
   try {
     const s = c.inputLatency.number(type);
-    dc.send(JSON.stringify({ type, data: { ...data, t: Date.now(), ...(s === undefined ? {} : { s }) } }));
+    dc.send(JSON.stringify({ type, data: { ...data, t: Date.now(), ...(s === undefined ? {} : { s }) }, ...(source ? { source } : {}) }));
   } catch {
     // drop on transient send failure
   }
@@ -530,12 +641,12 @@ export function sendInput(c: ClientCore, type: string, data: Record<string, unkn
 // silently dropping is the whole point of an unreliable channel, and
 // falling back would reintroduce the queuing-under-loss behavior this
 // exists to avoid.
-export function sendInputFast(c: ClientCore, type: string, data: Record<string, unknown>): void {
+export function sendInputFast(c: ClientCore, type: string, data: Record<string, unknown>, source = ""): void {
   const dc = c.fastDataChannel;
   if (!dc || dc.readyState !== "open") return;
   try {
     const s = c.inputLatency.number(type);
-    dc.send(JSON.stringify({ type, data: { ...data, t: Date.now(), ...(s === undefined ? {} : { s }) } }));
+    dc.send(JSON.stringify({ type, data: { ...data, t: Date.now(), ...(s === undefined ? {} : { s }) }, ...(source ? { source } : {}) }));
   } catch {
     // drop on transient send failure
   }
@@ -546,7 +657,7 @@ export function isConnected(c: ClientCore): boolean {
   return c.peerConnected && c.dataChannel?.readyState === "open";
 }
 
-// See GlassClient.getVideoStream.
-export function getVideoStream(c: ClientCore): MediaStream | null {
-  return c.currentStream;
+// The stream of one source's received tracks, or null before the first.
+export function sourceStream(c: ClientCore, sourceId: string): MediaStream | null {
+  return c.sources.get(sourceId)?.stream ?? null;
 }

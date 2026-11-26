@@ -20,7 +20,10 @@ import type { ClientCore } from "./core";
 // `getUserMedia` itself) - genuinely silent, and needs no real
 // microphone or operator permission just to exist as a negotiation
 // placeholder.
-export function attachMicPlaceholder(c: ClientCore, pc: RTCPeerConnection): void {
+// sendOnly puts the placeholder on a send-only line of its own, as the member
+// connection needs: there it is announced with "publish" as the microphone,
+// and a send-receive line would pair with the engine's own outgoing audio.
+export function attachMicPlaceholder(c: ClientCore, pc: RTCPeerConnection, sendOnly = false): void {
   try {
     const ctx = new AudioContext();
     const dst = ctx.createMediaStreamDestination();
@@ -31,7 +34,9 @@ export function attachMicPlaceholder(c: ClientCore, pc: RTCPeerConnection): void
     osc.start();
     const track = dst.stream.getAudioTracks()[0];
     if (!track) throw new Error("MediaStreamDestination produced no audio track");
-    c.micSender = pc.addTrack(track, dst.stream);
+    c.micSender = sendOnly
+      ? pc.addTransceiver(track, { direction: "sendonly", streams: [dst.stream] }).sender
+      : pc.addTrack(track, dst.stream);
     c.micPlaceholderCtx = ctx;
   } catch (err) {
     // Non-fatal: AudioInput simply won't work for this connection (no

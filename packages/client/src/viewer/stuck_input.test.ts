@@ -9,7 +9,12 @@ function fakeClient() {
   return {
     isConnected: vi.fn(() => true),
     on: vi.fn(() => () => {}),
-    getVideoStream: vi.fn(() => null),
+    // The viewer's source: its input goes to it. The fake is its own
+    // source, so a test reads the input from the one object.
+    source(this: unknown) {
+      return this;
+    },
+    stream: vi.fn(() => null),
     mouseMove: vi.fn(),
     mouseDown: vi.fn(),
     mouseUp: vi.fn(),
@@ -52,7 +57,7 @@ describe("remote input is always released", () => {
     container = document.createElement("div");
     document.body.appendChild(container);
     client = fakeClient();
-    viewer = mountGlassViewer(container, client as any, { isMobile: false });
+    viewer = mountGlassViewer(container, client as any, { source: "src1", isMobile: false });
     stage = viewer.video.parentElement as HTMLElement;
   });
 
@@ -106,7 +111,7 @@ describe("remote input is always released", () => {
     expect(client.dispatchKeyEvent.mock.calls.filter(([e]: any[]) => e.type === "keydown")).toHaveLength(1);
 
     viewer.destroy();
-    viewer = mountGlassViewer(container, client as any, { isMobile: false });
+    viewer = mountGlassViewer(container, client as any, { source: "src1", isMobile: false });
 
     const ups = client.dispatchKeyEvent.mock.calls.filter(([e]: any[]) => e.type === "keyup");
     expect(ups).toHaveLength(1);

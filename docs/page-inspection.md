@@ -15,14 +15,14 @@ first.
 
 ## Turning it on
 
-Inspection is **off** unless you ask for it, per session:
+Inspection is **off** unless you ask for it, per browser source:
 
 ```http
 POST /v1/sessions
-{"inspect": true}
+{"sources": [{"kind": "browser", "inspect": true}]}
 ```
 
-or `createGlassSession({ baseUrl, apiToken, inspect: true })`. The session's
+or `createGlassSession({ baseUrl, apiToken, sources: [{ kind: "browser", inspect: true }] })`. The source's
 `capabilities.inspect` says whether its source can be inspected at all (the
 hosted browser can).
 
@@ -39,7 +39,7 @@ hosted browser can).
 ### Snapshot
 
 ```http
-GET /v1/sessions/{id}/page/snapshot?scope=viewport
+GET /v1/sessions/{id}/sources/{sourceId}/page/snapshot?scope=viewport
 ```
 
 The page's accessibility tree: what the page means (a button named "Log in",
@@ -94,7 +94,7 @@ quietly matched to another node.
 ### Query
 
 ```http
-POST /v1/sessions/{id}/page/query
+POST /v1/sessions/{id}/sources/{sourceId}/page/query
 {"role": "button", "name": "log in"}
 ```
 
@@ -116,7 +116,7 @@ Each is one mechanical step.
 | `POST /page/scroll {"ref"}` | Scrolls the node into view (and its frames into theirs), then answers as `/page/node`. |
 | `GET /page/state` | `{"url", "title", "viewport", "scrollX", "scrollY", "focus"}`; `focus` is the focused node, through frames. While a JavaScript dialog is open it answers `409` with `"code": "dialog_open"` at once: the dialog blocks the page's script. |
 
-All are under `/v1/sessions/{id}`, with the same rules as the snapshot.
+All are under `/v1/sessions/{id}/sources/{sourceId}`, with the same rules as the snapshot.
 
 ## Acting
 
@@ -125,7 +125,7 @@ a person's mouse and keyboard produce, so the page cannot tell the difference
 and everyone watching the stream sees it happen:
 
 ```http
-POST /v1/sessions/{id}/input
+POST /v1/sessions/{id}/sources/{sourceId}/input
 {"type": "mousedown", "data": {"x": 100, "y": 258, "button": "left", "clickCount": 1},
  "floor": true, "wait": 2000}
 ```
@@ -147,7 +147,7 @@ controller of the page:
 ## Watching
 
 ```http
-GET /v1/sessions/{id}/page/events?kinds=navigation,pixels,network,structure
+GET /v1/sessions/{id}/sources/{sourceId}/page/events?kinds=navigation,pixels,network,structure
 ```
 
 Server-Sent Events. Each event is the page's **current state** for the kinds
@@ -241,7 +241,7 @@ Dialogs opened by the page's frames, cross-origin ones included, are reported
 the same way.
 
 ```http
-POST /v1/sessions/{id}/page/dialog
+POST /v1/sessions/{id}/sources/{sourceId}/page/dialog
 {"accept": true, "text": "an answer"}
 ```
 
@@ -259,7 +259,7 @@ navigate the session, Glass replaces the page without asking it.
 
 ## Limits
 
-- Hosted-browser sessions only; relay and call sessions have no page.
+- Browser sources only: a published track or a playback has no page.
 - A snapshot of a very large page costs up to a few hundred milliseconds (a
   long encyclopedia article: about 0.5 s for 865 nodes).
 - In the `viewport` scope, nodes far off screen are skipped before they count

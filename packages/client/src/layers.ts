@@ -1,9 +1,9 @@
-// Layers on demand, the producer's side: with simulcast, GlassProducer starts with only its
+// Layers on demand, the publisher's side: with simulcast, a published picture starts with only its
 // full-size encoding on, reports once a second what it has (its uplink estimate and each
 // encoding's name, size and state), and turns encodings on and off when Glass sends
 // layers_wanted. A server that never asks leaves the full encoding alone, a single stream.
 
-/** How often the producer reports its layers to Glass. */
+/** How often a simulcast publication reports its layers to Glass. */
 export const LAYER_REPORT_INTERVAL_MS = 1000;
 
 /**

@@ -1,514 +1,629 @@
 # Glass protocol
 
-The wire contract between Glass and its clients. `@glass/client` implements
-all of it; read this page to build a client in another language or to debug
-one. For the model behind the messages, read [concepts.md](concepts.md) first.
+The wire contract between the Glass engine and a client, protocol version
+**3**. `@glass/client` implements all of it; this page is for anyone writing
+their own client, publisher or backend integration.
 
 There are three layers:
 
-- **HTTP API**: create, inspect and close sessions; mint grants; health.
-- **Signaling**: a WebSocket per connection. Negotiates WebRTC, then stays
-  open for control messages for the connection's whole life.
-- **WebRTC**: media as normal RTP tracks; input and state as messages on a
-  DataChannel. Video never travels on the DataChannel.
+- **The HTTP API**: creating sessions, minting links, adding sources,
+  recordings, and the operator's routes.
+- **Signaling**, a WebSocket at a link's URL
+  (`/v1/sessions/{id}/connect?token=…`): `hello`, then the client's offer and
+  Glass's answer, then the messages about the session's sources, members and
+  control.
+- **The DataChannel**, once WebRTC is up: input from the client, and state
+  from Glass. Video and audio never travel over it: they are WebRTC media
+  tracks, negotiated in the same offer and answer.
+
+**Coming from 0.1?** See [Migrating from 0.1](migrating-from-0.1.md): every
+change in version 3, with its replacement.
+
+## The model
+
+A **session** holds **sources**: a hosted browser, a recording played back,
+or a track a member publishes (a camera, a microphone, a screen). Each
+source has an id, and everything about a source names it.
+
+People and programs join a session as **members**, each with a **link**. A
+link carries **rights**: which kinds of source it may watch, publish and
+control. The session's own link, returned when it is made, is the
+**owner's**: it watches and controls everything, and may act on other
+members.
 
 ## Versioning
 
 `protocolVersion` is the major version of everything on this page. It is
-currently **2**. Every session-creating response carries it (`POST
-/v1/sessions`, `/v1/tickets`, `/v1/relay-sessions`, `/v1/calls`,
-`/v1/recordings/{id}/play`), as do `GET /v1/info` and `ice_config`, the first
-message on every signaling connection, so a client that joined by link alone
-learns it too.
+sent on every answer that makes a session (`POST /v1/sessions`,
+`POST /v1/tickets`, `POST /v1/recordings/{id}/play`), by `GET /v1/info`, and
+in `hello`, the first message of every connection.
 
 - It changes only for a breaking change: a removed or repurposed message or
-  field, a changed message shape, a changed meaning for a capability.
-- Additions don't change it: new capabilities, new messages, new optional
-  fields. **Ignore what you don't recognise.**
-- **Refuse any version but your own**, higher or lower, instead of trying to
-  proceed; guessing wrong looks like a black screen or silently lost input.
-  A missing `protocolVersion` means 1. `@glass/client` checks it and closes
-  with the code `protocol_mismatch`.
-
-**From version 1 to 2** (v0.1.132):
-
-- Relay-session and call responses name the codec `codec`, as browser
-  sessions do; it was `videoCodec`.
-- The signaling `navigate` carries its URL in `url`; it was `sdp`.
-- Every `request_input`, `release_input`, `grant_input` and `revoke_input`
-  is answered with `control_answer`, refusals included. Each may carry an
-  `id`, echoed in its answer.
-- `DELETE /v1/sessions/{id}?connectionId=` is refused (`400`); a connection
-  leaves by closing its own WebSocket with `1000`.
-- The `Error` DataChannel message (`0xFF`) carries a `code`.
+  field, a changed shape, a changed meaning.
+- Additions do not change it: a new message, field, capability key or input
+  action. Clients ignore what they don't recognise.
+- **A client refuses any version but its own**, higher or lower, rather than
+  guess. `@glass/client` closes with `protocol_mismatch`.
 
 ## HTTP API
 
-When `GLASS_API_TOKEN` is set, every `/v1/*` request needs
-`Authorization: Bearer <token>`, or `?token=<token>` for a client that can't
-set a header. `GLASS_API_TOKEN` may list several tokens, comma-separated, to
-rotate one without downtime ([deployment.md](deployment.md#authentication)). The exceptions are the WebSocket, stats and file routes,
-which accept the per-session `?token=` from the URLs Glass returns, and
-`POST /v1/tickets`, which takes a [session ticket](#session-tickets) instead.
-`/healthz` and `/readyz` are always open.
+When the engine has an API token (`GLASS_API_TOKEN`), every `/v1/*` request
+needs `Authorization: Bearer <token>` (or `?token=` where a header can't be
+set). A link's own `?token=` is a per-session credential, accepted only on
+that session's member connection, its statistics stream, and its sources'
+upload and download routes. `/healthz` and `/readyz` are always open.
 
-### Runtime
+### Sessions
 
-| Method | Path | Response |
+| Method | Path | |
 |---|---|---|
-| `GET` | `/healthz` | `200 {"status":"ok"}` whenever the process is up. |
-| `GET` | `/readyz` | `200` when at least one pooled browser answers, else `503`. Body: `{"status","browsers":{…},"diskFreeMB":{…},"diskLow"}`. Disk fields are informational. |
-| `GET` | `/v1/info` | `{"sessions":{"active","relayActive","callActive","capacity"},"capacity":{"licensedMax","configuredCap","effectiveCeiling","hardCapEnabled","currentCpuPercent","relayViewers","relayViewerLimit",…},"license":{"tier","sessionLimit"},"protocolVersion","uptimeSeconds","codecs":{"available","default"},"build":{…},"security":{…}}`. `build` and `security` are described in [deployment.md](deployment.md#monitoring-what-runs). `codecs` lists the video codecs a browser session may ask for, and the one it gets without asking. `license.tier` is the tier actually in effect; `capacity.effectiveCeiling` is how many sessions can be admitted right now; `capacity.relayViewers` is how many viewers watch relay sessions now, and `capacity.relayViewerLimit` the most allowed at once (`GLASS_RELAY_MAX_VIEWERS`, `0` for no limit). `pressure` is what the engine refused and dropped over the last minute, part by part: see [monitoring.md](monitoring.md#the-summary-pressure-in-v1info). |
-| `GET` | `/v1/metrics` | The same counts in Prometheus text format (`text/plain; version=0.0.4`), the API token only. See [monitoring.md](monitoring.md#metrics-get-v1metrics). |
+| `POST` | `/v1/sessions` | Make a session (below). `201` with `{id, protocolVersion, link, sources}`. |
+| `GET` | `/v1/sessions` | Every running session, oldest first, each with `connections` (how many are connected now). Never a link or token. |
+| `GET` | `/v1/sessions/{id}` | `{id, state, createdAt, connectedAt?, codec?, inputMode?, sources, connectionQuality?}`. `state` is `pending`, `active` or `closed`. A simulcast source carries `simulcast` (its layers and each viewer's). |
+| `DELETE` | `/v1/sessions/{id}` | End the session for everyone and release its sources. `204`. |
+| `GET` | `/v1/sessions/{id}/connect?token=` | The member connection: a link's `url`. See "Signaling". |
+| `POST` | `/v1/sessions/{id}/links` | Mint a link (see "Links"). `201` with the link. |
+| `DELETE` | `/v1/sessions/{id}/links/{linkId}` | Revoke a link: it admits nothing again, and every connection that joined with it is closed with `4403`. `204`, also when already revoked. `400` for the session's own link (end the session instead). |
+| `POST` | `/v1/sessions/{id}/sources` | Add a browser to a running session: the body is one entry of `sources` below. `201` with the source. `409` (`unsupported`) on a session whose members publish. |
+| `DELETE` | `/v1/sessions/{id}/sources/{sourceId}` | Remove a source. The session goes on; its members are told (`source_removed`). `204`. |
+| `POST` | `/v1/sessions/{id}/sources/{sourceId}/input` | Send input to a source as the operator (see "Server-side input"). `202`. |
+| `POST` | `/v1/sessions/{id}/sources/{sourceId}/control` | A playback source's controls: `{"action": "play" \| "pause" \| "seek", "positionMs"?}`. `202`. |
+| `GET` | `/v1/sessions/{id}/sources/{sourceId}/downloads/{guid}` | A finished page download (`DownloadReady`). The API token, or a link whose connection holds that source's input now. |
+| `POST` | `/v1/sessions/{id}/sources/{sourceId}/upload` | `multipart/form-data` answer to `FileChooserOpened`. Same rule. |
+| `GET` | `/v1/sessions/{id}/stats/stream` | Server-Sent Events: frame, transport and resource statistics, one event a live source. The API token, or a link whose connection controls the page now. |
+| `GET`, `POST` | `/v1/sessions/{id}/sources/{sourceId}/page/…` | Page inspection: see [Page inspection](page-inspection.md). |
+| `POST` | `/v1/sessions/{id}/recording` | Start or stop recording: see [Recording](recording.md). |
 
-### Browser sessions
+### `POST /v1/sessions`
 
-| Method | Path | Response |
+```json
+{
+  "sources": [
+    {"kind": "browser", "url": "https://example.com", "codec": "vp8", "contentHint": "motion", "inputMode": "floor"}
+  ],
+  "record": false,
+  "linkExpiresIn": 3600
+}
+```
+
+**With `sources`**, the engine runs them: `kind` is `"browser"`. Each
+source's options:
+
+- `url`: a page to open. It is checked by the navigation rules before
+  anything is made (a refused URL is `400` `navigation_not_allowed`), and
+  opened after the answer: the answer does not wait for the page to load, and
+  a page that fails to load is reported as any navigation's failure is.
+- `codec`: `"h264"`, `"vp8"` or `"av1"`, fixed for its life; absent, the
+  engine's default. A session's pictures share one codec. A codec the engine
+  cannot serve (`GET /v1/info`'s `codecs`) is refused, never served as
+  another. Check that the viewer can decode it first (Safari decodes AV1 only
+  with AV1 hardware).
+- `contentHint`: what the picture protects when the bitrate can't carry it.
+  `"detail"` keeps its size and lowers the frame rate (text, interfaces);
+  `"motion"` keeps the frame rate and lowers the size (video, games).
+- `inputMode`: how several holders of its input share it, `"floor"` (the
+  default) or `"free"`. See "Input arbitration".
+- `inspect`: `true` allows page inspection on it.
+- `audioInput`: put the browser where it can be given a microphone.
+
+**Without `sources`** (an empty body), the session's members publish: each
+track a member publishes becomes a source. See
+[Publishing](sources/producers.md).
+
+The session's own options:
+
+- `maxMembers`: the most connections it admits at once (at least 1). A join
+  past it is `409` `session_full`.
+- `simulcast`: `true` takes each published camera or screen as up to three
+  layers, and gives each viewer the one its link carries. Only for a session
+  whose members publish.
+- `record`: `true` starts recording as it is made; the answer then carries
+  `recording`. Only for a session with sources.
+- `linkExpiresIn`: seconds until the session's own link stops admitting new
+  connections; `0` for never. See "Link expiry".
+
+The answer:
+
+```json
+{
+  "id": "9ee60523-4129-4f4a-b43a-89e14189e89f",
+  "protocolVersion": 3,
+  "link": {
+    "id": "4776be7c9390e016",
+    "url": "wss://glass.example.com/v1/sessions/9ee60523-…/connect?token=…",
+    "rights": {"watch": "all", "publish": [], "control": "all", "owner": true},
+    "expiresAt": "2026-10-26T16:00:00Z"
+  },
+  "sources": [
+    {
+      "id": "0d6c1f4e-9a1b-4b0e-8d6e-7c2f3a1b5e90",
+      "kind": "browser",
+      "state": "live",
+      "codec": "h264",
+      "contentHint": "detail",
+      "inputMode": "floor",
+      "inspect": false,
+      "capabilities": {
+        "video": true, "navigation": true, "viewport": true, "clipboard": true,
+        "pauseResume": true, "mobileEmulation": true, "inspect": true,
+        "inputActions": ["back", "forward", "keydown", "mousemove", "…"]
+      }
+    }
+  ]
+}
+```
+
+**A source** is `{id, kind, state, capabilities, codec?, contentHint?,
+inputMode, inspect, reason?}`, the same everywhere it appears: here,
+`GET /v1/sessions/{id}`, `POST …/sources`, and signaling's `hello`,
+`source_added` and `source_updated`. `kind` is `browser`, `playback`,
+`camera`, `microphone`, `screen` or `device`. `state` is `live`, `stalled`
+(live, but sending nothing now: its publisher dropped and may resume, or its
+track went quiet) or `ended` (with `reason`: `removed`, `failed` or
+`session_closed`). `capabilities` is what that source can do, so a client
+knows before it negotiates. Treat unknown keys as additions.
+
+**A link's `?token=` is a credential for this session only, not the API
+token.** It is in the URL because a browser's `WebSocket` and `EventSource`
+take no headers. Hand each person their own link, never the API token.
+
+### The session's life
+
+A new session is `pending`, and is closed if nobody connects within
+`GLASS_PENDING_TTL_SECONDS` (30 s by default), so an abandoned create holds
+no browser. The first connection makes it `active`; it stays active however
+many connections come and go.
+
+**A session takes any number of connections**, each with its own life:
+
+- A close with `1000` (a client's deliberate leave) ends that connection
+  alone, and its published sources at once.
+- Any other ending (a lost network, a locked phone, a read timeout) holds
+  that connection's place for `GLASS_RECONNECT_GRACE_SECONDS` (60 s by
+  default): the client reconnects with the same link and resumes as the same
+  member.
+- **When the last connection is gone** (closed, or its grace over with
+  nobody back), the session ends and releases its sources.
+
+A reconnect resumes a dropped connection only when it is unambiguous: one
+connection that joined with that link is held, and none is active.
+Otherwise it joins as a new member.
+
+### Links
+
+A link is `{id, url, rights, expiresAt?}`. `POST /v1/sessions/{id}/links`
+mints one:
+
+```json
+{"watch": "all", "control": ["browser"], "expiresIn": 3600}
+```
+
+- `watch`: `"all"`, `"none"` (the default) or a list of kinds: the sources a
+  connection with it receives.
+- `publish`: a list of kinds it may publish.
+- `control`: `"all"` or a list of kinds whose input it may hold. A
+  connection with it holds the input of every live source of those kinds,
+  and may ask for one added later (`request_input`).
+- `expiresIn`: as `linkExpiresIn`, for this link.
+
+The kinds are `browser`, `playback`, `camera`, `microphone`, `screen` and
+`device`; `owner` is refused: the session's own link is the only owner's.
+Beyond a link's rights, the owner may deny a member a source and lift the
+denial, and grant or revoke its control of one (see "Owner-controlled
+handoff").
+
+Some links, for a browser session:
+
+| Rights | Who it's for |
+|---|---|
+| `{"watch": "all"}` | A viewer who only watches. |
+| `{"watch": "all", "control": ["browser"]}` | A viewer who may also use the page. |
+| `{"publish": ["camera", "microphone"]}` | A phone that publishes and watches nothing. |
+| `{"watch": "all", "publish": ["camera", "microphone"]}` | One side of a call. |
+
+`GLASS_MAX_VIEWERS_PER_SESSION` (50 by default) caps a session's connections.
+
+### Link expiry
+
+Every link expires: the default is `GLASS_LINK_TTL_HOURS` (24 h; `0` is
+never), and a request may set its own (`linkExpiresIn`, `expiresIn`; `0` is
+never). `expiresAt` says when, absent for a link that never expires.
+
+An expired link only stops **joining**: its connection is accepted and
+closed at once with `4401`. It never ends the session or a connection
+already in it, and a connection that joined with it still resumes inside
+its reconnect grace. Whoever holds the API token can mint a fresh link at
+any time.
+
+### Runtime routes
+
+| Method | Path | |
 |---|---|---|
-| `POST` | `/v1/sessions` | `201` with `{id, signalingUrl, protocolVersion, sourceType, capabilities, contentHint, codec, linksExpireAt?}`. Optional body fields: `"audioInput": true`; `"contentHint": "detail"` or `"motion"` (anything else is `400`); `"codec": "h264"`, `"vp8"` or `"av1"` (one this host cannot serve is `400` with the reason, never served as another codec); `"inputMode": "floor"` (the default) or `"free"` (anything else is `400`; see [concepts.md](concepts.md#several-people-in-control)); `"inspect": true` allows [page inspection](page-inspection.md) (off by default; `400` for a source that cannot be inspected). `"record": true` starts [recording](#recordings) the session as it is created, and the response then carries `recording`; `409` (`recording_off`) when recording is off, and if it can't start, the session is closed and the error returned. Tickets can't set it. `"linkExpiresIn"`: seconds until the session's link stops admitting new connections, `0` for never (see [link expiry](#link-expiry)). The response also carries `inputMode` and `inspect`. `503` at capacity. `429` past [the creation rate limit](#rate-limits). |
-| `POST` | `/v1/tickets` | Redeem a [session ticket](#session-tickets): `{"ticket": "…"}`. Creates one browser session; `201` as `POST /v1/sessions`, plus `watchUrls`. Takes no API token. Exists only when `GLASS_TICKET_SECRET` is set. `429` past [the ticket rate limit](#rate-limits), which every attempt counts toward. `503` (`unavailable`) when Glass can't read or write its record of used tickets (see the `jti` claim). |
-| `GET` | `/v1/sessions` | Every running browser session, oldest first: `{"sessions": [...]}`, each as `GET /v1/sessions/{id}` plus `connections` (how many are connected now). Never a link. API token only. |
-| `GET` | `/v1/sessions/{id}` | `{id, state: "pending"\|"active"\|"closed", createdAt, connectedAt?, codec?, inputMode?, connectionQuality?}`, or `404`. `connectionQuality`: the session's connections counted by their quality level, as `{"good": 2, "poor": 1}`, once any has one (see `connection_quality`). The same for relay sessions and calls. |
-| `DELETE` | `/v1/sessions/{id}` | Close the session for every connection. `204`, or `404`. `?connectionId=` is refused (`400`): a connection leaves by closing its own WebSocket with `1000`. |
-| `GET` | `/v1/sessions/{id}/signaling` | WebSocket upgrade. |
-| `POST` | `/v1/sessions/{id}/connections` | Mint a grant. Body: any of `consumesMedia`, `producesMedia`, `producesInput` (booleans), and `expiresIn` (seconds, `0` for never; see [link expiry](#link-expiry)). `201 {signalingUrl, connectionCapabilities, linkId, expiresAt?}`; `linkId` names the link for revoking it. `consumesInput` is reserved: `400`. |
-| `DELETE` | `/v1/sessions/{id}/connections/{linkId}` | Revoke one link: it admits nothing again, a reconnect included, and every connection that joined with it is closed with `4403`. The session goes on for everyone else. `204` (also when already revoked); `404` for an unknown session or link; `400` for the session's own link (close the session instead). API token only. `linkId` is the one the link was minted with, or the first 16 hex digits of the SHA-256 of the link's `token` (`glass session revoke <URL>` works it out). |
-| `POST` | `/v1/sessions/{id}/input` | Server-side input: `{"type", "data"}` as in the DataChannel input table. Not subject to the session's input mode, unless `"floor": true`: then it takes the page as one more controller, waiting up to `"wait"` ms (default 2000, at most 10000) for a person to pause, and is `409` (`floor_taken`, with `holder`) if they don't; keys and buttons it holds are released after 5 s without input from it; not for `set_viewport`. `202`; `400` for an unknown or invalid event, and `400` (`navigation_not_allowed`) for a `navigate` to a URL the navigation rules refuse (a scheme other than `http` or `https`, loopback, a private or link-local address), answered before anything runs; `429` when rate limited. |
-| `POST` | `/v1/sessions/{id}/recording` | Start or stop recording the session: `{"action":"start"}` (`201`) or `{"action":"stop"}` (`200`), each answering the recording (see [Recordings](#recordings)). API token only. |
-| `GET` | `/v1/sessions/{id}/page/snapshot` | The page's accessibility tree: `scope`, `prune`, `values`, `root`, `maxNodes`. See [page-inspection.md](page-inspection.md); every `/page` route takes the API token only, on a session created with `"inspect": true` (else `403`, `inspect_off`); a stale ref is `409` (`stale_ref`). |
-| `POST` | `/v1/sessions/{id}/page/query` | Nodes matching `{role?, name?, exact?, scope?, values?, maxResults?}`. |
-| `GET` | `/v1/sessions/{id}/page/at?x&y` | The node at a viewport point and its ancestors. |
-| `GET` | `/v1/sessions/{id}/page/node?ref` | Where a node is now: quads, bounds, `inViewport`. |
-| `POST` | `/v1/sessions/{id}/page/scroll` | `{"ref"}`: scroll it into view. |
-| `GET` | `/v1/sessions/{id}/page/state` | URL, title, viewport, scroll position, focused node. `409` (`dialog_open`) while a JavaScript dialog is open. |
-| `POST` | `/v1/sessions/{id}/page/dialog` | Answers the page's open JavaScript dialog: `{"accept", "text"?, "floor"?, "wait"?}`. `200`; `409` (`no_dialog`) when none is open. |
-| `GET` | `/v1/sessions/{id}/page/events?kinds` | Server-Sent Events: the page's state as counters, on each change. |
-| `GET` | `/v1/sessions/{id}/downloads/{guid}` | A finished download (see `DownloadReady`). The API token, or the link of a connection that has control of the page now; a watch link gets `403` until it is given control. |
-| `POST` | `/v1/sessions/{id}/upload` | `multipart/form-data` answer to `FileChooserOpened`. Same rule as downloads. |
-| `GET` | `/v1/sessions/{id}/stats/stream` | Server-Sent Events: frame, transport and resource statistics, for operators. Same rule as downloads. |
-
-### Relay sessions
-
-| Method | Path | Response |
-|---|---|---|
-| `POST` | `/v1/relay-sessions` | `201` with `{id, signalingUrl, produceUrl, codec, protocolVersion, sourceType, capabilities, linksExpireAt?}`, plus `slots` and `produceUrls` when the body declares more than one slot (`{"slots": [...]}`; one slot keeps the single-slot shape, and more than `GLASS_MAX_STREAM_SLOTS`, default 4, is `400`). Optional `"linkExpiresIn"` for every link it returns; `"record": true` starts recording, and the response then carries `recording`. `"simulcast": true` takes the producer's video as up to three layers ([Simulcast](sources/producers.md#simulcast-several-layers-of-the-same-picture)); the response then has `"simulcast": true`; with more than one slot, `400`. `503` as for `POST /v1/sessions`: at the session limit, or with no CPU headroom (`hard_cap_reached`). `429` past [the creation rate limit](#rate-limits). |
-| `GET` | `/v1/relay-sessions` | Every running relay session, as `GET /v1/sessions`. |
-| `GET` | `/v1/relay-sessions/{id}` | As for browser sessions. A simulcast session adds `simulcast`: `{codec, chosen, layers, viewers, keyframeRequests, producerUplinkKbps?, layersWanted?}`. `layers`: `[{layer, rid, kbps, arriving, usable, lossPercent, steadyMs, width?, height?}]`, numbered as they arrived; `usable`: arriving steadily; `steadyMs`: how long it has arrived without a gap; `lossPercent`: packets missing over the last 2 s; `width` and `height` once the producer has reported them. `chosen`: the layer recordings take, the largest any viewer is on or moving to (with no viewer, the best one arriving steadily); `-1` before any. `viewers`: per viewer `{layer, target, switches, waitedMs, clockFallbacks, keyframeRequests, lateKeyframeStarts, probes, probesWon, estimateKbps?, congested?, ackedKbps?, layerBelow?, lastProbe?}`: `layer` is the one it gets now and `target` the one it is moving to, each chosen from that viewer's own link; `estimateKbps` its link's bandwidth estimate; `congested` whether its link shows congestion now, and `ackedKbps` what the link delivered; `layerBelow` is `running` or `not running`, whether the layer below its own is being sent, so that a move down lands at once; `probes` and `probesWon` count its tries at the next layer up, and `lastProbe` `{rateKbps, resultKbps, usable, congested}` is the latest. `keyframeRequests`: Glass's requests to the producer by reason (`viewer-forwarder`, `viewer-joined`, `viewer-pli`, `recording`, `session`, `held-back`), each `{asked, sent}`; at most two are sent a second. `producerUplinkKbps` and `layersWanted` appear once the producer sends `producer_report`: its own estimate of its uplink, and the layers Glass last asked it to send. More fields may be added; treat unknown ones as additions. |
-| `DELETE` | `/v1/relay-sessions/{id}` | As for browser sessions. |
-| `GET` | `/v1/relay-sessions/{id}/signaling` | Viewer WebSocket. The `signalingUrl` is a watch link; the producer's link may watch too. At the engine's relay viewer limit (`GLASS_RELAY_MAX_VIEWERS`) a viewer is refused before it joins: the WebSocket is accepted and closed with `4503`; any other request gets `503` `viewer_limit`. |
-| `GET` | `/v1/relay-sessions/{id}/produce` | Producer WebSocket (messages in [sources/producers.md](sources/producers.md#connecting)). Only with a link minted to produce (the `produceUrl`, or a grant with `producesMedia`) or the API token; any other link is `403`. `409` while the slot has another producer. |
-| `POST` | `/v1/relay-sessions/{id}/connections` | Mint a grant; the response has `produceUrl` only when `producesMedia` was requested. `expiresIn` as for browser sessions. A non-empty `slots` field is reserved: `400`. |
-| `DELETE` | `/v1/relay-sessions/{id}/connections/{linkId}` | Revoke one link, as for browser sessions: the `signalingUrl` (a watch link), a producer's link, or one minted later. |
-| `GET` | `/v1/relay-sessions/{id}/stats/stream` | Server-Sent Events. The API token only. |
-| `POST` | `/v1/relay-sessions/{id}/recording` | As for browser sessions: records the main slot's video and the audio, as sent. `POST /v1/relay-sessions` takes `"record": true` too. |
-
-### Calls
-
-| Method | Path | Response |
-|---|---|---|
-| `POST` | `/v1/calls` | `201 {id, peerAUrl, peerBUrl, codec, protocolVersion, sourceType, linksExpireAt?}`. Optional body `{"linkExpiresIn"}` for both peer links. `429` past [the creation rate limit](#rate-limits). |
-| `GET` | `/v1/calls` | Every running call, as `GET /v1/sessions`. |
-| `GET` | `/v1/calls/{id}` | As for browser sessions. A call's peer links end with the call. |
-| `DELETE` | `/v1/calls/{id}` | As for browser sessions. |
-| `GET` | `/v1/calls/{id}/peers/{a\|b}/signaling` | Peer WebSocket. The token must belong to that peer (`403` otherwise); the API token is not a peer. |
+| `GET` | `/healthz` | Liveness. |
+| `GET` | `/readyz` | `200` when a pooled browser answers, `503` otherwise. Also reports free disk space (informational). |
+| `GET` | `/v1/info` | Sessions, capacity, license tier, `protocolVersion`, the codecs this engine serves, its build and Chrome, its security settings, and `pressure`: what it refused and dropped over the last minute. |
+| `GET` | `/v1/metrics` | The same in Prometheus text format. API token only. |
+| `POST` | `/v1/tickets` | Redeem a session ticket (below). |
 
 ### Recordings
 
-A recording keeps a session's stream as it was sent to its viewers: see
-[recording.md](recording.md). Recording is off unless `GLASS_RECORDING_DIR` is
-set. All routes take the API token only.
+Recording is off unless `GLASS_RECORDING_DIR` is set, and starts only when the
+API token asks, for one session: `POST /v1/sessions/{id}/recording` with
+`{"action": "start"}` (`201`) or `{"action": "stop"}` (`200`), or
+`"record": true` when making it. See [Recording](recording.md). All routes
+take the API token only.
 
-| Method | Path | Purpose |
+| Method | Path | |
 |---|---|---|
-| `GET` | `/v1/recordings` | Every recording, newest first: `{"recordings":[...]}`. |
-| `GET` | `/v1/recordings/{id}` | One recording: `{"id","sessionId","sessionKind","videoCodec","audio","file","timeline","startedAt","stoppedAt"?,"stopReason"?,"bytes","durationMs","gaps","active"}`. `stopReason` is `api`, `session_closed`, `max_size`, `max_duration`, `disk_low`, `write_error`, `shutdown` or `interrupted`; `gaps` counts the times the disk fell behind and video was dropped until the next keyframe. |
-| `GET` | `/v1/recordings/{id}/file` | The media, `video/webm` or `video/x-matroska`, with range requests. `409` (`recording_active`) while it runs. |
-| `GET` | `/v1/recordings/{id}/timeline` | The recording's timeline (below), `application/x-ndjson`, while it runs too: it only grows. |
-| `DELETE` | `/v1/recordings/{id}` | Delete the file, its timeline and its record. `204`; `409` while it runs. |
-| `POST` | `/v1/recordings/{id}/play` | Play a finished recording back as a session (below): `201 {id, signalingUrl, protocolVersion, sourceType: "playback", capabilities, codec, durationMs, recording, linksExpireAt?}`. Optional body `{"linkExpiresIn"}`. `409` (`recording_active`) while it runs; `409` (`recording_unplayable`) when its file holds nothing that can be played, as an empty one. Rate limited as session creation. |
+| `GET` | `/v1/recordings` | Every recording, newest first. |
+| `GET` | `/v1/recordings/{id}` | `{id, sessionId, sessionKind, videoCodec, audio, file, timeline, startedAt, stoppedAt?, stopReason?, bytes, durationMs, gaps, active}`. `stopReason`: `api`, `session_closed`, `max_size`, `max_duration`, `disk_low`, `write_error`, `shutdown` or `interrupted`. |
+| `GET` | `/v1/recordings/{id}/file` | The media, `video/webm` or `video/x-matroska`, with range requests. `409` while it runs. |
+| `GET` | `/v1/recordings/{id}/timeline` | Its timeline (below), `application/x-ndjson`, also while it runs. |
+| `DELETE` | `/v1/recordings/{id}` | Delete it. `204`; `409` while it runs. |
+| `POST` | `/v1/recordings/{id}/play` | Play it back as a session with one `playback` source: `201 {id, protocolVersion, link, sources, recording}`. Optional body `{"linkExpiresIn"}`. |
 
-**Playback sessions.** A viewer joins a playback session as any session:
-its `signalingUrl` watches and controls it (`producesInput`); a link
-minted with `consumesMedia` alone only watches. It plays from the start
-once a viewer's media is up, and is told its state (`playback` signaling
-message) and the recording's timeline events as it passes them
-(`timeline`). Nothing is re-encoded: a seek lands on the keyframe at or
-before its target, the bitrate is what was recorded, and when a viewer
-asks for a keyframe (a viewer joining, or one that lost packets) every
-viewer goes back to the last one, at most once in 3 s. With no viewer
-left it waits.
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/v1/playback-sessions` | Every playback session, as `GET /v1/sessions`. |
-| `GET` / `DELETE` | `/v1/playback-sessions/{id}` | As for browser sessions. |
-| `GET` | `/v1/playback-sessions/{id}/signaling` | Viewer WebSocket; the API token, the session's own link or a minted link. |
-| `POST` | `/v1/playback-sessions/{id}/connections` | Mint a link (`consumesMedia`, and `producesInput` for control). |
-| `DELETE` | `/v1/playback-sessions/{id}/connections/{linkId}` | Revoke a link. |
-| `POST` | `/v1/playback-sessions/{id}/control` | `{"action": "play" \| "pause" \| "seek", "positionMs"?}`. `202`; `400` for an unknown action or a position past the end. API token only. |
-
-**The timeline** is one JSON object a line, `{"t", "type", ...}`, `t` in
-milliseconds on the media's clock (0 is the first picture; what happened
-before it is at 0), in order. It holds what the logs may hold: IDs,
-origins, kinds, positions, sizes, counts. Never typed or pasted text, a
-key's value, a URL past its origin, or a dialog's message.
+**The timeline** is one JSON object a line, `{"t", "type", …}`, `t` in
+milliseconds on the media's clock. It holds IDs, origins, kinds, positions,
+sizes and counts; never typed or pasted text, a key's value, a URL past its
+origin, or a dialog's message.
 
 | `type` | Fields |
 |---|---|
 | `start` | `sessionKind`, `videoCodec`, `audio` |
-| `stop` | `reason` (as `stopReason`) |
+| `stop` | `reason` |
 | `join`, `leave` | `connectionId`, `producer`; `join`: `caps`, `resumed`; `leave`: `reason` (`left`, `dropped`, `revoked`) |
-| `input` | `connectionId` (`api` for the API's own), `kind`: `move` (at most one a connection every 50 ms), `button_down`, `button_up`, `scroll`, `key_down`, `key_up`, `touch_start`, `touch_move`, `touch_end`, `touch_cancel`, `navigate` (with `origin`), `back`, `forward`, `refresh`, `viewport`, `paste`, `copy`, `dialog_answer`, `other`; and any of `x`, `y`, `deltaX`, `deltaY`, `button`, `width`, `height` the event had |
+| `input` | `connectionId` (`api` for the API's own), `kind` (`move`, `button_down`, `button_up`, `scroll`, `key_down`, `key_up`, `touch_start`, `touch_move`, `touch_end`, `touch_cancel`, `navigate` with `origin`, `back`, `forward`, `refresh`, `viewport`, `paste`, `copy`, `dialog_answer`, `other`), and any of `x`, `y`, `deltaX`, `deltaY`, `button`, `width`, `height` |
 | `floor` | `connectionId`, or null when no one has the page |
-| `navigation` | `origin`, `count` (browser sessions) |
+| `navigation` | `origin`, `count` |
 | `load` | `loads` |
-| `dialog` | `open`; when it opens, `dialogType` (`alert`, `confirm`, `prompt`, `beforeunload`) |
+| `dialog` | `open`; when it opens, `dialogType` |
 | `popup` | `count` |
 | `size` | `width`, `height`: the picture's size, from each keyframe that changes it |
 | `gap` | `gaps`: the disk fell behind and video was dropped up to here |
-| `events_dropped` | `count`: events past 512 held before the first picture |
 
-### Session-creation fields
+### Server-side input
 
-- `capabilities`: what this session's source can do: `video`, `navigation`,
-  `viewport`, `clipboard`, `pauseResume`, `mobileEmulation`, and
-  `inputActions` (the exact input `type`s the source accepts). Unknown keys are
-  additions, not errors.
-- `sourceType`: `"browser"`, `"relay"`, `"call"` or `"playback"`.
-- `codec` (relay, call): `"h264"` or `"vp8"`, the host's default codec.
-  Producers and call peers must send it.
-- `contentHint` (browser): the hint in effect, `"detail"` or `"motion"`:
-  what the session protects when bitrate or CPU is short (the size, or the
-  frame rate). The request's own, or the runtime's default
-  (`GLASS_CONTENT_HINT`).
-- `codec` (browser): the session's video codec, `"h264"`, `"vp8"` or
-  `"av1"`, fixed for its life: the request's own, or the runtime's default
-  (`GLASS_DEFAULT_CODEC`). The runtime cannot know what the viewer decodes:
-  a client that asks for AV1 checks first (Safari decodes AV1 only on
-  devices with AV1 hardware).
+`POST /v1/sessions/{id}/sources/{sourceId}/input` with `{"type", "data"}`, as
+in the DataChannel input table below. The operator's backend, not a viewer:
+it reaches the page in either input mode. With `"floor": true` (and
+`"wait"`, ms, default 2000, at most 10000) it takes the source's floor as
+the controller `api`, waiting for a person to pause, and is `409`
+`floor_taken` (with `holder`) if they don't; what the API holds down is
+released after 5 s without API input.
 
-### Session statistics
-
-`GET /v1/sessions/{id}/stats/stream` sends one Server-Sent Event every 2 s,
-`data:` and a JSON object of running totals since the session started. The
-frame fields:
-
-| Field | Meaning |
-|---|---|
-| `framesCaptured` | frames the capture delivered |
-| `framesEmitted` | captured frames that carried a picture and went on toward the encoder; the drops below and the encoder's own skips come after this count |
-| `framesDroppedCongestion` | captured frames not encoded because a viewer's path could not carry them: the sum of the three below |
-| `framesDroppedForWindow` | dropped while more data was in flight than the path's congestion window allows |
-| `framesDroppedByDropper` | dropped to hold an encoder that runs over its target bitrate to it |
-| `framesPausedForQueue` | held back while a viewer's send queue would take over 2 s to leave; the newest is encoded once it drains |
-| `framesDroppedPacing` | always 0, kept for readers that sum it |
-| `encodedBytes`, `keyframesEncoded` | the encoder's whole output; every encoded frame is sent |
-| `targetBitrateBps` | the congestion controller's send-rate target, the lowest across the session's viewers; 0 with no estimate |
-
-Frames are dropped before they are encoded, never after, so every encoded
-frame is sent to the viewers and a drop never needs a keyframe to recover. The
-encoder can also skip frames on its own to keep to its bitrate; those are not
-counted here. The object carries more fields (transport, input latency,
-memory, `encoderBackend`, `audio` when audio is on, and `cpuPressure` for a
-browser session: its capture level, its size, and why it last stepped down for
-CPU, as [monitoring.md](monitoring.md#a-session-stepping-down-cpupressure) describes);
-new fields are additions, not errors.
-
-### Errors
-
-Every error an HTTP route returns, a refused WebSocket handshake included,
-is JSON:
-
-```json
-{ "error": "a sentence for people", "code": "a_code_for_programs" }
-```
-
-The message may change between releases; the code does not, so branch on
-the code. A body may carry more fields beside these two (`floor_taken`'s
-`holder`). The codes:
-
-| `code` | Status | Meaning |
-|---|---|---|
-| `bad_request` | 400 | The request is malformed, or a field is out of range. |
-| `navigation_not_allowed` | 400 | A `navigate` input to a URL the navigation rules refuse: a scheme other than `http` or `https`, loopback, a private or link-local address. |
-| `unauthorized` | 401 | No credential, or one the runtime does not know. |
-| `ticket_invalid`, `ticket_expired`, `ticket_used` | 401 | A session ticket refused (`POST /v1/tickets`). |
-| `gate_refused` | 401 | `glass gate` refused a ticket: its passphrase (or, with the `links` gate, its link) is not right. |
-| `link_expired`, `link_revoked` | 401 | A link past its expiry, or revoked. |
-| `origin_not_allowed` | 403 | A browser origin the runtime does not allow. |
-| `link_not_allowed` | 403 | A valid link without the right this needs: control of the page, producing, the statistics, the other peer's place. |
-| `link_used` | 403 | A single-use link already used. |
-| `inspect_off` | 403 | A page route on a session created without `"inspect": true`. |
-| `session_not_found` | 404 | No such session, or it has ended. |
-| `not_found` | 404 | No such thing inside the session: a download, a link id, a call peer. |
-| `unsupported` | 400, 404, 501 | The session's source cannot do this (no downloads, no inspection, no page events). |
-| `session_closed` | 409 | The session is closing. |
-| `slot_in_use` | 409 | A relay slot another producer holds. |
-| `no_page`, `stale_ref`, `no_dialog`, `dialog_open` | 409 | Page routes: no page; a node reference from an earlier snapshot; no dialog open; a dialog blocks the page. |
-| `floor_taken` | 409 | Another connection has the page (input mode `floor`); the body also carries `holder`. |
-| `no_file_chooser` | 409 | Files uploaded when no file chooser is waiting for them. |
-| `recording_off` | 409 | A recording route, or `"record": true`, with no `GLASS_RECORDING_DIR` set. |
-| `already_recording`, `not_recording` | 409 | Start on a session already recording; stop on one that is not. |
-| `recording_active` | 409 | A recording's file fetched, played or deleted while it still runs. |
-| `recording_unplayable` | 409 | A recording played whose file holds nothing that can be played: empty (nobody joined the recorded session), cut short before any media, or with no video Glass can send. |
-| `too_large` | 413 | A file, a batch or the session's uploads over their limit, or a JSON request body over 64 KB. |
-| `rate_limited` | 429 | Too many requests or inputs from this client; see `Retry-After`. |
-| `internal_error` | 500 | A fault in the runtime; the detail is in its log, never in the body. |
-| `recording_limit` | 503 | `GLASS_RECORDING_MAX_ACTIVE` recordings already run. |
-| `disk_low` | 507 | Under 512 MB free where recordings are kept. |
-| `viewer_limit` | 503 | A relay viewer refused at the engine's relay viewer limit (`GLASS_RELAY_MAX_VIEWERS`). Not final: a place can free up. On a WebSocket it arrives as close code `4503`, as does a viewer refused at its session's own limit (`GLASS_MAX_VIEWERS_PER_SESSION`). |
-| `at_capacity`, `hard_cap_reached`, `shutting_down`, `unavailable` | 503 | No session slot; no hardware headroom (the message names the CPU, memory, the GPU or its encoder); the runtime is stopping; not available on this session now, or tickets unavailable. |
-| `source_failed` | (signaling only) | The session's browser stopped; the session has ended. Sent in the signaling `error` message, never by an HTTP route. |
-| `session_not_resumable` | (signaling only) | A reconnect found a session that cannot resume; the session has ended. Sent in the signaling `error` message. |
-
-### WebSocket close codes
-
-| Code | Sent by | Meaning |
-|---|---|---|
-| `1000` | Client | Deliberate leave. The connection ends; no reconnect grace. |
-| `4001` | Glass | Relay producer sent no media for `GLASS_RELAY_STALL_CLOSE_MS` (10 s by default), or none within `GLASS_RELAY_FIRST_MEDIA_GRACE_MS` of connecting. Held for grace; resume. Its slot reads `stalled` to viewers from `GLASS_RELAY_STALL_THRESHOLD_MS` (2 s). |
-| `4401` | Glass | The link has expired: it admits no new connection ([link expiry](#link-expiry)). Don't retry; get a new link. |
-| `4403` | Glass | The link was revoked: this connection is closed, and the link admits nothing again. Don't retry; get a new link. |
-| `4404` | Glass | The session doesn't exist (never created, closed or expired), or it closed while this connection was open. Don't retry. |
-| `4503` | Glass | A viewer refused at a viewer limit: the engine's for relay viewers (`GLASS_RELAY_MAX_VIEWERS`), or its session's own (`GLASS_MAX_VIEWERS_PER_SESSION`, browser and relay sessions). Not final: try again later. |
-| `1011` | Glass | The session's browser stopped; sent after the signaling `error` message (`source_failed`). The session has ended: don't retry it. |
-| anything else | either | Treated as a lost connection: held for the reconnect grace. |
-
-Glass also sends WebSocket pings; a client that doesn't answer within 30 s is
-treated as disconnected. Browsers answer automatically.
-
-### Rate limits
-
-Creating sessions, relay sessions and calls is limited per client to
-`GLASS_CREATE_RATE_PER_MINUTE` (default 120 a minute, in bursts of up to
-40), and redeeming tickets to `GLASS_TICKET_RATE_PER_MINUTE` (default 10, in
-bursts of up to 4; every attempt counts, valid or not). The client is the
-address Glass sees, or behind a trusted proxy the one it forwards
-(`GLASS_TRUSTED_PROXIES`). Past the limit: `429` with `Retry-After` (whole
-seconds) and `{"error", "code": "rate_limited"}`. A request refused for
-its credential doesn't count. `0` turns a limit off.
-
-### Link expiry
-
-Every link Glass returns expires: a session's own link, minted grants, a
-relay session's viewer and producer links, and a call's peer links. The
-default is `GLASS_LINK_TTL_HOURS` (24 h; `0` is never). A request sets its
-own lifetime in seconds, `0` for never: `linkExpiresIn` when creating a
-session, relay session or call (every link it returns), `expiresIn` when
-minting a grant. A negative value is `400`. The response says when, as
-RFC 3339 UTC: `linksExpireAt` on creation, `expiresAt` on a grant; absent
-for a link that never expires.
-
-An expired link only stops **joining**: its WebSocket is accepted and closed
-at once with `4401`. The session goes on, connections already in it are not
-cut off, and a connection that joined with the link can still resume after
-a drop, within the reconnect grace. Your backend can mint a fresh link at
-any time.
+`202`; `400` for an unknown or invalid action; `400`
+`navigation_not_allowed` for a `navigate` the navigation rules refuse (a
+scheme other than http or https, loopback, a private or link-local address);
+`429` when rate limited.
 
 ### Session tickets
 
-A ticket lets a browser start a session without the API token ever leaving
-your backend. Set `GLASS_TICKET_SECRET` (comma-separated to rotate: every
-listed secret verifies). Your backend signs a ticket and hands it to the
-page; the page sends `POST /v1/tickets` with `{"ticket": "<ticket>"}`.
+A ticket lets a browser make a session without the API token. Your backend
+signs it with `GLASS_TICKET_SECRET` (comma-separated to rotate) and hands it
+to the page, which sends `POST /v1/tickets` with `{"ticket": "<ticket>"}`.
 
-A ticket is a JWT signed with HMAC-SHA-256, as any JWT library makes one.
-The header must say `"alg": "HS256"` (a `typ` of `JWT` is fine, `crit` is
-not); any other algorithm is refused. Claims:
+A ticket is a JWT signed with HMAC-SHA-256; the header must be exactly
+`{"alg":"HS256"}` (with `"typ":"JWT"` allowed). Claims:
 
-| Claim | |
-|---|---|
-| `exp` | Required. At most 10 minutes ahead; 30 s of clock skew is allowed. |
-| `jti` | Required, up to 128 bytes. Each ticket is accepted once, across restarts: Glass keeps the used ids (hashed) in its cache directory, the `glass-cache` volume of [deployment.md](deployment.md). If that record can't be written, the ticket is refused; if it can't be read at start, tickets are refused for one ticket lifetime (10 minutes and 30 s), after which none redeemed before can still be. |
-| `nbf` | Optional, honoured. |
-| `glass` | Optional: the session's `audioInput`, `contentHint`, `codec`, `inputMode` and `linkExpiresIn`, as for `POST /v1/sessions`, and `watchLinks` (0 to 10). Any other field, `inspect` included, is refused. |
+- `exp` (required): at most 10 minutes ahead; 30 s of clock skew allowed.
+- `jti` (required, up to 128 bytes): each ticket is accepted once, across
+  restarts.
+- `nbf` (optional): honoured.
+- `glass` (optional): the session's options, `audioInput`, `contentHint`,
+  `codec`, `inputMode` and `linkExpiresIn`, and `watchLinks` (0 to 10).
 
-Other registered claims (`iss`, `sub`, `aud`, `iat`) are ignored.
+The answer is `POST /v1/sessions`'s, plus `watchLinks` (watch-only links, as
+many as asked) when asked for. `401` with `ticket_invalid`, `ticket_expired`
+or `ticket_used`. A refusal for options or capacity does not spend the
+ticket. A ticket opens only this route.
 
-```js
-// Node, on your backend: any JWT library works.
-import jwt from "jsonwebtoken";
-const ticket = jwt.sign(
-  { jti: crypto.randomUUID(), glass: { watchLinks: 1 } },
-  process.env.GLASS_TICKET_SECRET,
-  { algorithm: "HS256", expiresIn: "5m" },
-);
-```
-
-`201` is the `POST /v1/sessions` body, plus `watchUrls` (watch-only links)
-when `watchLinks` asked for them. The session's own link controls the
-session. `401` with `code`: `ticket_invalid` (malformed, wrong signature or
-header, missing claim), `ticket_expired` (expired, not yet valid, or longer
-than 10 minutes) or `ticket_used`. `400` for options the session would
-refuse; a ticket refused that way, or at capacity (`503`), is not spent.
-
-A ticket opens only this route: it is not accepted as a token anywhere
-else, and the API token is not accepted here.
+`glass gate` hands tickets to browsers for you; see
+[Deployment](deployment.md).
 
 ### The session service: `glass gate`
 
 `glass gate` runs beside the engine and gives a browser a session ticket, so a
 website gets a browser from the engine's pool with nobody handing out links
-and no API token in the page. It signs with the engine's
-`GLASS_TICKET_SECRET`; the browser redeems the ticket with the engine
-(`POST /v1/tickets`, above). Running it: see
-[deployment.md](deployment.md#the-session-service-glass-gate).
+and no API token in the page. The browser redeems the ticket with the engine
+(`POST /v1/tickets`), which makes the session then. Setting it up is in
+[Deployment](deployment.md).
 
 | Method | Path | |
 |---|---|---|
-| `POST` | `/v1/ticket` | Body: JSON with what the gate asks for: `{}` for the `open` gate, `{"passphrase"}` for `passphrase`, `{"code"}` for `links`. Any other field is `400` `bad_request`; a `code` or `passphrase` sent to a gate that doesn't ask for it is ignored, so links already handed out keep working when a gate is switched from `links` to `open`. `201` with `{"engine", "ticket"}`: the engine's public address and a ticket for one session with the engine's defaults, valid 2 minutes. `401` `gate_refused` for a wrong passphrase, or a link's code that is not valid, has expired or has no uses left; `503` `unavailable` when the `links` gate can't read or keep its record of uses; `429` `rate_limited` with `Retry-After` past the per-visitor or total limit; `403` `origin_not_allowed` for a browser origin not in `GLASS_CORS_ORIGINS`. Answers a CORS preflight for allowed origins. |
+| `POST` | `/v1/ticket` | `{}` for an `open` gate, `{"passphrase"}` for `passphrase`, `{"code"}` for `links`. `201` with `{"engine", "ticket"}`: the engine's public address and a ticket for one session with the engine's defaults, valid 2 minutes. `401` `gate_refused` for a wrong passphrase or a code that is not valid, expired or used up; `429` `rate_limited` with `Retry-After`; `403` `origin_not_allowed`; `503` `unavailable`. |
 | `GET` | `/healthz` | `200`. |
 
-Beside an engine with `GLASS_GATE_UPSTREAM`, the engine serves the same
-`POST /v1/ticket` itself and forwards it, with no API token needed; it
-answers `502` `unavailable` while the gate is down.
+### Session statistics
 
-## Signaling: viewers
+`GET /v1/sessions/{id}/stats/stream` sends one Server-Sent Event every 2 s for
+each live source, naming it (`source`): a JSON object of running totals since
+the session started. The frame fields:
 
-This applies to browser-session and relay-session viewers
-(`…/signaling`). Producers and call peers use the shorter exchange in
-[sources/producers.md](sources/producers.md#connecting) and
-[sources/calls.md](sources/calls.md#joining).
+| Field | Meaning |
+|---|---|
+| `framesCaptured` | frames the capture delivered |
+| `framesEmitted` | captured frames that carried a picture and went on toward the encoder |
+| `framesDroppedCongestion` | captured frames not encoded because a viewer's path could not carry them: the sum of the three below |
+| `framesDroppedForWindow` | dropped while more data was in flight than the path's congestion window allows |
+| `framesDroppedByDropper` | dropped to hold an encoder that runs over its target bitrate to it |
+| `framesPausedForQueue` | held back while a viewer's send queue would take over 2 s to leave |
+| `encodedBytes`, `keyframesEncoded` | the encoder's whole output; every encoded frame is sent |
+| `targetBitrateBps` | the congestion controller's send-rate target, the lowest across the session's viewers; 0 with no estimate |
 
-Every message is JSON with a `type`. On connect, Glass sends `ice_config`,
-then **the offer**; the client answers.
+Frames are dropped before they are encoded, never after, so every encoded
+frame is sent and a drop never needs a keyframe to recover. The object carries
+more fields (transport, input latency, memory, the encoder in use, audio, and
+for a browser its capture level and why it last stepped down for CPU); treat
+new fields as additions.
 
-### Glass → client
+### Rate limits
 
-| `type` | Fields | Meaning |
+Making sessions and playing recordings is limited per client to
+`GLASS_CREATE_RATE_PER_MINUTE` (120 a minute by default, bursts of 40), and
+redeeming tickets to `GLASS_TICKET_RATE_PER_MINUTE` (10, bursts of 4).
+Behind a trusted proxy (`GLASS_TRUSTED_PROXIES`) the client is the address
+it forwards. Past a limit: `429` `rate_limited` with `Retry-After`. `0` turns
+a limit off.
+
+### Errors
+
+Every error from an HTTP route, a refused WebSocket handshake included, is
+
+```json
+{ "error": "a sentence for people", "code": "a_code_for_programs" }
+```
+
+The sentence may change between releases; the code does not. A body may
+carry more fields (`floor_taken`'s `holder`).
+
+| `code` | Status | Meaning |
 |---|---|---|
-| `ice_config` | `iceServers: [{urls, username?, credential?}]`, `protocolVersion` | First message on every signaling connection, viewers, producers and call peers alike: the STUN and TURN servers to use, as an `RTCConfiguration`'s `iceServers`, and the [protocol version](#versioning). With `GLASS_TURN_SECRET` set, the TURN entry carries a credential for this connection alone, valid `GLASS_TURN_CREDENTIAL_TTL_HOURS`; every reconnect gets a fresh one. Use these unless your application has its own. |
-| `offer` | `sdp`, `connectionId`, `producesInput`, `isOwner` | Right after `ice_config`. Identifies this connection and its starting rights. The booleans are always present. |
-| `ice-candidate` | `candidate` | Trickled ICE. Never sent before `offer`. |
-| `capabilities_changed` | `connectionId`, `producesInput` | Someone's control changed. Sent to every connection, including the one it concerns. |
-| `input_requested` | `connectionId` | Sent to the control holder when a request can't be granted outright. |
-| `control_answer` | `action`, `outcome`, `reason?`, `connectionId?`, `id?` | To the asker: the one answer to every `request_input`, `release_input`, `grant_input` and `revoke_input`, a refused or rate-limited one included, so a client never waits on silence. `action` is the request's type and `id` the request's own `id`, when it sent one. `outcome` is the state the request leaves: `granted`, `relayed` (no room, so the ask went to the holders as `input_requested`), `released`, `revoked` or `refused`. Asking for what already holds is answered as done, not refused. `reason`, on a refusal: `not_allowed` (this link never included control), `not_owner`, `no_capacity` (the license tier or the shared pool has no room), `unknown_connection`, `rate_limited` or `invalid`. `connectionId` is the target of a grant or revoke, once it is a connection on the session. `@glass/client`'s `requestInput()`, `releaseInput()`, `grantInput()` and `revokeInput()` resolve with it. |
-| `input_floor` | `connectionId` (or `null`) | Browser only, input mode `floor`: whose input reaches the page. Once after `offer`, then to every connection on each change. Names the controller until someone else takes the page, even after it pauses; `null` once it leaves. |
-| `roster` | `connections: [{connectionId, producesInput, isOwner}]` | Owner only, once after `offer`: everyone else already connected. |
-| `connection_joined` | `connectionId`, `producesInput`, `isOwner` | Owner only. Not sent when a connection resumes. |
-| `connection_left` | `connectionId` | Owner only. |
-| `slot_state` | `slots: {name: "empty"\|"live"\|"stalled"}` | Relay only. Once after `offer`, then on every change. |
-| `connection_quality` | `quality` (`excellent`, `good`, `poor` or `lost`), `score` (0-100) | This connection's quality, as Glass measures it from the viewer's own receiver reports of the video it is sent: once it is known after connecting, then on each change, at most every 5 s. It counts packet loss (packets repaired by a resend are not lost) and, in a simulcast session, how many layers the viewer's is below the largest being sent. It falls fast and rises slowly. `lost` means no media arrives at all; a stretch in which nothing was sent (a still page) leaves it as it was. Browser sessions, relay viewers and call peers. `@glass/client` fires it as `connectionQuality`. |
-| `new_tab_request` | `url` | Browser only: the page tried to open a popup or tab. |
-| `recording` | `active: boolean` | Whether the session is being recorded: once right after `offer` (on or off), then on every change. Sent to every connection whatever its capabilities, and on a relay session to its producers too (after the `answer`). `@glass/client` fires it as `recording` (`GlassProducer` too). See [Recordings](#recordings). |
-| `playback` | `playing: boolean`, `positionMs`, `durationMs`, `ended: boolean` | Playback sessions only: on connect, on every change, and once a second while playing. `@glass/client` fires it as `playback` (`playbackState()`). |
-| `timeline` | `event: {t, type, ...}` | Playback sessions only: one event of the recording's timeline, as playback passes its time. `@glass/client` fires it as `timeline`. |
-| `clock_probe` | `id` | Clock calibration before the DataChannel opens. Reply `clock_probe_reply`. |
-| `error` | `error`, `code?` | A message from Glass; `error` is a sentence for people. Only two codes end the session: `source_failed` (the browser stopped for good; Glass closes the socket next with `1011`) and `session_not_resumable` (a reconnect found a session that cannot resume). After either, don't reconnect. Any other `error` leaves the connection and its reconnect as they are. A failed connection sends no `error`: Glass closes the socket, holds the session for the reconnect grace, and the client reconnects. Before v0.1.118, Glass also sent a code-less `error` there and for a `navigate` the source can't do, and `@glass/client` took every `error` as final. |
+| `bad_request` | 400 | Malformed, or a field out of range. |
+| `navigation_not_allowed` | 400 | A URL the navigation rules refuse. |
+| `unauthorized` | 401 | No credential, or one the engine does not know. |
+| `ticket_invalid`, `ticket_expired`, `ticket_used` | 401 | A session ticket refused. |
+| `link_expired`, `link_revoked` | 401 | A link past its expiry, or revoked. |
+| `gate_refused` | 401 | `glass gate` refused: its passphrase or link code is not right. |
+| `origin_not_allowed` | 403 | A browser origin the engine does not allow. |
+| `link_not_allowed` | 403 | A link without the right this needs. |
+| `inspect_off` | 403 | A page route on a source made without `"inspect": true`. |
+| `session_not_found` | 404 | No such session, or it has ended. |
+| `source_not_found` | 404 | No such source in the session, or it has ended. |
+| `not_found` | 404 | No such thing in the session: a download, a link id. |
+| `unsupported` | 400, 404, 409, 501 | The source or session cannot do this. |
+| `session_full` | 409 | The session has `maxMembers` connections already. |
+| `no_page`, `stale_ref`, `no_dialog`, `dialog_open` | 409 | Page routes: no page yet; a reference from an earlier snapshot; no dialog open; a dialog blocks the page. |
+| `floor_taken` | 409 | Another connection has the page (input mode `floor`); see `holder`. |
+| `no_file_chooser` | 409 | Files uploaded with no file chooser waiting. |
+| `recording_off` | 409 | Recording asked for with no `GLASS_RECORDING_DIR`. |
+| `already_recording`, `not_recording` | 409 | Start while recording; stop while not. |
+| `recording_active` | 409 | A recording fetched, played or deleted while it still runs. |
+| `recording_unplayable` | 409 | A recording with nothing that can be played. |
+| `too_large` | 413 | A file, a batch or a JSON body over its limit. |
+| `rate_limited` | 429 | Too many requests or inputs; see `Retry-After`. |
+| `internal_error` | 500 | A fault in the engine; the detail is in its log, never the body. |
+| `viewer_limit` | 503 | A watching member refused at the engine's viewer limit; not final. |
+| `at_capacity`, `hard_cap_reached`, `shutting_down`, `unavailable` | 503 | No session slot; no hardware headroom; the engine is stopping; not available now. |
+| `recording_limit` | 503 | Too many recordings already run. |
+| `disk_low` | 507 | Too little free disk where recordings are kept. |
+
+Three codes arrive only in signaling's `error` message:
+
+| `code` | Meaning |
+|---|---|
+| `source_failed` | The connection's source stopped for good (its browser died); the session has ended. The socket closes next with `1011`. |
+| `session_not_resumable` | A reconnect found a session that cannot resume; it has ended. |
+| `not_connected` | The connection's WebRTC is not up 20 s after Glass's answer: its network may not reach the engine or its TURN server. The socket stays open; the client may restart ICE or leave. |
+
+### WebSocket close codes
+
+| Code | Sent by | Meaning |
+|---|---|---|
+| `1000` | Client | A deliberate leave: no reconnect grace. |
+| `4401` | Glass | The link has expired. Don't retry; get a new link. |
+| `4403` | Glass | The link was revoked. Don't retry. |
+| `4404` | Glass | The session doesn't exist, or it ended while connected. Don't retry. |
+| `4503` | Glass | Refused at a viewer limit. Not final: try again later. |
+| `1011` | Glass | The session's source stopped; the session has ended. |
+| anything else | either | A lost connection: held for the reconnect grace. |
+
+Every socket is pinged; a client that doesn't answer within 30 s is treated
+as gone (browsers answer on their own).
+
+## Signaling
+
+The WebSocket at a link's `url`. Every message is JSON with a `type`.
+
+**The client offers; Glass answers.**
+
+1. Glass's first message is `hello`: the protocol version, the ICE servers to
+   use, who this connection is, what it may do, and the session's sources.
+2. The client adds its receive slots (three video and three audio, as
+   `@glass/client` does, so a join usually needs no second round), a
+   DataChannel, and any tracks it publishes (each announced with `publish`
+   first), and sends its `offer`.
+3. Glass answers (`answer`), and says which slot carries which source
+   (`tracks`). ICE candidates go both ways (`ice-candidate`).
+4. When Glass has more to send than the client has slots, it says how many
+   more (`slots_needed`); the client adds them and offers again. Only one
+   offer is in flight at a time.
+
+A source added later is announced (`source_added`) and takes a slot; one
+removed is announced (`source_removed`) and stops being sent, with no
+renegotiation.
 
 ### Client → Glass
 
-| `type` | Fields | Meaning |
+| `type` | Fields | |
 |---|---|---|
-| `answer` | `sdp` | Answer to the offer. |
-| `ice-candidate` | `candidate` | Trickled ICE. |
-| `initial_viewport` | `width`, `height`, `isMobile?`, `userAgent?`, `userAgentData?` | Browser only, right after connect, from a connection with input (ignored from a watch-only one, since it resizes the shared page); it spends the `set_viewport` rate budget. `isMobile: true` turns on mobile emulation with the given user agent; `userAgentData` (`{brands: [{brand, version}], mobile, platform}`) sets the client hints that go with it. |
-| `navigate` | `url` | Browser only, owner only. Same as the DataChannel `navigate`. On a source that can't navigate it is reported as dropped input (`unsupported`). |
-| `request_input`, `release_input` | `id?` | Ask for or give up control. Answered with `control_answer`. |
-| `grant_input`, `revoke_input` | `connectionId`, `id?` | Owner only. Answered with `control_answer`. |
-| `mic_granted`, `mic_denied` | none | Answer to `MicAccessRequested`. |
-| `clock_probe_reply` | `id`, `clientT` (epoch ms) | Answer to `clock_probe`. |
+| `offer` | `sdp` | The client's offer: its receive slots, its DataChannel and what it publishes. |
+| `ice-candidate` | `candidate` | A trickled ICE candidate. |
+| `publish` | `mid`, `kind` | Announce a track before the offer that carries it: `camera`, `microphone`, `screen` or `device`. See [Publishing](sources/producers.md). |
+| `unpublish` | `mid` | Stop publishing that track; its source is removed for everyone. |
+| `producer_report` | `mid`, `uplinkKbps`, `layers: [{rid, active, width, height}]` | A simulcast publisher, about once a second: its uplink estimate and its layers. Answered with `layers_wanted`. |
+| `receive` | `source`, `paused` | Pause or resume this connection's picture of a source. Others go on receiving it. |
+| `navigate` | `url`, `source?` | Navigate a browser source. Owner only. |
+| `initial_viewport` | `width`, `height`, `isMobile?`, `userAgent?` | Sent once, right after connecting: the viewer's size, and whether to emulate a phone. |
+| `request_input`, `release_input` | `source?`, `id?` | Ask to hold a source's input, or give it up. See "Control". |
+| `grant_input`, `revoke_input`, `grant_watch`, `deny_watch` | `connectionId`, `source?`, `id?` | The owner acting on another member. See "Owner-controlled handoff". |
+| `mic_granted`, `mic_denied` | none | The answer to `MicAccessRequested` (see "The page's microphone"). |
+| `clock_probe_reply` | `id`, `clientT` | The answer to a `clock_probe`. |
 
-### Microphone negotiation
+A message that leaves out `source` is about the session's default source
+(its first live one).
 
-A browser-session client must add a silent placeholder audio track to its
-peer connection **before creating its answer**, on every connection. Without
-it the answer negotiates receive-only audio, and a microphone can't be added
-later without renegotiation, which Glass doesn't do. After sending
-`mic_granted`, the client swaps the real microphone into that track with
-`replaceTrack`. `@glass/client` does both.
+### Glass → client
+
+| `type` | Fields | |
+|---|---|---|
+| `hello` | `protocolVersion`, `iceServers`, `connectionId`, `rights`, `owner`, `sources`, `members?` | The first message. `iceServers` is an `RTCConfiguration`'s; with the engine's own TURN it carries a credential minted for this connection, fresh on every reconnect. `members` (the other members, `{connectionId, owner, rights}`) for an owner only. Nothing is sent before it. |
+| `answer` | `sdp` | Glass's answer. |
+| `tracks` | `tracks: [{mid, kind, source}]` | Which receive slot carries which source, after every answer. |
+| `slots_needed` | `video`, `audio` | Add this many receive slots and offer again. |
+| `ice-candidate` | `candidate` | A trickled ICE candidate. |
+| `source_added` | `source` | A source this connection may watch joined. |
+| `source_updated` | `source` | Its state changed short of ending: `stalled`, or `live` again. |
+| `source_removed` | `id`, `reason` | It ended (`removed`, `failed`). Not sent when the whole session ends. |
+| `rights_changed` | `rights`, `denied: {watch, control}` | The owner denied this connection a source, or lifted it. |
+| `input_holders` | `source`, `holders`, `floor` | Who holds a source's input, and who has its floor now. On joining, then on every change. |
+| `input_requested` | `source`, `connectionId` | Sent to the holders when a request can't be granted at once. |
+| `control_answer` | `action`, `outcome`, `source`, `reason?`, `connectionId?`, `id?` | The one answer to every control request. |
+| `member_joined`, `member_left` | `connectionId`, … | Owners only: a member came or went. |
+| `publish_refused` | `mid`, `reason` | A published track Glass did not take: `invalid`, `not_allowed` or `codec_mismatch`. |
+| `layers_wanted` | `mid`, `rids` | A simulcast publisher: the layers to send now; turn the others off. |
+| `connection_quality` | `quality`, `score` | This connection's quality, `excellent`, `good`, `poor` or `lost` (score 0–100), on each change, at most every 5 s. |
+| `recording` | `active` | Whether the session is being recorded; on joining, then on every change. |
+| `playback` | `source`, `playing`, `positionMs`, `durationMs`, `ended` | A playback source's state: on joining, on every change, once a second while playing. |
+| `timeline` | `source`, `event` | A recording's timeline event, as playback passes it. |
+| `new_tab_request` | `url` | The page tried to open a popup or tab; the client decides what to do. |
+| `clock_probe` | `id` | Clock calibration before the DataChannel opens; answer at once with `clock_probe_reply`. |
+| `error` | `error`, `code?` | A message about this connection. Final only for `source_failed` and `session_not_resumable` (don't reconnect after either). |
+
+A transport failure sends no `error`: the socket closes, and the client
+reconnects within the grace.
+
+## Control
+
+Each source that takes input has its own **input**: its holders, and its
+floor. A connection whose link may control a kind holds the input of every
+live source of that kind as it joins.
+
+- `request_input` asks to hold a source's input. If the engine can admit it
+  now (the license tier and capacity), it is granted and `input_holders` is
+  sent to everyone. Otherwise Glass sends `input_requested` to the current
+  holders and changes nothing: your app decides whether to ask a person,
+  decline or ignore it. Glass never queues or takes control on its own. A
+  link that never included control of that kind is refused (`not_allowed`):
+  **a watch link stays a watch link**.
+- `release_input` gives it up.
+- `control_answer` answers every control request, a refused one included,
+  so a client never waits on silence: `outcome` is `granted`, `relayed`,
+  `released`, `revoked` or `refused`, with `reason` on a refusal
+  (`not_allowed`, `not_owner`, `no_capacity`, `unknown_connection`,
+  `unknown_source`, `rate_limited`, `invalid`), and `id` echoing the
+  request's.
+
+Navigation (`navigate`, `back`, `forward`, `refresh`) is the owner's alone,
+whoever holds the input: it changes what everyone sees.
+
+### Input arbitration
+
+With several holders, the source's `inputMode` decides whose input reaches
+the page. A source with one holder behaves the same in both.
+
+- **`floor` (the default): one at a time.** The first holder to send input
+  has the page, while it holds anything down and until it has been idle for
+  100 ms after a pointer or touch event, or 1 s after a key or wheel event.
+  Others' input meanwhile is dropped (`InputDropped`, `floor_taken`).
+  `input_holders`' `floor` names who has it.
+- **`free`: everyone at once.** One pointer jumps between people; keys land
+  in whichever field was focused last. `floor` is always `null`.
+
+The page size is set by one connection: the owner's while it holds the
+input, otherwise the holder connected longest. Keys and buttons a
+connection holds down are released when it leaves or loses the input.
+
+### Owner-controlled handoff
+
+The connection that joined with the session's own link is the **owner**. It
+acts on other members directly, each answered with `control_answer`:
+
+| `type` | |
+|---|---|
+| `grant_input` | Give a member a source's input, without it asking. Passes the same license and capacity check as `request_input`. |
+| `revoke_input` | Take it away, however it was got. |
+| `deny_watch` | Stop a member receiving a source; it is told (`rights_changed`) and cannot resume it itself. |
+| `grant_watch` | Lift that denial. |
+
+An owner learns who is there from `hello`'s `members`, then `member_joined`
+and `member_left`. Other members never receive these. Glass renders no
+member list and decides nobody's control: it gives the owner's app the
+information and the authority, and the app decides.
 
 ## DataChannel input (client → Glass)
 
-Each message is a JSON string: `{"type": "<action>", "data": {…}}`. Input Glass can't accept is dropped and reported back
-(see [Dropped input](#dropped-input)). Coordinates are in the remote
-page's CSS pixels.
+Every input message is a JSON string:
 
-| `type` | `data` | Notes |
+```json
+{ "type": "<action>", "data": { … }, "source": "<id>" }
+```
+
+`source` names the source it is for; left out, the session's default
+source. It is dropped (`not_authorized`) when the connection does not hold
+that source's input.
+
+| `type` | `data` | |
 |---|---|---|
-| `playback` | `action: "play" \| "pause" \| "seek"`, `positionMs?: number` | A playback session's controls (see [Recordings](#recordings)): from a connection with `producesInput`. A seek lands on the recording's keyframe at or before `positionMs`. |
-| `mousemove` | `x`, `y`, `dragging` | |
-| `mousedown`, `mouseup` | `x`, `y`, `button?` (`left`\|`right`\|`middle`), `modifiers?`, `clickCount?` | `clickCount` is the browser's own `MouseEvent.detail`. |
-| `scroll` | `deltaY`, `deltaX?`, `modifiers?` | Dispatched as a real wheel event. |
-| `keydown`, `keyup` | `key`, `code`, `modifiers` | |
-| `touchstart`, `touchmove` | `points: [{x, y, id}]` | At most 5 points. |
-| `touchend`, `touchcancel` | `points` | Points are ignored. |
+| `mousemove` | `x, y`, `dragging` | Batched by the client at about 60 a second; sent at once while dragging. |
+| `mousedown`, `mouseup` | `x, y`, `button?`, `modifiers?`, `clickCount?` | `button` `"left"` (default), `"right"` or `"middle"`; `clickCount` the browser's own (1, 2, 3). |
+| `scroll` | `deltaY`, `deltaX?`, `modifiers?` | A real `wheel` event at the pointer. |
+| `touchstart`, `touchmove` | `points: [{x, y, id}]` | Real touch events, at most 5 points. |
+| `touchend`, `touchcancel` | | |
+| `keydown`, `keyup` | `key`, `code`, `modifiers` | `modifiers`: Alt=1, Ctrl=2, Meta=4, Shift=8. |
 | `navigate` | `url` | Owner only. |
-| `back`, `forward`, `refresh` | none | Owner only. |
-| `set_viewport` | `width`, `height` | |
-| `copy_text` | none | Answered with `ClipboardText`. |
+| `back`, `forward`, `refresh` | | Owner only. |
+| `set_viewport` | `width, height` | A resize after `initial_viewport`. |
+| `copy_text` | | Answered with `ClipboardText`. |
 | `paste_text` | `text` | |
-| `dialog_answer` | `accept`, `text?` | Answers the page's open JavaScript dialog (`Dialog`, `0x11`) as OK (`accept: true`) or Cancel; `text` is a prompt's answer. Ordinary input: it needs `producesInput` and goes through the input mode's floor. Ignored when no dialog is open. |
+| `dialog_answer` | `accept`, `text?` | Answer the page's JavaScript dialog (`Dialog`). |
+| `playback` | `action`, `positionMs?` | A playback source's controls. |
+| `input_latency_report`, `clock_probe_reply`, `client_stats_report` | | Diagnostics, allowed for every connection. |
 
-`modifiers` is a bitmask: Alt = 1, Ctrl = 2, Meta = 4, Shift = 8. Interaction
-messages may carry `s`, a per-connection sequence number used for latency
-measurement.
-
-Five diagnostic messages are accepted from every connection, watch-only
-included. All are optional. `@glass/client` sends the first two by itself:
-
-- `input_latency_report`: the client's measured input-to-display latency
-  and receiver statistics, every 5 s;
-- `clock_probe_reply`: the answer to a `clock_probe`.
-
-It sends the other three only when its diagnostic options are on:
-
-- `client_stats_report`: the viewer's frame, packet and freeze counters, at the
-  trace-report interval;
-- `pixel_trace_sample` (`samples: [{rtpTimestamp, paintedAtMs}]`): when
-  frames reached the screen; the engine ignores it unless its own
-  pixel tracing is on;
-- `encoded_frame_report` (`reports: [{rtpTimestamp, type, size, hash}]`):
-  what the viewer's decoder was given for each frame, compared with what
-  was sent.
+Interaction inputs may carry `s`, a sequence number the client uses to
+match `InputFrame` to its own send times. Coordinates are CSS pixels of the
+streamed picture. Every number is range-checked; invalid input is dropped
+and reported (`InputDropped`, `invalid`).
 
 ## DataChannel messages (Glass → client)
 
-Binary. The first byte is the message type; most carry JSON after it.
+Binary messages, the first byte their type. Each names the source it is
+about: a JSON message carries `"source"`, and `ViewportSize` carries the
+source's id as UTF-8 after its height.
 
-| Byte | Name | Payload | Meaning |
+| Byte | Name | Payload | |
 |---|---|---|---|
-| `0x04` | `InputFrame` | `{f, i: [{s, c?}]}` | The frame (RTP timestamp `f`) that followed the listed inputs. Latency measurement. |
-| `0x05` | `ElementStateUpdate` | `{cursor, editableFocused}` | Cursor shape; whether a text field has focus. |
-| `0x06` | `NavigationState` | `{url, loading, canGoBack, canGoForward}` | |
-| `0x07` | `ViewportSize` | int32 LE width, int32 LE height | The browser's actual size. |
-| `0x08` | `ClockProbe` | `{id}` | Reply at once with `clock_probe_reply`. |
-| `0x09` | `ClipboardText` | `{text}` | Answer to `copy_text`. |
-| `0x0A` | `InteractiveElements` | `{elements: [{x, y, width, height}]}` | Phones only: text-field positions. Replaces the previous list. |
-| `0x0B` | `ConsoleMessage` | `{level, text}` | The page's console output: each `text` at most 2 KB (cut with ` [truncated]`), at most 50 lines a second per session (bursts of 100); after lines were dropped, a `warning` line says how many. |
-| `0x0C` | `DownloadReady` | `{filename, guid}` | Fetch `GET …/downloads/{guid}` when the user chooses to. |
-| `0x0D` | `FileChooserOpened` | `{multiple}` | Answer with `POST …/upload` within 60 s. |
-| `0x0E` | `FileChooserClosed` | `{}` | The file picker expired or was replaced. |
-| `0x0F` | `MicAccessRequested` | `{origin}` | Answer with `mic_granted` or `mic_denied` within 60 s; silence denies. |
-| `0x10` | `InputDropped` | `{code, eventType, count, s?}` | Glass discarded this connection's input. See [Dropped input](#dropped-input). |
-| `0x11` | `Dialog` | `{open, type?, message?, defaultPrompt?, inPicture}` | The page's JavaScript dialog (`alert`, `confirm`, `prompt`, `beforeunload`) opened or closed; also sent on joining while one is open. The page waits until it is answered with `dialog_answer`. `inPicture` is true when the dialog is drawn in the video (on a display, not the screencast), so a person can answer it with ordinary input; when false, show it yourself. |
-| `0xFF` | `Error` | `{code, error}` | The session's video encoder stopped for good (`code`: `encoder_failed`): the picture is dead until the session ends. `error` is a sentence for people. `@glass/client` fires it as `error` with the code. |
+| `0x04` | `InputFrame` | JSON `{f, i: [{s, c?}]}` | Which of this connection's inputs a frame just sent followed, for its own input-latency measure. |
+| `0x05` | `ElementStateUpdate` | JSON `{cursor, editableFocused}` | |
+| `0x06` | `NavigationState` | JSON `{url, loading, canGoBack, canGoForward}` | |
+| `0x07` | `ViewportSize` | int32 LE width, int32 LE height, source id | |
+| `0x08` | `ClockProbe` | JSON `{id}` | Answer with `clock_probe_reply` on the DataChannel. |
+| `0x09` | `ClipboardText` | JSON `{text}` | The answer to `copy_text`. |
+| `0x0A` | `InteractiveElements` | JSON `{elements: [{x, y, width, height}]}` | Phones only: where the page's text fields are, for the on-screen keyboard. |
+| `0x0B` | `ConsoleMessage` | JSON `{level, text}` | The page's own console, at most 2 KB a line and 50 lines a second. |
+| `0x0C` | `DownloadReady` | JSON `{filename, guid}` | A page download is ready, to connections that control the page. Show a prompt; fetch it on the person's click. Unclaimed downloads are deleted after 10 minutes. |
+| `0x0D` | `FileChooserOpened` | JSON `{multiple}` | The page opened a file picker: raise the person's own and upload the result. |
+| `0x0E` | `FileChooserClosed` | JSON `{}` | That picker is no longer waiting (60 s passed, or another opened). |
+| `0x0F` | `MicAccessRequested` | JSON `{origin}` | The page asked for a microphone (see below). |
+| `0x10` | `InputDropped` | JSON `{code, eventType, source, count, s?}` | Glass dropped this connection's input: `rate_limited`, `not_authorized`, `owner_only`, `floor_taken`, `unsupported` or `invalid`. At most one report per 2 s for each code and type. |
+| `0x11` | `Dialog` | JSON `{open, type?, message?, defaultPrompt?, inPicture}` | The page's JavaScript dialog, opened or closed. `inPicture` is true when the dialog is drawn in the stream; otherwise the viewer shows it. |
+| `0xFF` | `Error` | JSON `{code, error}` | The source's video encoder stopped for good (`encoder_failed`). |
 
-Types `0x01`–`0x1F` are control and state; `0xF0`–`0xFF` are errors and
-reserved.
+### The page's microphone
 
-### Dropped input
-
-Glass never drops input silently. It sends `InputDropped` (`0x10`) on the
-reliable DataChannel:
-
-| `code` | Meaning | What to do |
-|---|---|---|
-| `rate_limited` | The connection is sending this event type too fast. | Send less. |
-| `not_authorized` | The connection has no `producesInput`. | Request control, or use a grant that has it. |
-| `owner_only` | Only the session owner may do this (navigation). | Nothing; ask the owner. |
-| `floor_taken` | Input mode `floor`: another connection has the page, or this connection's window doesn't set the page size. | Wait for them to pause (`input_floor` says who). |
-| `unsupported` | The source doesn't accept this event type, or accepts no input. | Don't retry. Check `capabilities.inputActions`. |
-| `invalid` | The message was malformed or failed validation (out-of-range coordinates, too many touch points). | Fix the sender. |
-
-- `eventType` is the dropped event's type when the source knows it, and empty
-  otherwise. Glass doesn't echo a type it doesn't recognise.
-- Reports are coalesced per `code` and `eventType`: the first drop is reported
-  at once, then at most one report every 2 s. `count` is the number of drops
-  since the previous report.
-- `s` is the sequence number of the first dropped event in the report, when
-  the client numbered its input.
-
-A client knows its own rights from the `offer` and `capabilities_changed`, so
-it shouldn't send input it has no right to send. `@glass/client` withholds it
-and reports it through the same `inputDropped` event.
+A source made with `"audioInput": true` can be given a microphone. When the
+page asks for one, connections that control it get `MicAccessRequested`; the
+first to answer wins, and 60 s of silence is a refusal. To grant: capture
+the person's microphone, put it on the audio line already in the offer
+(`@glass/client` offers a silent placeholder on every connection to a
+browser session, so no renegotiation is needed), then send `mic_granted`.
+`mic_denied` refuses.

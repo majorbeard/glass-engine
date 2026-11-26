@@ -86,6 +86,26 @@ export class FakeDataChannel {
   }
 }
 
+// FakeSender is a line's sender: its encodings, as setParameters leaves them.
+export class FakeSender {
+  replaceTrack = vi.fn(async () => {});
+  params: { encodings: RTCRtpEncodingParameters[]; degradationPreference?: string };
+  setParametersCalls = 0;
+  constructor(encodings: RTCRtpEncodingParameters[]) {
+    this.params = { encodings: encodings.map((e) => ({ ...e })) };
+  }
+  getParameters() {
+    return { ...this.params, encodings: this.params.encodings.map((e) => ({ ...e })) };
+  }
+  async setParameters(p: { encodings: RTCRtpEncodingParameters[]; degradationPreference?: string }) {
+    this.setParametersCalls++;
+    this.params = { ...p, encodings: p.encodings.map((e) => ({ ...e })) };
+  }
+  async getStats(): Promise<Map<string, unknown>> {
+    return new Map();
+  }
+}
+
 export class FakePeerConnection {
   static instances: FakePeerConnection[] = [];
   static last(): FakePeerConnection {
@@ -117,6 +137,39 @@ export class FakePeerConnection {
     return { type: "answer", sdp: "answer-sdp" };
   }
 
+  // The client offers (protocol v3): its lines, numbered by mid as added.
+  offers = 0;
+  async createOffer(): Promise<RTCSessionDescriptionInit> {
+    this.offers++;
+    return { type: "offer", sdp: `offer-sdp-${this.offers}` };
+  }
+
+  transceivers: Array<{ mid: string; kind: string; direction: string; sender: FakeSender; receiver: object }> = [];
+  addTransceiver(trackOrKind: unknown, init?: { direction?: string; sendEncodings?: RTCRtpEncodingParameters[] }): { mid: string; sender: FakeSender } {
+    const sender = new FakeSender(init?.sendEncodings ?? [{}]);
+    const kind = typeof trackOrKind === "string" ? trackOrKind : ((trackOrKind as { kind?: string }).kind ?? "audio");
+    const t = { mid: String(this.transceivers.length), kind, direction: init?.direction ?? "sendrecv", sender, receiver: {} };
+    this.transceivers.push(t);
+    if (typeof trackOrKind !== "string") this.senders.push(sender);
+    return t;
+  }
+
+  getTransceivers(): Array<{ mid: string; sender: unknown }> {
+    return this.transceivers;
+  }
+
+  createdChannels: string[] = [];
+  createDataChannel(label: string): FakeDataChannel {
+    this.createdChannels.push(label);
+    return new FakeDataChannel(label);
+  }
+
+  // Server side: a track arriving on the line mid.
+  deliverTrack(mid: string, track: { kind: string; id?: string }): void {
+    const transceiver = this.transceivers.find((t) => t.mid === mid) ?? { mid };
+    this.ontrack?.({ track, transceiver, receiver: {}, streams: [] });
+  }
+
   async setLocalDescription(d: RTCSessionDescriptionInit): Promise<void> {
     this.localDescription = d;
   }
@@ -129,7 +182,7 @@ export class FakePeerConnection {
   // make replaceTrack fail through them.
   senders: Array<{ replaceTrack: ReturnType<typeof vi.fn> }> = [];
   addTrack(): unknown {
-    const sender = { replaceTrack: vi.fn(async () => {}) };
+    const sender = new FakeSender([{}]);
     this.senders.push(sender);
     return sender;
   }
@@ -213,20 +266,53 @@ export function installFakeAudioContext(): void {
   vi.stubGlobal("AudioContext", FakeAudioContext);
 }
 
-export const TEST_URL = "ws://glass.test/v1/sessions/s1/signaling?token=tok";
+export const TEST_URL = "ws://glass.test/v1/sessions/s1/connect?token=tok";
+
+// The session's one source in the default hello: a hosted browser.
+export const SRC = "src1";
+
+export function browserSource(id = SRC, extra: Record<string, unknown> = {}) {
+  return { id, kind: "browser", state: "live", capabilities: { video: true, navigation: true }, inputMode: "floor", inspect: false, ...extra };
+}
+
+// hello is the engine's first message to a connection (protocol v3): the
+// owner's link by default, on a session of one browser.
+export function hello(extra: Record<string, unknown> = {}) {
+  return {
+    type: "hello",
+    protocolVersion: 3,
+    iceServers: [],
+    connectionId: "c1",
+    owner: true,
+    rights: { watch: "all", publish: [], control: "all", owner: true },
+    sources: [browserSource()],
+    ...extra,
+  };
+}
+
+// handshake plays the engine's side of one connection: hello, the answer to
+// the client's offer, the data channels and the connected state. holds says
+// which sources the connection holds the input track of (input_holders).
+export async function handshake(ws: FakeWebSocket, helloMsg = hello(), holds: string[] = [SRC]) {
+  ws.open();
+  ws.receive(helloMsg);
+  await flush();
+  const pc = FakePeerConnection.last();
+  ws.receive({ type: "answer", sdp: "answer-sdp" });
+  await flush();
+  for (const source of holds) ws.receive({ type: "input_holders", source, holders: [String(helloMsg.connectionId)], floor: null });
+  const { reliable, fast } = pc.openChannels();
+  pc.setState("connected");
+  return { pc, reliable, fast };
+}
 
 // connectedClient drives one full handshake and returns the client plus
 // the server-side fakes.
-export async function connectedClient(opts: Partial<GlassClientOptions> = {}) {
-  const client = new GlassClient({ signalingUrl: TEST_URL, reconnect: false, ...opts });
+export async function connectedClient(opts: Partial<GlassClientOptions> = {}, helloMsg = hello(), holds: string[] = [SRC]) {
+  const client = new GlassClient({ link: TEST_URL, reconnect: false, ...opts });
   const done = client.connect();
   const ws = FakeWebSocket.last();
-  ws.open();
-  ws.receive({ type: "offer", sdp: "offer-sdp", connectionId: "c1", producesInput: true, isOwner: true });
-  await flush();
-  const pc = FakePeerConnection.last();
-  const { reliable, fast } = pc.openChannels();
-  pc.setState("connected");
+  const { pc, reliable, fast } = await handshake(ws, helloMsg, holds);
   await done;
-  return { client, ws, pc, reliable, fast };
+  return { client, ws, pc, reliable, fast, source: client.source(SRC) };
 }

@@ -7,10 +7,10 @@ import * as transport from "./transport";
 import type { UserAgentClientHints } from "./types";
 
 // See GlassClient.navigate.
-export function navigate(c: ClientCore, url: string): void {
-  if (!drops.allowed(c, "navigate", true)) return;
+export function navigate(c: ClientCore, src: string, url: string): void {
+  if (!drops.allowed(c, src, "navigate", true)) return;
   if (c.ws && c.signalingConnected) {
-    c.ws.send(JSON.stringify({ type: "navigate", url: url }));
+    c.ws.send(JSON.stringify({ type: "navigate", url, source: src }));
   }
 }
 
@@ -39,19 +39,19 @@ export function sendInitialViewport(
 }
 
 // See GlassClient.navigateBack.
-export function navigateBack(c: ClientCore): void {
-  if (!drops.allowed(c, "back", true)) return;
-  transport.sendInput(c, "back", {});
+export function navigateBack(c: ClientCore, src: string): void {
+  if (!drops.allowed(c, src, "back", true)) return;
+  transport.sendInput(c, "back", {}, src);
 }
 
 // See GlassClient.navigateForward.
-export function navigateForward(c: ClientCore): void {
-  if (!drops.allowed(c, "forward", true)) return;
-  transport.sendInput(c, "forward", {});
+export function navigateForward(c: ClientCore, src: string): void {
+  if (!drops.allowed(c, src, "forward", true)) return;
+  transport.sendInput(c, "forward", {}, src);
 }
 
 // See GlassClient.refresh.
-export function refresh(c: ClientCore): void {
-  if (!drops.allowed(c, "refresh", true)) return;
-  transport.sendInput(c, "refresh", {});
+export function refresh(c: ClientCore, src: string): void {
+  if (!drops.allowed(c, src, "refresh", true)) return;
+  transport.sendInput(c, "refresh", {}, src);
 }

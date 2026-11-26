@@ -24,7 +24,7 @@ was pressed" rather than which key, and never typed text or a dialog's message,
 so you can keep and share it without carrying what the picture shows.
 
 **Everyone is told.** Every connection to a recorded session gets a `recording`
-message as it joins and whenever the state changes, relay producers included.
+message as it joins and whenever the state changes, whatever its link may do.
 The reference viewer shows a "Recording" mark. Whether you need your users'
 consent before recording is yours to work out for where you operate.
 
@@ -74,8 +74,8 @@ curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
   -d '{"action": "stop"}' https://glass.example.com/v1/sessions/$ID/recording
 ```
 
-Relay sessions work the same way, under `/v1/relay-sessions`. Viewer links and
-session tickets can't start a recording.
+Links and session tickets can't start a recording. A session whose members
+publish can't be recorded in this release; that comes in a later one.
 
 A recording stops when asked, when its session ends, or at a limit: its size,
 its length, or under 512 MB free on its disk. `stopReason` says which.
@@ -98,44 +98,45 @@ curl -X POST -H "Authorization: Bearer $GLASS_API_TOKEN" \
   https://glass.example.com/v1/recordings/$RECORDING_ID/play
 ```
 
-The answer is a session with a `signalingUrl`, and a viewer joins it as it joins
-any session. That link can watch and control playback; a link minted with
-`consumesMedia` alone can only watch. Playback starts once a viewer's media is
-up, and waits when no viewer is left.
+The answer is a session like any other, with one `playback` source:
+`{id, protocolVersion, link, sources, recording}`, under `/v1/sessions/{id}`
+(listed, read, ended, its links minted there). Its own link watches and
+controls playback; a link minted with `{"watch": "all"}` only watches, and
+`{"watch": "all", "control": ["playback"]}` controls it too. Playback starts
+once a viewer's media is up, and waits when no viewer is left.
 
 A recording of a session nobody joined is listed with an empty file. Playing it,
 or any file with nothing that can be played, answers `409` with the code
 `recording_unplayable` (from v0.1.114; `500` before).
 
 ```ts
-const client = createGlassClient({ signalingUrl });
-client.on("videoTrack", (stream) => (video.srcObject = stream));
+const client = new GlassClient({ link: played.link.url });
+const playback = played.sources[0].id;
+client.on("track", (_sourceId, stream) => (video.srcObject = stream));
 client.on("playback", ({ playing, positionMs, durationMs, ended }) => {});
 client.on("timeline", (event) => {}); // the recording's events, as playback passes them
 await client.connect();
 
-client.controlPlayback("pause");
-client.controlPlayback("seek", 30_000);
-client.controlPlayback("play");
+client.source(playback).controlPlayback("pause");
+client.source(playback).controlPlayback("seek", 30_000);
+client.source(playback).controlPlayback("play");
 ```
 
-Your backend can do the same with `POST /v1/playback-sessions/{id}/control`. The
+Your backend can do the same with `POST /v1/sessions/{id}/sources/{sourceId}/control`. The
 reference viewer shows a bar with play, pause and seek. See
 [the protocol](protocol.md#recordings) for every route.
 
 ## Limits worth knowing
 
 - **A browser session records only while someone watches.** With no viewer it
-  encodes nothing, so there is nothing to keep; the file simply has less in it. A
-  relay records what its producer sends, watched or not.
-- **Calls aren't recorded.** A relay records its main slot's video and the audio;
-  other slots aren't recorded.
+  encodes nothing, so there is nothing to keep; the file simply has less in it.
+- **A session whose members publish isn't recorded** in this release (calls
+  and phone cameras included).
 - **Keyframes cost a little while recording.** So that a recording can be sought,
   a browser session sends a keyframe about every 10 s while it records, which
   added about 6.5% to the bitrate of a constantly moving page on an open link. On
   a slow link, where a keyframe would stall the stream, they come as far apart as
-  2 minutes, so a recording made there seeks less finely. A relay's keyframes
-  come from its producer.
+  2 minutes, so a recording made there seeks less finely.
 - **A seek lands on a keyframe.** It lands on the one at or before the position
   you asked for, up to about 10 s earlier, or up to 2 minutes for a recording made
   on a slow link.

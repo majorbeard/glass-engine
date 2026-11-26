@@ -30,8 +30,8 @@ docker exec glass glass session close <id>            # end one session
 
 | What leaked | Reach | Do |
 |---|---|---|
-| A watch link or other link you minted, a relay session's `signalingUrl` or `produceUrl` | That one session, as far as the link allows | [Revoke the link](#a-link-leaked) |
-| A browser session's own link (`signalingUrl` from `POST /v1/sessions`) | Control of that session | [Close the session](#a-sessions-own-link-leaked) |
+| A link you minted (a watch link, a publishing link, a call's link) | That one session, as far as the link allows | [Revoke the link](#a-link-leaked) |
+| A session's own link (`link` from `POST /v1/sessions`, the owner's) | Control of that session | [Close the session](#a-sessions-own-link-leaked) |
 | The API token (`GLASS_API_TOKEN`) | Everything: create, read and close any session | [Replace the token](#the-api-token-leaked) |
 | The ticket secret (`GLASS_TICKET_SECRET`) | Start sessions, as many as capacity allows | [Replace the secret](#the-ticket-secret-leaked) |
 | The TURN secret (`GLASS_TURN_SECRET`) | Use your TURN server as a relay | [Replace the secret](#the-turn-secret-leaked) |
@@ -44,17 +44,16 @@ docker exec glass glass session close <id>            # end one session
 docker exec glass glass session revoke '<the leaked URL>'
 ```
 
-The URL can be the link itself (`wss://…/signaling?token=…`, a `produceUrl`)
-or a viewer URL that carries one (`attachSignalingUrl=…`). The link admits
+The URL can be the link itself (`wss://…/v1/sessions/…/connect?token=…`) or a
+viewer URL that carries one (`?attachLink=…`). The link admits
 nothing again, a reconnect included. Anyone connected with it is closed with
 close code `4403`, which `@glass/client` treats as final ("this link has been
 revoked"). Everyone else in the session carries on. If the leaked link was
 the session's last connection, the session ends as on any close.
 
 From your backend, without the URL: the response that minted the link
-carries its `linkId`; revoke with `DELETE /v1/sessions/{id}/connections/{linkId}`
-(or `/v1/relay-sessions/...`). See
-[protocol.md](protocol.md#browser-sessions).
+carries its `id`; revoke with `DELETE /v1/sessions/{id}/links/{linkId}`. See
+[protocol.md](protocol.md#links).
 
 A link also stops admitting new connections on its own when it expires
 (24 hours by default, [protocol.md](protocol.md#link-expiry)); revoking ends
@@ -67,11 +66,9 @@ docker exec glass glass session list         # find the session
 docker exec glass glass session close <id>
 ```
 
-A browser session's own link is the owner's and can't be revoked
-separately: closing the session ends it. A call's peer links end with the
-call (`DELETE /v1/calls/{id}`). A relay session's links, its
-`signalingUrl` included, are revoked like any other
-([A link leaked](#a-link-leaked)).
+A session's own link is the owner's and can't be revoked separately: closing
+the session ends it. Every other link, a call's included, is revoked like any
+other ([A link leaked](#a-link-leaked)).
 
 ## The API token leaked
 

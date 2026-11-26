@@ -21,7 +21,7 @@ change between releases.
 | `GLASS_ADDR` | `:8080` | HTTP listen address. |
 | `GLASS_API_TOKEN` | unset | Bearer token for the HTTP API. Required unless Glass listens on loopback only. Comma-separated to rotate: the current token first, then those being retired; every listed token works. See [deployment.md](deployment.md#authentication). |
 | `GLASS_TICKET_SECRET` | unset | Secret your backend signs [session tickets](protocol.md#session-tickets) with, so a browser can start a session without the API token. Comma-separated to rotate. Unset, tickets are off. Give each Glass instance its own secret: an instance remembers only the tickets it redeemed. |
-| `GLASS_CREATE_RATE_PER_MINUTE` | `120` | How many sessions, relay sessions and calls one client may create a minute, in bursts of up to a third more. `0` is no limit. See [protocol.md](protocol.md#rate-limits). |
+| `GLASS_CREATE_RATE_PER_MINUTE` | `120` | How many sessions (and playbacks) one client may make a minute, in bursts of up to a third more. `0` is no limit. See [protocol.md](protocol.md#rate-limits). |
 | `GLASS_TICKET_RATE_PER_MINUTE` | `10` | How many session tickets one client may redeem, or try to, a minute, in bursts of up to a third more. `0` is no limit. |
 | `GLASS_LINK_TTL_HOURS` | `24` | How long a link Glass returns admits new connections, unless its request sets its own. `0` is never. See [protocol.md](protocol.md#link-expiry). |
 | `GLASS_MONITOR_ADDR` | unset | A monitoring port of its own: `/healthz`, `/readyz`, and `/v1/info` and `/v1/metrics` with the API token, with its own small connection limit, so a flood on the public ports can't keep you from reading them. Plain HTTP: publish it only on a private address. Needs `GLASS_API_TOKEN`. See [monitoring.md](monitoring.md#the-monitoring-port). |
@@ -39,15 +39,14 @@ change between releases.
 | `GLASS_SESSION_CAP` | the tier's limit | Lower the concurrent-session limit (each session type separately). Can't exceed the tier's limit. |
 | `GLASS_POOL_SIZE` | the session cap | Most browser processes. Lower it to cap browser sessions below the session cap. |
 | `GLASS_POOL_WARM_FLOOR` | `2` | Browsers started at boot and kept ready. `0` starts them on demand. |
-| `GLASS_HARD_CAP_CPU_THRESHOLD_PERCENT` | `85` | Host CPU percent above which new browser and relay sessions are refused. `0` turns CPU admission off. See [sizing.md](sizing.md#admission-under-load). |
+| `GLASS_HARD_CAP_CPU_THRESHOLD_PERCENT` | `85` | Host CPU percent above which new sessions are refused. `0` turns CPU admission off. See [sizing.md](sizing.md#admission-under-load). |
 | `GLASS_HARD_CAP_CPU_READMIT_PERCENT` | the threshold minus 10 | Host CPU percent below which admission resumes after it stopped. |
 | `GLASS_HARD_CAP_SAMPLE_INTERVAL_MS` | `3000` | How often host CPU is sampled for admission. |
 | `GLASS_HARD_CAP_SESSION_RESERVE_PERCENT` | one core | CPU each new session reserves until its own load shows. Lower it for light pages. |
 | `GLASS_HARD_CAP_RESERVE_WINDOW_MS` | `20000` | How long a new session's reservation takes to fade, as its own load starts to show. |
 | `GLASS_HARD_CAP_MAX_WAIT_MS` | `3000` | How long a new session waits for CPU headroom before `503`. |
-| `GLASS_RELAY_MAX_VIEWERS` | `0` (no limit) | The most viewers of relay sessions at once on this engine, all relay sessions together. A viewer past it is refused before it joins (close code `4503`, or `503` `viewer_limit`) and may try again later. Set it from the cost per viewer: see [sizing.md](sizing.md#relay-viewers-and-admission). |
+| `GLASS_RELAY_MAX_VIEWERS` | `0` (no limit) | The most watching members of sessions whose members publish, at once on this engine, all such sessions together. A viewer past it is refused before it joins (close code `4503`, or `503` `viewer_limit`) and may try again later. Set it from the cost per viewer: see [sizing.md](sizing.md#viewers-of-published-streams-and-admission). |
 | `GLASS_MAX_VIEWERS_PER_SESSION` | `50` | Connections one session admits. |
-| `GLASS_MAX_STREAM_SLOTS` | `4` | Named slots one relay session may declare. |
 | `GLASS_GOMEMLIMIT_MB` | unset | Soft memory limit for the engine process. See [sizing.md](sizing.md#memory-limit-glass_gomemlimit_mb). |
 
 ## Sessions and reconnects
@@ -56,10 +55,8 @@ change between releases.
 |---|---|---|
 | `GLASS_RECONNECT_GRACE_SECONDS` | `60` | How long a dropped connection is held for its client to resume. |
 | `GLASS_PENDING_TTL_SECONDS` | `30` | How long a new browser session waits for its first connection. |
-| `GLASS_RELAY_PENDING_TTL_SECONDS` | `600` | The same, for relay and call sessions. |
-| `GLASS_RELAY_STALL_THRESHOLD_MS` | `2000` | A relay producer silent this long is `stalled`: its viewers are told the source paused. It is not disconnected for it. |
-| `GLASS_RELAY_STALL_CLOSE_MS` | `10000` | A relay producer silent this long is disconnected (close code 4001) so its client reconnects. Never shorter than the stall threshold. |
-| `GLASS_RELAY_FIRST_MEDIA_GRACE_MS` | `10000` | How long a new producer may take to send its first media. |
+| `GLASS_RELAY_PENDING_TTL_SECONDS` | `600` | The same, for a session whose members publish. |
+| `GLASS_RELAY_STALL_THRESHOLD_MS` | `2000` | A published track silent this long is `stalled`: its viewers are told it paused. Its publisher is never disconnected for it. |
 | `GLASS_INPUT_FLOOR_IDLE_MS` | `100` | Input mode `floor`: how long the controller keeps the page after a pointer or touch event. See [concepts.md](concepts.md#several-people-in-control). |
 | `GLASS_INPUT_FLOOR_KEY_IDLE_MS` | `1000` | The same after a key or wheel event. |
 
@@ -137,7 +134,7 @@ itself. See [recording.md](recording.md).
 | Variable | Default | Purpose |
 |---|---|---|
 | `GLASS_DEFAULT_CODEC` | `vp8` with `GLASS_VP8_SHIM_MODE=on`, else `h264` | The video codec of a browser session whose request names none: `h264`, `vp8` or `av1`. It must be available, or Glass does not start. A session can ask for its own (`codec`, see [protocol.md](protocol.md)); `GET /v1/info` lists what this host can serve. |
-| `GLASS_VP8_SHIM_MODE` | off | `on` makes VP8 available to browser sessions, and the default codec when `GLASS_DEFAULT_CODEC` is not set. Relay producers and call peers send the default codec. |
+| `GLASS_VP8_SHIM_MODE` | off | `on` makes VP8 available to browser sessions, and the default codec when `GLASS_DEFAULT_CODEC` is not set. Members who publish send a codec the session takes. |
 | `GLASS_AV1_SHIM_MODE` | off | `on` makes AV1 available to browser sessions: the sharpest picture at low bitrates, scrolled text above all, for about the CPU of H.264 on a modern host. Not every viewer decodes AV1 (Safari only with AV1 hardware). |
 | `GLASS_OPENH264_MODE` | on | `off` leaves out Cisco's OpenH264 (OpenH264 Video Codec provided by Cisco Systems, Inc.): nothing is downloaded from Cisco at start, and H.264 is not available. `GLASS_VP8_SHIM_MODE=on` must be set with it, or Glass does not start; AV1 may be added, but does not replace VP8 there. GPU encoding is then unused (it encodes H.264). |
 | `GLASS_NVENC_SHIM_MAX_SESSIONS` | every session with `nvidia` or `display-gpu`, else `0` | Browser sessions encoded on an NVIDIA GPU. The GPU capture methods encode on the GPU by themselves; with `screencast`, set it to encode there (`0` keeps encoding on the CPU). |
