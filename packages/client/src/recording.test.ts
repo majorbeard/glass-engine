@@ -29,7 +29,7 @@ describe("recording", () => {
   });
 
   it("is false before any report", () => {
-    const client = new GlassClient({ signalingUrl: "ws://localhost/v1/sessions/test/signaling", reconnect: false });
+    const client = new GlassClient({ link: "ws://localhost/v1/sessions/test/connect?token=t", reconnect: false });
     expect(client.recording()).toBe(false);
   });
 });

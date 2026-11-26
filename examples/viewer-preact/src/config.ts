@@ -25,7 +25,7 @@ export const ICE_TRANSPORT_POLICY = import.meta.env
 // unchanged behavior). NOT how a real deployment should work: a genuine
 // GLASS_API_TOKEN is a server-side secret that belongs in your own backend,
 // which creates the session and hands this app only the resulting
-// signalingUrl (already carrying whatever the runtime needs - see
+// link (already carrying whatever the runtime needs - see
 // createGlassSession's doc comment in @glass/client) - never in a value
 // baked into a browser bundle via VITE_*, which anyone can read from the
 // shipped JS. This exists purely so this standalone example can be
@@ -54,7 +54,7 @@ function isLocalAddress(addr: string): boolean {
 // which must never be in a browser bundle that is published. So this
 // viewer creates sessions only against a local engine; anywhere else it
 // only opens the session links it is handed
-// (?attachSessionId=...&attachSignalingUrl=...), created by whoever holds
+// (?attachLink=...), created by whoever holds
 // the token: your backend, a script, or `glass session create`; or a
 // session ticket your backend signed (?ticket=...), redeemed for a session
 // of its own.
@@ -76,8 +76,8 @@ export function gateFromLink(): { gate: string | null; code: string | null } {
 
 // engineOf is the engine a session lives on, from its signaling link: the
 // engine's own address, whichever way the session was started.
-export function engineOf(signalingUrl: string): string {
-  const u = new URL(signalingUrl);
+export function engineOf(link: string): string {
+  const u = new URL(link);
   return `${u.protocol === "wss:" ? "https:" : "http:"}//${u.host}`;
 }
 

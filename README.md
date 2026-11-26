@@ -6,27 +6,27 @@ to any number of **viewers** over WebRTC, and carries input back from a
 viewer to the source. You run it on your servers and build your app on its
 HTTP API and SDK; your product, your users and your service terms stay yours.
 
-A source can be:
+A session holds sources, and a source can be:
 
-| Source | What it is | Create it with |
+| Source | What it is | Make it with |
 |---|---|---|
-| **Hosted browser** | A Chrome that Glass runs for you, on a display of its own. Viewers see it and drive it: mouse, keyboard, touch, scroll, navigation, clipboard, files, audio and microphone. | `POST /v1/sessions` |
-| **Relay producer** | Anything that can send WebRTC video: a phone camera, a desktop capture, a hardware encoder, your own app. Glass forwards its stream to viewers without decoding it. One session can hold several producers, and with simulcast (opt-in) each viewer gets the layer its own link carries. | `POST /v1/relay-sessions` |
-| **Two-party call** | Two peers, each sending and receiving video and audio through Glass. | `POST /v1/calls` |
+| **Hosted browser** | A Chrome that Glass runs for you, on a display of its own. Viewers see it and drive it: mouse, keyboard, touch, scroll, navigation, clipboard, files, audio and microphone. | `POST /v1/sessions` with `{"sources": [{"kind": "browser"}]}` |
+| **A published track** | Anything that can send WebRTC: a phone camera, a desktop capture, a hardware encoder, your own app. A member publishes it into the session and Glass forwards it to the others without decoding it; with simulcast (opt-in) each viewer gets the layer its own link carries. Two people who see and hear each other are two members publishing. | `POST /v1/sessions` with no sources, and a link that publishes |
+| **A recording's playback** | A recorded session, played back as a session of its own. | `POST /v1/recordings/{id}/play` |
 
-Whatever the source, the session model is the same: a session has
-connections, each connection has capabilities (watch, control, publish),
-control can be handed between viewers, and dropped connections resume inside
-a reconnect grace window. You build your product on the HTTP API and
+Whatever the sources, the model is the same: people join a session as
+members, each with a link whose rights say what it may watch, publish and
+control; control of each source can be handed between members; and dropped
+connections resume inside a reconnect grace window. You build your product on the HTTP API and
 [`@glass/client`](packages/client); Glass has no user interface of its own.
 
 ```text
               ┌──────────────────────── Glass ────────────────────────┐
  hosted       │                                                       │
  browser ─────┤                                                       │      viewer
-              │  sessions · capabilities · control handoff ·          ├────► viewer
- relay        │  reconnect grace · bandwidth estimation · TURN        │      viewer
- producer ────┤                                                       │
+              │  sessions · sources · links · control handoff ·       ├────► viewer
+ published    │  reconnect grace · bandwidth estimation · TURN        │      viewer
+ tracks ──────┤                                                       │
  (camera,     │                                                       │◄──── input
   desktop,…)  └───────────────────────────────────────────────────────┘
 ```
@@ -118,7 +118,7 @@ Open the URL Vite prints (normally `http://localhost:5173`). You are driving
 a browser that runs inside the container.
 
 [docs/getting-started.md](docs/getting-started.md) walks through the same
-setup with an API token, and adds a relay producer and a call.
+setup with an API token, and adds a published camera and a call.
 [docs/deployment.md](docs/deployment.md) covers running Glass on a server,
 where one container serves HTTPS and relays TURN itself (`GLASS_TLS=auto`,
 `GLASS_TURN=embedded`).
@@ -138,35 +138,34 @@ npm install ../glass-engine/packages/client
 **Watch and drive a hosted browser:**
 
 ```ts
-import { createGlassClient } from "@glass/client";
+import { GlassClient } from "@glass/client";
 import { mountGlassViewer } from "@glass/client/viewer";
 
 // Your backend calls POST /v1/sessions with the API token and hands the
-// browser only { id, signalingUrl }.
-const { id, signalingUrl } = await fetch("/api/glass-session").then((r) => r.json());
+// browser only the session's link and its browser's source id.
+const { link, browser } = await fetch("/api/glass-session").then((r) => r.json());
 
-const client = createGlassClient({ sessionId: id, signalingUrl });
-mountGlassViewer(document.getElementById("stage")!, client); // video + input
+const client = new GlassClient({ link });
+mountGlassViewer(document.getElementById("stage")!, client, { source: browser }); // video + input
 await client.connect();
-client.navigate("https://example.com");
+client.source(browser).navigate("https://example.com");
 ```
 
-**Publish a camera (or any `MediaStream`) as a relay producer:**
+**Publish a camera (or any track):**
 
 ```ts
-import { GlassProducer } from "@glass/client";
+import { GlassClient } from "@glass/client";
 
 const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-const producer = new GlassProducer({ stream, produceUrl }); // produceUrl from your backend
-producer.on("state", (s) => console.log("producer:", s));
-await producer.start(); // reconnects on its own after network drops
+const client = new GlassClient({ link: publishLink }); // a link that publishes, from your backend
+client.publish(stream.getVideoTracks()[0], { kind: "camera" });
+client.publish(stream.getAudioTracks()[0], { kind: "microphone" });
+await client.connect(); // reconnects on its own after network drops
 ```
 
-A viewer watches a relay session with the same `createGlassClient` call as
-above, using the relay session's `signalingUrl`.
-
-**Calls** use a plain `RTCPeerConnection` and a WebSocket; see
-[docs/sources/calls.md](docs/sources/calls.md).
+A viewer watches with a `GlassClient` on a link that watches; each published
+track arrives as a source. **Calls** are the same thing, two members who both
+publish and watch; see [docs/sources/calls.md](docs/sources/calls.md).
 
 ## Licensing
 
@@ -179,8 +178,8 @@ Glass runs without a license key on the Free tier. A license key
 | Pro | 20 |
 | Pro+ | 50 |
 
-The limit applies to each session type separately: a Pro instance can run 20
-browser sessions, 20 relay sessions and 20 calls at the same time. Watch-only
+The limit applies to browser sessions and to sessions whose members publish
+separately: a Pro instance can run 20 of each at the same time. Watch-only
 viewers don't count against it. Glass also refuses new sessions when the host
 runs out of CPU headroom, whatever the tier. See [docs/sizing.md](docs/sizing.md).
 
@@ -238,7 +237,7 @@ What is being built next. None of it exists yet, and there are no dates.
 - **Streams across several Glass nodes.** A node near a viewer pulls a stream
   from the node that owns it and serves it locally.
 - **Device agents.** Small apps that publish a computer's or phone's screen
-  as a relay producer and, where the platform allows it, accept remote input.
+  into a session and, where the platform allows it, accept remote input.
   Only mechanisms each platform permits for shipping software are used, so
   anything built on Glass stays sellable. On iOS that means view-only.
 
@@ -247,13 +246,14 @@ What is being built next. None of it exists yet, and there are no dates.
 | Doc | For | What's in it |
 |---|---|---|
 | [Getting started](docs/getting-started.md) | Everyone | First working setup for each source |
-| [Concepts](docs/concepts.md) | Integrators | Sessions, connections, capabilities, control handoff, reconnects |
+| [Concepts](docs/concepts.md) | Integrators | Sessions, sources, members and links, control handoff, reconnects |
 | [Hosted browser](docs/sources/browser.md) | Integrators | Navigation, viewport, clipboard, files, audio, microphone |
 | [Page inspection](docs/page-inspection.md) | Integrators | Reading a hosted page's structure, acting on it with real input, watching its events |
-| [Relay producers](docs/sources/producers.md) | Integrators | The producer contract, stream slots, `GlassProducer` |
+| [Publishing](docs/sources/producers.md) | Integrators | Publishing cameras and microphones, simulcast, writing your own publisher |
 | [Calls](docs/sources/calls.md) | Integrators | Two-party calling |
 | [Recording and playback](docs/recording.md) | Everyone | Keeping a session's stream, playing it back, its timeline |
-| [Client SDK](docs/client-sdk.md) | Integrators | `GlassClient`, `GlassProducer`, the viewer layer |
+| [Client SDK](docs/client-sdk.md) | Integrators | `GlassClient`, sources, publishing, the viewer layer |
+| [Migrating from 0.1](docs/migrating-from-0.1.md) | Integrators | Every change in protocol 3, and what replaces it |
 | [Protocol](docs/protocol.md) | Integrators | HTTP API, signaling and DataChannel messages |
 | [Architecture](docs/architecture.md) | Everyone | How media and input move through the engine |
 | [Deployment](docs/deployment.md) | Operators | Ports, NAT, TURN, TLS, auth, Docker |
@@ -268,13 +268,13 @@ What is being built next. None of it exists yet, and there are no dates.
 - `packages/client/`: `@glass/client`, the TypeScript SDK. The core has no
   DOM dependency; `@glass/client/viewer` is the optional video and input
   layer.
-- `examples/viewer-preact/`: the reference viewer for hosted-browser and
-  relay sessions.
+- `examples/viewer-preact/`: the reference viewer: a hosted browser, a
+  playback, or the cameras a session's members publish.
 - `examples/producer-capacitor/`: an Android app that publishes the phone's
-  camera and microphone as a relay producer and shares a watch link.
+  camera and microphone and shares a watch link.
 - `examples/call-capacitor/`: an Android app for two-party calls.
 - `examples/compose/`: the engine and `glass gate` on one host, with Docker
   Compose: see [getting-started.md](docs/getting-started.md#7-on-a-server-the-engine-and-glass-gate).
-- `examples/quickstart/`: the single-page relay and call examples used by
+- `examples/quickstart/`: the single-page publish and call examples used by
   the getting-started guide.
 - `docs/`: everything above.

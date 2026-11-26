@@ -95,18 +95,18 @@ describe("GlassClient input latency", () => {
   });
 
   it("numbers interaction inputs on the wire", async () => {
-    const { client, reliable } = await connectedClient();
-    client.mouseDown(1, 2);
-    client.setViewport(1, 1);
+    const { client, reliable, source } = await connectedClient();
+    source.mouseDown(1, 2);
+    source.setViewport(1, 1);
     expect(reliable.sent[0].data.s).toBe(1);
     expect(reliable.sent[1].data.s).toBeUndefined();
     client.disconnect();
   });
 
   it("turns an InputFrame message and a presented frame into a sample and a report", async () => {
-    const { client, reliable } = await connectedClient();
+    const { client, reliable, source } = await connectedClient();
     vi.spyOn(performance, "now").mockReturnValue(100);
-    client.dispatchKeyEvent({ type: "keydown", key: "a", code: "KeyA" } as any);
+    source.dispatchKeyEvent({ type: "keydown", key: "a", code: "KeyA" } as any);
     const s = reliable.sent[0].data.s;
     reliable.receive(0x04, { f: 4242, i: [{ s }] });
 

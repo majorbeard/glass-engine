@@ -1,0 +1,78 @@
+<!doctype html>
+<!--
+  Publish quickstart: publish this device's camera and microphone into a
+  Glass session, and watch them from another tab or device.
+
+  Serve the repository root (e.g. `npx serve .`) after `npm run build`, and
+  open /examples/quickstart/publish.html. Making the session from the page
+  only works against a local, token-less Glass; in a real app your backend
+  makes it and mints the links (see docs/sources/producers.md).
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Glass publish quickstart</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 16px; max-width: 720px; }
+    video { width: 100%; background: #000; border-radius: 6px; }
+    input { width: 100%; box-sizing: border-box; }
+    #status { color: #555; }
+  </style>
+</head>
+<body>
+  <h1>Glass publish</h1>
+  <p><label>Glass server <input id="server" value="http://localhost:8080" /></label></p>
+  <p><button id="start">Start camera</button> <span id="status"></span></p>
+  <p id="share" hidden>Watch link: <a id="link" target="_blank">open in another tab</a></p>
+  <video id="video" autoplay playsinline muted></video>
+
+  <script type="module">
+    import { GlassClient, createGlassSession, mintGlassLink } from "../../packages/client/dist/index.js";
+
+    const $ = (id) => document.getElementById(id);
+    const status = (text) => ($("status").textContent = text);
+    const watchLink = new URLSearchParams(location.search).get("watch");
+
+    if (watchLink) {
+      // Viewer: a client on a link that watches. Each published track is a
+      // source of the session; the camera's stream arrives with "track".
+      $("start").hidden = true;
+      $("server").closest("p").hidden = true;
+      const client = new GlassClient({ link: watchLink });
+      client.on("track", (_sourceId, stream) => {
+        if (stream.getVideoTracks().length) $("video").srcObject = stream;
+      });
+      client.on("sourceUpdated", (source) => status(`${source.kind}: ${source.state}`));
+      client.on("closed", (reason) => status(`closed: ${reason}`));
+      client.connect().catch((err) => status(`failed: ${err.message}`));
+    } else {
+      $("start").onclick = async () => {
+        $("start").disabled = true;
+        const baseUrl = $("server").value.replace(/\/$/, "");
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        $("video").srcObject = stream;
+
+        // Your backend would do this with the API token: a session whose
+        // members publish, a link that publishes for this page and one that
+        // watches for everyone else.
+        const session = await createGlassSession({ baseUrl });
+        const publishLink = await mintGlassLink({ baseUrl, sessionId: session.id, rights: { publish: ["camera", "microphone"] } });
+        const watch = await mintGlassLink({ baseUrl, sessionId: session.id, rights: { watch: "all" } });
+
+        const client = new GlassClient({ link: publishLink.url });
+        client.publish(stream.getVideoTracks()[0], { kind: "camera" });
+        const mic = client.publish(stream.getAudioTracks()[0], { kind: "microphone" });
+        mic.on("silent", () => status("the microphone is sending silence"));
+        client.on("connected", () => status("publishing"));
+        client.on("reconnecting", (attempt, max) => status(`reconnecting ${attempt}/${max}`));
+        client.on("closed", (reason) => status(`closed: ${reason}`));
+        await client.connect();
+
+        $("link").href = `${location.pathname}?watch=${encodeURIComponent(watch.url)}`;
+        $("share").hidden = false;
+      };
+    }
+  </script>
+</body>
+</html>

@@ -21,11 +21,11 @@ behaves the way it does.
                 congestion control per viewer, retransmission, pacing ┘
 ```
 
-**The session layer** is the same for every source. It tracks connections,
-their capabilities and the owner, runs control handoff, holds dropped
-connections for the reconnect grace, and closes sessions nobody uses. Each
-source type has its own session manager, so browser, relay and call sessions
-are limited separately.
+**The session layer** is the same for every source. It tracks a session's
+sources and its members, their links' rights and the owner, runs control
+handoff per source, holds dropped members for the reconnect grace, and closes
+sessions nobody uses. Browser sessions and sessions whose members publish are
+limited separately.
 
 **Sources** differ only in where media comes from and where input goes. Each
 source says what it can do (video, audio, navigation, the input actions it
@@ -97,16 +97,16 @@ producer ──RTP──► reassemble frames (no decode) ──► shared track
   still without decoding.
 - When a viewer joins, Glass asks the producer for a keyframe, so the new
   viewer's picture starts within moments.
-- Each slot of a session is its own stream with its own producer. Glass
-  tracks each slot's liveness (`live`, `stalled`, `empty`) from the media
-  actually arriving: a producer silent for 2 s is `stalled` to its viewers, and
-  one silent for 10 s is disconnected so that it reconnects.
+- Each published track is a source of its own. Glass tracks its liveness from
+  the media actually arriving: a track silent for 2 s is `stalled` to its
+  viewers, and `live` again on its next packet. Its publisher is never
+  disconnected for being quiet.
 
 ## Calls
 
-Each peer is a producer and a viewer at once, on one peer connection. Glass
-forwards A's media to B and B's to A, without decoding. Each peer's link has
-its own identity, so a reconnect resumes the right side of the call.
+A call is a session of two members, each publishing and watching on one peer
+connection. Glass forwards A's media to B and B's to A, without decoding. Each
+member's link is its own, so a reconnect resumes the right side of the call.
 
 ## Admission
 

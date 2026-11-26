@@ -30,6 +30,10 @@ import { watchPresentedFrames } from "../input_latency.js";
 import { DecodeReadbackOverlay } from "../decode_readback_check.js";
 
 export interface GlassViewerOptions {
+  // The source to show and send input to: one of client.sources()' ids. A
+  // viewer renders one source; an application showing several mounts one
+  // viewer for each, or lays them out itself.
+  source: string;
   // Navigation/URL-bar state updates, for the host to render its own URL bar.
   onNavigation?: (nav: NavigationState) => void;
   // The user requested a context menu (right-click / long-press) at the given
@@ -68,8 +72,10 @@ const VIEWPORT_DEBOUNCE_MS = 500;
 export function mountGlassViewer(
   container: HTMLElement,
   client: GlassClient,
-  options: GlassViewerOptions = {}
+  options: GlassViewerOptions
 ): GlassViewer {
+  // Every input goes to this source, named on the wire.
+  const src = client.source(options.source);
   const isMobile =
     options.isMobile ??
     (typeof navigator !== "undefined" &&
@@ -183,11 +189,13 @@ export function mountGlassViewer(
     decodeReadback?.start();
     stopFrameWatch ??= watchPresentedFrames(video, (rtp, displayAt) => client.notePresentedFrame(rtp, displayAt));
   };
-  const offVideoTrack = client.on("videoTrack", bindStream);
-  // If the track already arrived before this viewer mounted (the app connects
-  // up front and mounts the viewer on first navigation), the "videoTrack" event
-  // has already fired - bind the retained stream now so we don't render black.
-  const existingStream = client.getVideoStream();
+  const offVideoTrack = client.on("track", (sourceId, stream) => {
+    if (sourceId === options.source) bindStream(stream);
+  });
+  // If the source's track already arrived before this viewer mounted (the
+  // app connects up front and mounts the viewer later), its "track" event
+  // has already fired: bind its stream now so we don't render black.
+  const existingStream = src.stream();
   if (existingStream) bindStream(existingStream);
   tryPlay();
 
@@ -237,7 +245,7 @@ export function mountGlassViewer(
   const onMouseMove = (e: MouseEvent) => {
     const p = toVideoPoint(e.clientX, e.clientY);
     if (p) lastPoint = p;
-    if (p && client.isConnected()) client.mouseMove(p.x, p.y, heldButtons.size > 0);
+    if (p && client.isConnected()) src.mouseMove(p.x, p.y, heldButtons.size > 0);
   };
   const onMouseDown = (e: MouseEvent) => {
     const p = toVideoPoint(e.clientX, e.clientY);
@@ -249,7 +257,7 @@ export function mountGlassViewer(
       // never forwarded at all, so a genuine double-click never produced a
       // real multi-click DOM event server-side. See docs/protocol.md.
       if (client.isConnected())
-        client.mouseDown(p.x, p.y, buttonName(e.button), clickModifiers(e), e.detail);
+        src.mouseDown(p.x, p.y, buttonName(e.button), clickModifiers(e), e.detail);
       pixelTrace?.noteInteraction();
     }
   };
@@ -260,18 +268,18 @@ export function mountGlassViewer(
     if (!heldButtons.delete(e.button)) return;
     const p = toVideoPoint(e.clientX, e.clientY) ?? lastPoint;
     if (p && client.isConnected())
-      client.mouseUp(p.x, p.y, buttonName(e.button), clickModifiers(e), e.detail);
+      src.mouseUp(p.x, p.y, buttonName(e.button), clickModifiers(e), e.detail);
     pixelTrace?.noteInteraction();
   };
   const releaseAllHeld = () => {
     const connected = client.isConnected();
     for (const button of heldButtons) {
-      if (connected && lastPoint) client.mouseUp(lastPoint.x, lastPoint.y, buttonName(button));
+      if (connected && lastPoint) src.mouseUp(lastPoint.x, lastPoint.y, buttonName(button));
     }
     heldButtons.clear();
     for (const [code, key] of heldKeys) {
       if (connected)
-        client.dispatchKeyEvent({
+        src.dispatchKeyEvent({
           type: "keyup",
           key,
           code,
@@ -314,7 +322,7 @@ export function mountGlassViewer(
     // own Ctrl+wheel-to-zoom handling never saw the modifier at all before).
     const modifiers =
       (e.altKey ? 1 : 0) | (e.ctrlKey ? 2 : 0) | (e.metaKey ? 4 : 0) | (e.shiftKey ? 8 : 0);
-    if (client.isConnected()) client.scroll(e.deltaY, e.deltaX, modifiers);
+    if (client.isConnected()) src.scroll(e.deltaY, e.deltaX, modifiers);
     // Discrete per-event dispatch (one wheel tick = one Scroll() call
     // server-side) - not a continuous stream like mousemove/touchmove, so
     // this belongs in the same noteInteraction() set as mousedown/mouseup/
@@ -330,7 +338,16 @@ export function mountGlassViewer(
   stage.addEventListener("wheel", onWheel, { passive: false });
 
   // --- mobile keyboard (created before touch so onTap can drive it) ---
-  const keyboard = new MobileKeyboardController(stage, client, isMobile);
+  const keyboard = new MobileKeyboardController(
+    stage,
+    {
+      pasteText: (text) => src.pasteText(text),
+      dispatchKeyEvent: (e) => src.dispatchKeyEvent(e),
+      isConnected: () => client.isConnected(),
+      getStats: () => client.getStats(),
+    },
+    isMobile
+  );
 
   // --- touch ---
   const geometry: TouchInputGeometry = {
@@ -340,7 +357,7 @@ export function mountGlassViewer(
   const touch = new TouchInputController(geometry, {
     onTouchPoints: (type, points, gestureId, moveCount) => {
       if (client.isConnected())
-        client.dispatchTouch(type, points, gestureId, moveCount);
+        src.dispatchTouch(type, points, gestureId, moveCount);
       // touchmove is deliberately excluded - continuous/coalesced input,
       // same reasoning as mousemove's own exclusion. touchstart/touchend/
       // touchcancel are the discrete edges worth tracing.
@@ -364,23 +381,23 @@ export function mountGlassViewer(
     gamepadGeometry,
     {
       onCursorMove: (x, y, dragging) => {
-        if (client.isConnected()) client.mouseMove(x, y, dragging);
+        if (client.isConnected()) src.mouseMove(x, y, dragging);
       },
       onMouseDown: (x, y, button) => {
         if (client.isConnected()) {
-          client.mouseDown(x, y, button);
+          src.mouseDown(x, y, button);
           pixelTrace?.noteInteraction();
         }
       },
       onMouseUp: (x, y, button) => {
-        if (client.isConnected()) client.mouseUp(x, y, button);
+        if (client.isConnected()) src.mouseUp(x, y, button);
       },
       onScroll: (deltaY, deltaX) => {
-        if (client.isConnected()) client.scroll(deltaY, deltaX);
+        if (client.isConnected()) src.scroll(deltaY, deltaX);
       },
       onKeyDown: (key, code) => {
         if (client.isConnected()) {
-          client.dispatchKeyEvent({
+          src.dispatchKeyEvent({
             type: "keydown",
             key,
             code,
@@ -394,7 +411,7 @@ export function mountGlassViewer(
       },
       onKeyUp: (key, code) => {
         if (client.isConnected()) {
-          client.dispatchKeyEvent({
+          src.dispatchKeyEvent({
             type: "keyup",
             key,
             code,
@@ -432,7 +449,7 @@ export function mountGlassViewer(
     }
     if (e.key.startsWith("F") && e.key.length > 1) e.preventDefault();
     if (client.isConnected()) {
-      client.dispatchKeyEvent({
+      src.dispatchKeyEvent({
         type: e.type,
         key: e.key,
         code: e.code,
@@ -450,11 +467,14 @@ export function mountGlassViewer(
   }
 
   // --- state / navigation ---
-  const offState = client.on("elementState", (state) => {
+  const offState = client.on("elementState", (state, sourceId) => {
+    if (sourceId !== options.source) return;
     stage.style.cursor = state.cursor || "default";
     keyboard.setEditableFocused(!!state.editableFocused);
   });
-  const offNav = client.on("navigation", (nav) => options.onNavigation?.(nav));
+  const offNav = client.on("navigation", (nav, sourceId) => {
+    if (sourceId === options.source) options.onNavigation?.(nav);
+  });
   // Additive: only fires if the host enabled statsIntervalMs (default off).
   // Narrows (doesn't eliminate) the "first tap in an RTT-cold streak floors
   // at 600ms" limitation in MobileKeyboardController by keeping lastRtt
@@ -463,9 +483,9 @@ export function mountGlassViewer(
   const offStats = client.on("stats", (stats) => keyboard.setRttMs(stats.rttMs));
   // Mobile-only, backend-gated (see StateEngine's scanElements) - a no-op
   // subscription on desktop, since the backend never sends this there.
-  const offInteractiveElements = client.on("interactiveElements", (elements) =>
-    keyboard.setInteractiveElements(elements)
-  );
+  const offInteractiveElements = client.on("interactiveElements", (elements, sourceId) => {
+    if (sourceId === options.source) keyboard.setInteractiveElements(elements);
+  });
 
   // --- viewport size reporting ---
   // The engine's set_viewport bounds. Mirrored
@@ -550,7 +570,7 @@ export function mountGlassViewer(
       // open stays unsent, so the next measurement sends it.
       if (!client.isConnected()) return;
       lastSent = { width, height };
-      client.setViewport(width, height);
+      src.setViewport(width, height);
     }, VIEWPORT_DEBOUNCE_MS);
   };
 

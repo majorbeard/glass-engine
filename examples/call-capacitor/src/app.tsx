@@ -63,7 +63,7 @@ export function App() {
       mode,
       serverUrl: mode === "create" ? serverUrl : undefined,
       apiToken: apiToken || undefined,
-      signalingUrl: mode === "join" ? joinUrl : undefined,
+      link: mode === "join" ? joinUrl : undefined,
       turnServer,
       onStateChange: (s, d) => {
         setState(s);
@@ -104,7 +104,7 @@ export function App() {
     >
       <h1 style={{ fontSize: "1.2rem", margin: 0 }}>Glass Call Example</h1>
       <p style={{ opacity: 0.7, fontSize: "0.85rem" }}>
-        Two-party video calling over Glass's /v1/calls API. No QR pairing here (the two devices may not
+        Two people seeing and hearing each other over Glass: a session of two members, each with a link. No QR pairing here (the two devices may not
         be in the same room) — share the call link through whatever channel
         actually reaches the other phone.
       </p>
@@ -186,7 +186,7 @@ export function App() {
               type="text"
               value={joinUrl}
               onInput={(e) => setJoinUrl((e.target as HTMLInputElement).value)}
-              placeholder="ws://192.168.1.20:8080/v1/calls/.../peers/b/signaling?token=..."
+              placeholder="ws://192.168.1.20:8080/v1/sessions/.../connect?token=..."
               style={{ display: "block", width: "100%", padding: "0.5rem", marginTop: "0.25rem", boxSizing: "border-box" }}
             />
           </label>
@@ -213,13 +213,13 @@ export function App() {
       {call && (
         <div style={{ marginTop: "1rem", padding: "0.75rem", background: "#1c1c1c", borderRadius: "8px" }}>
           <p style={{ fontSize: "0.85rem", opacity: 0.9, margin: 0 }}>
-            You're peer A on call <code>{call.id}</code>. Send the link below to the other phone — they paste it
+            You're in call <code>{call.id}</code>. Send the link below to the other phone — they paste it
             into their app's "Call link" field and tap "Join that call":
           </p>
           <p style={{ fontSize: "0.75rem", wordBreak: "break-all", marginTop: "0.5rem" }}>
-            <code>{call.peerBUrl}</code>
+            <code>{call.otherLink}</code>
           </p>
-          <button onClick={() => copy(call.peerBUrl)} style={{ padding: "0.5rem 1rem" }}>
+          <button onClick={() => copy(call.otherLink)} style={{ padding: "0.5rem 1rem" }}>
             Copy call link for the other phone
           </button>
         </div>

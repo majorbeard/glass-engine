@@ -4,6 +4,8 @@ import type { Notify } from "./useGlassSession";
 
 type NavigationDeps = {
   client: GlassClient | null;
+  // The source the URL bar drives: the shown browser.
+  sourceId: string | null;
   isActive: boolean;
   setIsActive: (active: boolean) => void;
   setError: (error: string | null) => void;
@@ -18,7 +20,7 @@ type NavigationDeps = {
 
 // useNavigation returns the URL bar's handlers. The first navigate waits for
 // the viewer to mount (pendingUrl).
-export function useNavigation({ client, isActive, setIsActive, setError, setIsLoading, notify, closeContextMenu, viewerReady, sessionEpoch }: NavigationDeps) {
+export function useNavigation({ client, sourceId, isActive, setIsActive, setError, setIsLoading, notify, closeContextMenu, viewerReady, sessionEpoch }: NavigationDeps) {
   // The viewer must exist before the first navigation so its on-connect
   // initial-viewport/mobile declaration reaches the backend before the page is
   // created (see mountGlassViewer's doc comment). handleNavigate flips isActive
@@ -34,7 +36,7 @@ export function useNavigation({ client, isActive, setIsActive, setError, setIsLo
 
   const handleNavigate = useCallback(
     (url: string) => {
-      if (!client || !client.isConnected()) {
+      if (!client || !sourceId || !client.isConnected()) {
         setError("Cannot navigate: Not connected");
         notify({ message: "Connection lost.", type: "error" });
         return;
@@ -47,28 +49,28 @@ export function useNavigation({ client, isActive, setIsActive, setError, setIsLo
         setIsActive(true);
         setPendingUrl(url);
       } else {
-        client.navigate(url);
+        client.source(sourceId).navigate(url);
       }
     },
-    [client, isActive]
+    [client, sourceId, isActive]
   );
 
   useEffect(() => {
-    if (viewerReady && pendingUrl && client) {
-      client.navigate(pendingUrl);
+    if (viewerReady && pendingUrl && client && sourceId) {
+      client.source(sourceId).navigate(pendingUrl);
       setPendingUrl(null);
     }
-  }, [viewerReady, pendingUrl, client]);
+  }, [viewerReady, pendingUrl, client, sourceId]);
 
   const handleNavigateBack = useCallback(() => {
-    if (client?.isConnected()) client.navigateBack();
-  }, [client]);
+    if (client?.isConnected() && sourceId) client.source(sourceId).navigateBack();
+  }, [client, sourceId]);
   const handleNavigateForward = useCallback(() => {
-    if (client?.isConnected()) client.navigateForward();
-  }, [client]);
+    if (client?.isConnected() && sourceId) client.source(sourceId).navigateForward();
+  }, [client, sourceId]);
   const handleRefresh = useCallback(() => {
-    if (client?.isConnected()) client.refresh();
-  }, [client]);
+    if (client?.isConnected() && sourceId) client.source(sourceId).refresh();
+  }, [client, sourceId]);
 
   return { handleNavigate, handleNavigateBack, handleNavigateForward, handleRefresh };
 }

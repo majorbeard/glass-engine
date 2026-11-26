@@ -14,15 +14,15 @@ const TURN_CRED_STORAGE_KEY = "glass-producer-turn-credential";
 // header comment).
 const VIEWER_URL_STORAGE_KEY = "glass-producer-viewer-url";
 // Cap on the upload bitrate (kbps). Blank = the producer's default (1000); 0 = uncapped. Set it below the
-// link's real uplink capacity - see GlassProducerOptions.maxBitrateKbps in @glass/client.
+// link's real uplink capacity - see GlassPublishOptions.maxBitrateKbps in @glass/client.
 const MAX_BITRATE_STORAGE_KEY = "glass-producer-max-bitrate-kbps";
 const SIMULCAST_STORAGE_KEY = "glass-producer-simulcast";
 
-// A produce link opened as ?produce=<url-encoded produceUrl> (a QR code from your backend, say) fills the
+// A publish link opened as ?produce=<url-encoded link> (a QR code from your backend, say) fills the
 // field below. It is taken out of the address bar at once and never stored: it is that session's credential.
-// The session a produce link is for, to show beside it (the link's own token is never shown).
+// The session a link is for, to show beside it (the link's own token is never shown).
 function linkSession(link: string): string | undefined {
-  return /\/relay-sessions\/([^/?#]+)\/produce/.exec(link)?.[1];
+  return /\/sessions\/([^/?#]+)\/connect/.exec(link)?.[1];
 }
 
 function produceLinkFromAddress(): string {
@@ -48,7 +48,7 @@ export function App() {
   const [simulcast, setSimulcast] = useState(() => localStorage.getItem(SIMULCAST_STORAGE_KEY) === "true");
   const [state, setState] = useState<ProducerState>("idle");
   const [detail, setDetail] = useState("");
-  const [session, setSession] = useState<{ id: string; signalingUrl: string } | null>(null);
+  const [session, setSession] = useState<{ id: string; watchLink: string } | null>(null);
   const [stats, setStats] = useState<ProducerStats | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const qrCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -82,8 +82,7 @@ export function App() {
   }, [simulcast]);
 
   // The link a hosted viewer needs to attach to this exact session
-  // (examples/viewer-preact's ?attachSessionId=&attachSignalingUrl=
-  // escape hatch) - built as soon as the session exists, since the whole
+  // (examples/viewer-preact's ?attachLink= escape hatch) - built as soon as the session exists, since the whole
   // point of showing this as a QR code is letting a *different* device
   // open it without ever backgrounding this app (which drops the camera
   // connection - Android suspends a backgrounded WebView's WebRTC/socket
@@ -91,9 +90,7 @@ export function App() {
   // session exists and a viewer URL is configured.
   const watchUrl =
     session && viewerUrl
-      ? `${viewerUrl.replace(/\/$/, "")}/?attachSessionId=${encodeURIComponent(
-          session.id
-        )}&attachSignalingUrl=${encodeURIComponent(session.signalingUrl)}`
+      ? `${viewerUrl.replace(/\/$/, "")}/?attachLink=${encodeURIComponent(session.watchLink)}`
       : undefined;
 
   useEffect(() => {
@@ -111,7 +108,7 @@ export function App() {
   const start = async () => {
     if (!serverUrl && !produceUrl) {
       setState("error");
-      setDetail("enter a server URL or a produce link first");
+      setDetail("enter a server URL or a publish link first");
       return;
     }
     setDetail("");
@@ -122,9 +119,9 @@ export function App() {
     // for why: assigning handleRef here, before anything async has run,
     // is what makes a Stop click during setup actually able to reach it.
     handleRef.current = startProducer({
-      // A produce link joins that session; otherwise the server URL (and token) create one.
+      // A publish link joins that session; otherwise the server URL (and token) create one.
       serverUrl: produceUrl ? undefined : serverUrl,
-      produceUrl: produceUrl || undefined,
+      publishLink: produceUrl || undefined,
       apiToken: produceUrl ? undefined : apiToken || undefined,
       simulcast,
       turnServer: turnUrl
@@ -214,7 +211,7 @@ export function App() {
           name={`produce-${linkSession(produceUrl) ?? "none"}`}
           value={produceUrl}
           onInput={(e) => setProduceUrl((e.target as HTMLInputElement).value)}
-          placeholder="wss://glass.example.com/v1/relay-sessions/…/produce?token=…"
+          placeholder="wss://glass.example.com/v1/sessions/…/connect?token=…"
           disabled={isActive}
           style={{
             display: "block",
@@ -333,13 +330,9 @@ export function App() {
         <p style={{ fontSize: "0.8rem", wordBreak: "break-all", opacity: 0.8 }}>
           session <code>{session.id}</code>
           {watchUrl ? (
-            // watchUrl (the wrapped ?attachSessionId=&attachSignalingUrl=
-            // link a hosted viewer actually understands), not the bare
-            // session.signalingUrl below - a real bug found live
-            // (2026-09-10): this used to show the raw wss:// signaling
-            // endpoint here, which isn't a URL any browser can navigate to
-            // on its own. Copying/sharing that directly just produced
-            // ERR_UNKNOWN_URL_SCHEME for whoever opened it.
+            // watchUrl (the wrapped ?attachLink= link a hosted viewer
+            // understands), not the bare watch link below: a wss:// link is
+            // not a URL a browser can open on its own.
             <>
               <br />
               watch it: <code>{watchUrl}</code>
@@ -349,10 +342,10 @@ export function App() {
               <br />
               <span style={{ opacity: 0.7 }}>
                 set a Viewer URL above to get a shareable watch link (shown here instead of
-                the raw signaling endpoint below, which isn't itself openable in a browser)
+                the raw watch link below, which isn't itself openable in a browser)
               </span>
               <br />
-              raw signaling endpoint: <code>{session.signalingUrl}</code>
+              raw watch link: <code>{session.watchLink}</code>
             </>
           )}
         </p>

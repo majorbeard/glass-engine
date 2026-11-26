@@ -1,4 +1,4 @@
-// Pure SDP helpers for GlassProducer (producer.ts), free of DOM and WebRTC types
+// Pure SDP helpers for publishing (publish.ts, transport.ts), free of DOM and WebRTC types
 // so sdp.test.ts can exercise them directly.
 
 /**

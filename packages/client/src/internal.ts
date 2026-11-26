@@ -53,17 +53,17 @@ export const PEER_TIMEOUT_MS = 15000;
 export const DISCONNECTED_GRACE_MS = 4000;
 
 // authHeaders builds the Authorization header for a REST call, shared by
-// every call site that needs one (createGlassSession, deleteGlassSession,
-// mintConnectionGrant), so a change to the auth scheme reaches them all.
+// every call site that needs one (the session and link helpers), so a change
+// to the auth scheme reaches them all.
 export function authHeaders(apiToken?: string): HeadersInit {
   return apiToken ? { Authorization: `Bearer ${apiToken}` } : {};
 }
 
-// Derives the http(s) origin from a ws(s):// signaling URL, for the session
-// DELETE call. Falls back to same-origin ("") if it can't be parsed.
-export function originOf(signalingUrl: string): string {
+// originOf is the http(s) origin of a ws(s):// link, for the source routes
+// (downloads, uploads). "" (same origin) if it can't be parsed.
+export function originOf(link: string): string {
   try {
-    const u = new URL(signalingUrl);
+    const u = new URL(link);
     const httpProto = u.protocol === "wss:" ? "https:" : "http:";
     return `${httpProto}//${u.host}`;
   } catch {
@@ -71,17 +71,13 @@ export function originOf(signalingUrl: string): string {
   }
 }
 
-// Extracts {id} out of a .../v1/sessions/{id}/signaling signaling URL, for
-// downloadUrl() - see that method's own doc comment for why this is
-// preferred over the optional GlassClientOptions.sessionId field. Returns
-// null if signalingUrl doesn't match the expected shape (unparseable, or a
-// relay-sessions/produce URL some other caller passed in) rather than
-// guessing.
-export function sessionIdFromSignalingUrl(signalingUrl: string): string | null {
+// linkParts is the session id and token of a link,
+// .../v1/sessions/{id}/connect?token=..., or null for anything else.
+export function linkParts(link: string): { sessionId: string; token: string | null } | null {
   try {
-    const u = new URL(signalingUrl);
-    const match = u.pathname.match(/\/v1\/sessions\/([^/]+)\/signaling$/);
-    return match?.[1] ? decodeURIComponent(match[1]) : null;
+    const u = new URL(link);
+    const match = u.pathname.match(/\/v1\/sessions\/([^/]+)\/connect$/);
+    return match?.[1] ? { sessionId: decodeURIComponent(match[1]), token: u.searchParams.get("token") } : null;
   } catch {
     return null;
   }

@@ -1,12 +1,13 @@
 <!doctype html>
 <!--
-  Call quickstart: a two-party video call through Glass.
+  Call quickstart: two people seeing and hearing each other through Glass.
 
-  Serve the repository root (e.g. `npx serve .`) and open
-  /examples/quickstart/call.html. "Start a call" creates the call and joins as
-  peer A; open the link it shows in another tab or device to join as peer B.
-  Creating the call from the page only works against a local, token-less
-  Glass; in a real app your backend creates it (see docs/sources/calls.md).
+  Serve the repository root (e.g. `npx serve .`) after `npm run build`, and
+  open /examples/quickstart/call.html. "Start a call" makes a session of two
+  members and joins with the first link; open the link it shows in another
+  tab or device to join with the second. Making the session from the page
+  only works against a local, token-less Glass; in a real app your backend
+  makes it and mints the links (see docs/sources/calls.md).
 -->
 <html lang="en">
 <head>
@@ -32,66 +33,48 @@
   </div>
 
   <script type="module">
+    import { GlassClient, createGlassSession, mintGlassLink } from "../../packages/client/dist/index.js";
+
     const $ = (id) => document.getElementById(id);
     const status = (text) => ($("status").textContent = text);
-    const joinUrl = new URLSearchParams(location.search).get("join");
+    const joinLink = new URLSearchParams(location.search).get("join");
+    // Each member watches everything and publishes a camera and a microphone.
+    const MEMBER = { watch: "all", publish: ["camera", "microphone"] };
 
-    async function joinCall(peerUrl) {
+    async function joinCall(link) {
       const local = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       $("local").srcObject = local;
-
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-      local.getTracks().forEach((track) => pc.addTrack(track, local));
+      const client = new GlassClient({ link });
+      client.publish(local.getVideoTracks()[0], { kind: "camera" });
+      client.publish(local.getAudioTracks()[0], { kind: "microphone" });
+      // The other person's camera and microphone are two sources, each with
+      // its own stream: one stream of both plays them in one <video>.
       const remote = new MediaStream();
-      pc.ontrack = (e) => {
-        remote.addTrack(e.track);
+      client.on("track", (_sourceId, stream) => {
+        for (const t of stream.getTracks()) if (!remote.getTracks().includes(t)) remote.addTrack(t);
         $("remote").srcObject = remote;
-      };
-      pc.onconnectionstatechange = () => status(pc.connectionState);
-
-      const ws = new WebSocket(peerUrl);
-      pc.onicecandidate = (e) => {
-        if (e.candidate) ws.send(JSON.stringify({ type: "ice-candidate", candidate: e.candidate.toJSON() }));
-      };
-      let offered = false;
-      const offer = async () => {
-        if (offered) return;
-        offered = true;
-        const o = await pc.createOffer();
-        await pc.setLocalDescription(o);
-        ws.send(JSON.stringify({ type: "offer", sdp: o.sdp }));
-      };
-      ws.onmessage = async (event) => {
-        const msg = JSON.parse(event.data);
-        // Glass's first message: this peer's STUN and TURN servers. Offer with them.
-        if (msg.type === "ice_config") {
-          pc.setConfiguration({ iceServers: msg.iceServers });
-          await offer();
-        }
-        if (msg.type === "answer") await pc.setRemoteDescription({ type: "answer", sdp: msg.sdp });
-        if (msg.type === "ice-candidate") await pc.addIceCandidate(msg.candidate);
-      };
-      ws.onclose = (e) => status(`signaling closed (${e.code === 4401 ? "this link has expired" : e.code})`);
-      // An engine older than v0.1.89 sends no ice_config: offer anyway after 2 s.
-      ws.onopen = () => setTimeout(offer, 2000);
-      window.addEventListener("pagehide", () => ws.close(1000, "hung up"));
+      });
+      client.on("connected", () => status("in the call"));
+      client.on("reconnecting", (attempt, max) => status(`reconnecting ${attempt}/${max}`));
+      client.on("closed", (reason) => status(`closed: ${reason}`));
+      await client.connect();
     }
 
-    if (joinUrl) {
+    if (joinLink) {
       $("start").hidden = true;
       $("server").closest("p").hidden = true;
-      joinCall(joinUrl).catch((err) => status(`failed: ${err.message}`));
+      joinCall(joinLink).catch((err) => status(`failed: ${err.message}`));
     } else {
       $("start").onclick = async () => {
         $("start").disabled = true;
-        const server = $("server").value.replace(/\/$/, "");
+        const baseUrl = $("server").value.replace(/\/$/, "");
         // Your backend would do this with the API token.
-        const res = await fetch(`${server}/v1/calls`, { method: "POST" });
-        if (!res.ok) return status(`create failed: HTTP ${res.status}`);
-        const call = await res.json();
-        $("link").href = `${location.pathname}?join=${encodeURIComponent(call.peerBUrl)}`;
+        const session = await createGlassSession({ baseUrl, maxMembers: 2 });
+        const mine = await mintGlassLink({ baseUrl, sessionId: session.id, rights: MEMBER });
+        const theirs = await mintGlassLink({ baseUrl, sessionId: session.id, rights: MEMBER });
+        $("link").href = `${location.pathname}?join=${encodeURIComponent(theirs.url)}`;
         $("share").hidden = false;
-        await joinCall(call.peerAUrl);
+        await joinCall(mine.url).catch((err) => status(`failed: ${err.message}`));
       };
     }
   </script>

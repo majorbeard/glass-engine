@@ -144,8 +144,8 @@ volumes:
 - **Pin a version** in production rather than `latest`.
 - **`--shm-size` matters.** Docker's default 64 MB of shared memory is far too
   little for Chrome: video-heavy pages crash the browser a few seconds in.
-  Allow about 200 MB per concurrent busy browser session (`2g` for 8). Relay
-  and call sessions don't need it.
+  Allow about 200 MB per concurrent busy browser session (`2g` for 8).
+  Sessions whose members publish don't need it.
 - **Stopping.** Glass drains within 8 s of `SIGTERM` (Docker waits 10 s by
   default), closing sessions and browsers cleanly.
 - **Health checks.** `/healthz` is liveness; `/readyz` is readiness (it
@@ -545,8 +545,8 @@ GLASS_TURN_SECRET=<openssl rand -hex 32>
 
 Glass then issues every connection its own TURN credential, valid 24 hours
 (`GLASS_TURN_CREDENTIAL_TTL_HOURS`), and sends it to the client as the first
-message on the signaling connection (`ice_config`). `@glass/client` uses it
-on its own: there is nothing to pass to `GlassClient` or `GlassProducer`. A
+message on the signaling connection (`hello`). `@glass/client` uses it on its
+own: there is nothing to pass to `GlassClient`. A
 reconnect gets a fresh credential. A credential still lets its holder use
 your TURN server as a relay until it expires, so keep the relay out of your
 own network (the `denied-peer-ip` lines below).
@@ -725,7 +725,8 @@ untrusted peer.
 
 ### The address viewers are given
 
-Creating a session returns a `signalingUrl` for the viewer to connect to.
+Creating a session returns a link (`link.url`), and minting one returns
+another, for clients to connect to.
 Glass builds it from, in order:
 
 1. `GLASS_PUBLIC_URL`, when set, for example
@@ -739,7 +740,7 @@ A proxy that keeps the original `Host`, as Caddy's `reverse_proxy` does,
 needs neither. Set `GLASS_PUBLIC_URL` behind a proxy that rewrites `Host` to
 its own upstream address, such as a hosting provider's built-in HTTPS
 proxy. The sign that you need it: sessions are created, but viewers never
-connect, and the `signalingUrl` names an internal address.
+connect, and the link's `url` names an internal address.
 
 ## The session service: `glass gate`
 
@@ -962,10 +963,10 @@ docker logs glass 2>&1 | grep '\[Audit\]'
 
 | Event | Means |
 |---|---|
-| `session.created`, `session.closed` | A session (`kind`: browser, relay, call) started, by the API token or a ticket (`by`), or ended, with `reason`: `api`, `empty` (its last viewer left), `dropped`, `never-joined`, `grace-expired`, `setup-failed`, `shutdown`. |
+| `session.created`, `session.closed` | A session (`kind`: `browser`; `relay`, one whose members publish; `playback`) started, by the API token or a ticket (`by`), or ended, with `reason`: `api`, `empty` (its last viewer left), `dropped`, `never-joined`, `grace-expired`, `setup-failed`, `shutdown`. |
 | `link.minted`, `link.revoked` | A link was handed out, with what it may do (`caps`: `watch`, `input`, `produce`) and when it expires, or revoked, with how many connections it closed. |
-| `connection.joined`, `connection.left` | A viewer or call peer joined (`resumed=true` after a drop) or left (`reason`: `left`, `dropped`, `revoked`). |
-| `producer.started`, `producer.stopped` | A relay producer, by `slot`. |
+| `connection.joined`, `connection.left` | A member joined (`resumed=true` after a drop) or left (`reason`: `left`, `dropped`, `revoked`). |
+| `source.ended` | A source of a session ended (`kind`, `reason`: `removed`, `failed`, `session_closed`): a browser removed or failed, a published track stopped. |
 | `control.granted`, `control.released`, `control.revoked` | Control of the page changed hands. |
 | `auth.refused`, `link.refused`, `ticket.refused` | A request with no or a wrong API token, a link that expired, was revoked or used, a ticket refused. |
 | `recording.started`, `recording.stopped`, `recording.played`, `recording.fetched`, `recording.deleted` | A recording began or ended (with why), was played back, downloaded or deleted. |
@@ -999,7 +1000,7 @@ and, with Glass's own TLS on, reaches the API over the container's loopback by
 itself; elsewhere, set `GLASS_API_TOKEN` and pass `--addr`:
 
 ```sh
-docker exec glass glass session list                  # running sessions, relay sessions and calls; no links
+docker exec glass glass session list                  # running sessions, every kind; no links
 docker exec glass glass session get <id>
 docker exec glass glass session close <id>
 docker exec glass glass session revoke '<link URL>'   # end one link; its session goes on

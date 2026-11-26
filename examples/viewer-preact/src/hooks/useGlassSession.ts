@@ -9,8 +9,7 @@ import {
   type GlassClient,
   type GlassDialog,
   type GlassPlaybackState,
-  type GlassRosterEntry,
-  type GlassSession,
+  type GlassSourceInfo,
 } from "@glass/client";
 import {
   API_TOKEN,
@@ -32,15 +31,43 @@ import {
 
 export type Notify = (toast: { message: string; type: "success" | "error" | "info" }) => void;
 
+// One other member of the session, as the owner's panel shows it: whether
+// it holds the viewed source's input track, and whether it is an owner.
+export interface Member {
+  connectionId: string;
+  producesInput: boolean;
+  isOwner: boolean;
+}
+
+// The session this tab joins: its id and the link it connects with.
+interface Joined {
+  id: string;
+  link: string;
+}
+
+// sessionIdOf is a link's session id, .../v1/sessions/{id}/connect?token=...
+function sessionIdOf(link: string): string {
+  return new URL(link).pathname.match(/\/v1\/sessions\/([^/]+)\//)?.[1] ?? "";
+}
+
+// shownSource is the source this viewer shows: the session's hosted browser
+// or playback, else the first that has a picture. The application's choice:
+// a viewer renders one source.
+function shownSource(sources: GlassSourceInfo[]): string | null {
+  const s = sources.find((x) => x.kind === "browser" || x.kind === "playback") ?? sources.find((x) => x.capabilities.video !== false);
+  return s?.id ?? null;
+}
+
 // sessionFromGate asks glass gate for a ticket and redeems it with the engine
 // the gate names. A passphrase gate refuses a request without its phrase, so
 // the visitor is asked for it, again if it was wrong.
-async function sessionFromGate(gate: string, code: string | null): Promise<GlassSession> {
+async function sessionFromGate(gate: string, code: string | null): Promise<Joined> {
   let passphrase: string | undefined;
   for (let attempt = 0; ; attempt++) {
     try {
       const t = await requestGateTicket({ gate, code: code ?? undefined, passphrase });
-      return await redeemGlassTicket({ ticket: t.ticket, baseUrl: t.engine });
+      const session = await redeemGlassTicket({ ticket: t.ticket, baseUrl: t.engine });
+      return { id: session.id, link: session.link.url };
     } catch (err) {
       const refused = err instanceof GlassGateError && err.code === "gate_refused";
       if (!refused || code || attempt >= 5) throw err;
@@ -66,27 +93,25 @@ function gateMessage(err: unknown): string {
 }
 
 // The tab's own session, kept across a reload. Glass holds a session for its
-// reconnect grace after the page using it unloads, and connecting to the same
-// signalingUrl within that time resumes it with its page as it was (see
+// reconnect grace after the page using it unloads, and connecting with the
+// same link within that time resumes it with its page as it was (see
 // GlassClient's comment on a session's lifetime in @glass/client).
 // sessionStorage is per tab, so another tab never picks it up.
 const KEPT_SESSION_KEY = "glass-viewer-session";
 
-function keptSession(): GlassSession | null {
+function keptSession(): Joined | null {
   try {
     const kept = JSON.parse(sessionStorage.getItem(KEPT_SESSION_KEY) ?? "null");
-    return kept && typeof kept.id === "string" && typeof kept.signalingUrl === "string"
-      ? { id: kept.id, signalingUrl: kept.signalingUrl }
-      : null;
+    return kept && typeof kept.id === "string" && typeof kept.link === "string" ? { id: kept.id, link: kept.link } : null;
   } catch {
     return null;
   }
 }
 
-function keepSession(session: GlassSession | null): void {
+function keepSession(session: Joined | null): void {
   try {
     if (session) {
-      sessionStorage.setItem(KEPT_SESSION_KEY, JSON.stringify({ id: session.id, signalingUrl: session.signalingUrl }));
+      sessionStorage.setItem(KEPT_SESSION_KEY, JSON.stringify({ id: session.id, link: session.link }));
     } else {
       sessionStorage.removeItem(KEPT_SESSION_KEY);
     }
@@ -160,6 +185,8 @@ export function useGlassSession(notify: Notify) {
   // the one a gate named.
   const [engine, setEngine] = useState<string | null>(null);
   const [producesInput, setProducesInput] = useState(false);
+  // The source this viewer shows and sends input to (shownSource).
+  const [sourceId, setSourceId] = useState<string | null>(null);
   // Several viewers may hold control at once; in the session's default input
   // mode only one of them drives the page at a time. True while that is
   // someone else (the "floorChanged" event).
@@ -170,9 +197,9 @@ export function useGlassSession(notify: Notify) {
   // Owner-controlled handoff (docs/protocol.md's "Owner-controlled
   // handoff" section) - see client.on("rosterChanged") wiring below.
   const [isOwner, setIsOwner] = useState(false);
-  const [connections, setConnections] = useState<GlassRosterEntry[]>([]);
-  // Relay watch links: the producer feeding the main slot dropped or went
-  // silent (docs/protocol.md, slot_state). The frozen last frame stays up.
+  const [connections, setConnections] = useState<Member[]>([]);
+  // The shown source is stalled: its publisher dropped or went silent. The
+  // frozen last frame stays up.
   const [sourceStalled, setSourceStalled] = useState(false);
   // This connection's quality as Glass reports it: "poor" and "lost" are shown.
   const [linkQuality, setLinkQuality] = useState<"excellent" | "good" | "poor" | "lost" | null>(null);
@@ -198,7 +225,20 @@ export function useGlassSession(notify: Notify) {
   useEffect(() => {
     let cancelled = false;
     let c: GlassClient | null = null;
-    // attachSessionId/attachSignalingUrl: test-only escape hatch, not a
+    // The session this tab made, ended when the tab is done with it.
+    let ownSession: string | null = null;
+    // The shown source, and what its holders say (inputHolders).
+    let shown: string | null = null;
+    let holders: string[] = [];
+    // refresh rebuilds what the owner's panel and the header show from the
+    // client: the members, and who holds the shown source.
+    const refresh = () => {
+      if (!c || cancelled) return;
+      const me = c.connectionId();
+      setProducesInput(me !== null && holders.includes(me));
+      setConnections(c.members().map((m) => ({ connectionId: m.connectionId, producesInput: holders.includes(m.connectionId), isOwner: m.owner })));
+    };
+    // attachLink: test-only escape hatch, not a
     // real product feature. Backend-simulated interaction tooling
     // creates a session via the API
     // directly so it can drive it via POST /v1/sessions/{id}/input, and
@@ -207,8 +247,7 @@ export function useGlassSession(notify: Notify) {
     // query param, not a build-time env var, since the session ID/URL
     // differ on every validation run. Absent in every normal use of this
     // viewer, which keeps creating its own session exactly as before.
-    const attachSessionId = new URLSearchParams(window.location.search).get("attachSessionId");
-    const attachSignalingUrl = new URLSearchParams(window.location.search).get("attachSignalingUrl");
+    const attachLink = new URLSearchParams(window.location.search).get("attachLink");
     // ?ticket=: a session ticket your backend signed, redeemed once for a new
     // session this tab then owns. It holds no API token, so it can neither
     // delete the session nor create another when this one ends.
@@ -218,11 +257,8 @@ export function useGlassSession(notify: Notify) {
     const { gate, code: gateCode } = gateFromLink();
 
     (async () => {
-      // Typed as the full GlassSession rather than an inline {id, signalingUrl}
-      // subset, so the runtime's advertised protocolVersion/sourceType/
-      // capabilities are visible to anyone reading this as the reference
-      // consumer. createGlassSession already rejects a protocol major it
-      // doesn't understand, so nothing here needs to check the version itself.
+      // createGlassSession and the client reject a protocol major they don't
+      // speak, so nothing here needs to check the version itself.
 
       // A non-zero sessionEpoch means this run was triggered by an
       // auto-retry after the previous session was closed out from under us
@@ -238,15 +274,16 @@ export function useGlassSession(notify: Notify) {
 
       // A reload of this tab rejoins the session it had, unless this run is
       // the retry after that session was closed.
-      const kept = !attachSessionId && sessionEpoch === 0 ? keptSession() : null;
-      let session: GlassSession;
-      if (attachSessionId && attachSignalingUrl) {
-        session = { id: attachSessionId, signalingUrl: attachSignalingUrl };
+      const kept = !attachLink && sessionEpoch === 0 ? keptSession() : null;
+      let session: Joined;
+      if (attachLink) {
+        session = { id: sessionIdOf(attachLink), link: attachLink };
       } else if (kept) {
         session = kept;
       } else if (ticket && sessionEpoch === 0) {
         try {
-          session = await redeemGlassTicket({ ticket, baseUrl: GLASS_ADDR });
+          const redeemed = await redeemGlassTicket({ ticket, baseUrl: GLASS_ADDR });
+          session = { id: redeemed.id, link: redeemed.link.url };
         } catch (err: any) {
           if (!cancelled) setError(`This link could not be opened: ${err.message}`);
           return;
@@ -273,14 +310,12 @@ export function useGlassSession(notify: Notify) {
         return;
       } else {
         try {
-          session = await createGlassSession({
+          const created = await createGlassSession({
             baseUrl: GLASS_ADDR,
             apiToken: API_TOKEN,
-            audioInput: AUDIO_INPUT,
-            contentHint: CONTENT_HINT,
-            codec: CODEC,
-            inputMode: INPUT_MODE,
+            sources: [{ kind: "browser", audioInput: AUDIO_INPUT, contentHint: CONTENT_HINT, codec: CODEC, inputMode: INPUT_MODE }],
           });
+          session = { id: created.id, link: created.link.url };
         } catch (err: any) {
           if (!cancelled) setError(`Failed to create session: ${err.message}`);
           return;
@@ -289,29 +324,25 @@ export function useGlassSession(notify: Notify) {
       // Only a session this run created is deleted here: a kept one may be
       // what the next run rejoins.
       if (cancelled) {
-        if (!attachSessionId && !kept && !ticket && !gate) {
+        if (!attachLink && !kept && !ticket && !gate) {
           void deleteGlassSession({ id: session.id, baseUrl: GLASS_ADDR, apiToken: API_TOKEN }).catch(() => {});
         }
         return;
       }
       setSessionId(session.id);
-      setLinkToken(new URL(session.signalingUrl).searchParams.get("token"));
-      setBrowserSession(new URL(session.signalingUrl).pathname.startsWith("/v1/sessions/"));
-      setEngine(engineOf(session.signalingUrl));
-      if (!attachSessionId) keepSession(session);
+      setLinkToken(new URL(session.link).searchParams.get("token"));
+      setEngine(engineOf(session.link));
+      if (!attachLink) keepSession(session);
+      // The tab made this session itself with the API token: it ends it when
+      // done. An attached viewer, a ticket's or a gate's never does: it does
+      // not own the session and must not end it for anyone else.
+      ownSession = !attachLink && !ticket && !gate ? session.id : null;
 
       c = createGlassClient({
-        signalingUrl: session.signalingUrl,
-        sessionId: session.id,
-        // deleteSessionOnClose makes disconnect() delete the session: right
-        // for the session's own tab, never for an attached viewer, which
-        // does not own the session and must not end it for its owner or
-        // anyone else watching.
-        deleteSessionOnClose: !attachSessionId && !ticket && !gate,
+        link: session.link,
         ...(ICE_TRANSPORT_POLICY
           ? { iceTransportPolicy: ICE_TRANSPORT_POLICY }
           : {}),
-        ...(API_TOKEN ? { apiToken: API_TOKEN } : {}),
         // @internal trace diagnostics - see TRACE_REPORT_INTERVAL_MS/
         // PIXEL_TRACE_ENABLED's own doc comment above. Cast needed since
         // these fields are deliberately not part of the exported
@@ -346,52 +377,51 @@ export function useGlassSession(notify: Notify) {
         // hang forever even though the connection and video are live.
         // Attach mode always means "something else owns this session's
         // content"; activate immediately on connect instead.
-        if (attachSessionId) setIsActive(true);
-        // producesInput()/isOwner() only reflect real values once the
-        // first "offer" has been processed (see @glass/client's own doc
-        // comment on _connectionId/_producesInput/_isOwner) - "connected"
-        // fires after that, so reading them here is safe.
-        setProducesInput(c!.producesInput());
-        setIsOwner(c!.isOwner());
-        const holder = c!.floorHolder();
-        setOtherHasFloor(holder !== null && holder !== c!.connectionId());
+        if (attachLink) setIsActive(true);
+        refresh();
       });
-      c.on("floorChanged", (holder, isSelf) => {
-        if (!cancelled) setOtherHasFloor(holder !== null && !isSelf);
+      // hello says who this connection is and what the session holds.
+      c.on("hello", (_id, owner) => {
+        if (cancelled) return;
+        setIsOwner(owner);
+        shown = shownSource(c!.sources());
+        setSourceId(shown);
+        setBrowserSession(c!.sources().some((x) => x.id === shown && x.kind === "browser"));
+        refresh();
       });
-      c.on("dialog", (d) => {
-        if (!cancelled) setPageDialog(d.open && !d.inPicture ? d : null);
+      c.on("sourceAdded", (src) => {
+        if (cancelled || shown) return;
+        shown = shownSource(c!.sources());
+        setSourceId(shown);
+        setBrowserSession(src.id === shown && src.kind === "browser");
+      });
+      c.on("sourceUpdated", (src) => {
+        if (!cancelled && src.id === shown) setSourceStalled(src.state === "stalled");
+      });
+      c.on("inputHolders", (id, now, floor) => {
+        if (cancelled || id !== shown) return;
+        const me = c!.connectionId();
+        const had = me !== null && holders.includes(me);
+        holders = now;
+        const has = me !== null && now.includes(me);
+        setOtherHasFloor(floor !== null && floor !== me);
+        refresh();
+        if (had !== has) notify({ message: has ? "You now have control" : "You released control", type: "info" });
+      });
+      c.on("dialog", (d, id) => {
+        if (!cancelled && id === shown) setPageDialog(d.open && !d.inPicture ? d : null);
       });
       c.on("recording", (active) => {
         if (!cancelled) setRecording(active);
       });
-      c.on("playback", (state) => {
-        if (!cancelled) setPlayback(state);
+      c.on("playback", (state, id) => {
+        if (!cancelled && id === shown) setPlayback(state);
       });
       c.on("disconnected", () => {
         if (!cancelled) setIsConnected(false);
       });
-      // docs/protocol.md's "Control handoff" section.
-      c.on("capabilitiesChanged", (_connectionId, nowProducesInput, isSelf) => {
-        if (cancelled || !isSelf) return;
-        setProducesInput(nowProducesInput);
-        notify({
-          message: nowProducesInput
-            ? "You now have control"
-            : "You released control",
-          type: "info",
-        });
-      });
-      // docs/protocol.md's "Owner-controlled handoff" section - only ever
-      // fires for an owner connection (see isOwner()); connections() is
-      // already up to date by the time this fires.
-      c.on("rosterChanged", (roster) => {
-        if (cancelled) return;
-        setConnections(roster);
-      });
-      c.on("slotStateChanged", (slots) => {
-        if (!cancelled) setSourceStalled(slots.main === "stalled");
-      });
+      // The owner's panel: the members, as they come and go.
+      c.on("membersChanged", () => refresh());
       c.on("connectionQuality", (quality) => {
         if (!cancelled) setLinkQuality(quality);
       });
@@ -437,15 +467,15 @@ export function useGlassSession(notify: Notify) {
       c.on("newTabRequested", (url) => {
         if (!cancelled) setHijackedUrl(url);
       });
-      c.on("navigation", (nav) => {
-        if (cancelled) return;
+      c.on("navigation", (nav, id) => {
+        if (cancelled || id !== shown) return;
         setCurrentURL(nav.url || "");
         setCanGoBack(nav.canGoBack || false);
         setCanGoForward(nav.canGoForward || false);
         setIsLoading(nav.loading || false);
         // A real navigation update means the session has real content to
         // show, regardless of whether THIS tab was the one that triggered
-        // it - real gap found live (2026-08-24): attachSessionId's whole
+        // it: an attached viewer's whole
         // point is watching a session navigated by something else (e.g.
         // server-side test tooling's own
         // navigation), but isActive was previously only ever flipped by
@@ -487,9 +517,9 @@ export function useGlassSession(notify: Notify) {
       // surfaces a persistent, explicit-click prompt rather than fetching
       // c.downloadUrl(guid) automatically. See pendingDownloads' own doc
       // comment for why this doesn't reuse the auto-dismissing Toast.
-      c.on("downloadReady", (filename, guid) => {
+      c.on("downloadReady", (filename, guid, id) => {
         if (cancelled) return;
-        setPendingDownloads((prev) => [...prev, { filename, guid, url: c!.downloadUrl(guid) }]);
+        setPendingDownloads((prev) => [...prev, { filename, guid, url: c!.source(id).downloadUrl(guid) }]);
       });
       // File upload prompt - the
       // other direction's counterpart to downloadReady above. Opens no
@@ -535,10 +565,10 @@ export function useGlassSession(notify: Notify) {
           setError("This viewer doesn't match the engine's version. Ask whoever runs it to update the viewer.");
           return;
         }
-        // attachSessionId viewers don't own the session (see its own doc
+        // attachLink viewers don't own the session (see its own doc
         // comment above) - if it's gone, that's the owner's session to
         // recreate, not this watch-only tab's.
-        if (attachSessionId || ticket || gateCode) {
+        if (attachLink || ticket || gateCode) {
           if (ticket || gateCode) keepSession(null);
           // The engine said the session is gone: it ended, so a reload would not bring it back.
           if (code === "session_not_found") {
@@ -569,11 +599,13 @@ export function useGlassSession(notify: Notify) {
 
     return () => {
       cancelled = true;
-      // disconnect() deletes the tab's own session, so it is no longer kept.
-      // A page unload never reaches here: the session is held for a reload.
+      // The tab is done with its own session: it ends it, so it is no longer
+      // kept. A page unload never reaches here: the session is held for a
+      // reload.
       if (c) {
         c.disconnect();
-        if (!attachSessionId) keepSession(null);
+        if (ownSession) void deleteGlassSession({ id: ownSession, baseUrl: GLASS_ADDR, apiToken: API_TOKEN }).catch(() => {});
+        if (!attachLink) keepSession(null);
       }
       setClient(null);
       setIsConnected(false);
@@ -609,6 +641,7 @@ export function useGlassSession(notify: Notify) {
     canGoBack,
     canGoForward,
     sessionId,
+    sourceId,
     linkToken,
     browserSession,
     engine,

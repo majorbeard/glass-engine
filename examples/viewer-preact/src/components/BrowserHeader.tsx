@@ -1,6 +1,6 @@
 import type { ComponentChildren } from "preact";
 import { useState, useRef, useEffect } from "preact/hooks";
-import type { GlassRosterEntry } from "@glass/client";
+import type { Member } from "../hooks/useGlassSession";
 
 export interface PerformanceStats {
   memAllocMB: number;
@@ -41,7 +41,7 @@ interface BrowserHeaderProps {
   // non-owner (see isOwner()'s own doc comment), so isOwner is really
   // just an early-out to skip rendering the panel at all.
   isOwner: boolean;
-  connections: GlassRosterEntry[];
+  connections: Member[];
   onGrantInput: (connectionId: string) => void;
   onRevokeInput: (connectionId: string) => void;
 }
@@ -128,7 +128,7 @@ function RosterMenu({
   onGrantInput,
   onRevokeInput,
 }: {
-  connections: GlassRosterEntry[];
+  connections: Member[];
   onGrantInput: (connectionId: string) => void;
   onRevokeInput: (connectionId: string) => void;
 }) {
