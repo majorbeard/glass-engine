@@ -264,6 +264,10 @@ export interface GlassCreateSessionOptions extends GlassEngine {
   // is never. Absent, the engine's default (24 hours unless the operator
   // changed it).
   linkExpiresIn?: number;
+  // Lets the session's own link (the owner's) share it: mint links no wider
+  // than its own, without the API token (GlassClient.shareLink). Off by
+  // default: an application with a backend mints links there.
+  ownerMayShare?: boolean;
 }
 
 // Returned by createGlassSession, redeemGlassTicket and the engine's

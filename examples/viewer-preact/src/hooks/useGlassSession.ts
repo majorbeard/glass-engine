@@ -376,8 +376,11 @@ export function useGlassSession(notify: Notify) {
         // to leave the URL-bar landing screen (see the effect below) would
         // hang forever even though the connection and video are live.
         // Attach mode always means "something else owns this session's
-        // content"; activate immediately on connect instead.
-        if (attachLink) setIsActive(true);
+        // content"; activate immediately on connect instead. Except a browser
+        // that has not opened a page yet: it has nothing to show, so it
+        // waits on the start screen until its first navigation (below).
+        const shownKind = c!.sources().find((x) => x.id === shown)?.kind;
+        if (attachLink && shownKind !== "browser") setIsActive(true);
         refresh();
       });
       // hello says who this connection is and what the session holds.
@@ -483,7 +486,8 @@ export function useGlassSession(notify: Notify) {
         // stuck on the landing screen forever even though connected and
         // receiving real state. A no-op for normal same-tab navigation,
         // which already sets isActive itself before this event ever fires.
-        if (nav.url) setIsActive(true);
+        // A new browser's blank tab is not content yet.
+        if (nav.url && nav.url !== "about:blank") setIsActive(true);
       });
       c.on("clipboardText", (text) => {
         if (cancelled) return;

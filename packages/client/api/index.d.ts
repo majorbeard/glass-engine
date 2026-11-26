@@ -130,6 +130,7 @@ interface GlassCreateSessionOptions extends GlassEngine {
     simulcast?: boolean;
     record?: boolean;
     linkExpiresIn?: number;
+    ownerMayShare?: boolean;
 }
 interface GlassSession {
     id: string;
@@ -430,6 +431,9 @@ declare class GlassClient extends Emitter<GlassClientEventMap> {
     connectionId(): string | null;
     isOwner(): boolean;
     rights(): GlassClientRights | null;
+    mayShare(): boolean;
+    shareLink(rights: GlassLinkRequest): Promise<GlassLink>;
+    revokeSharedLink(linkId: string): Promise<void>;
     members(): GlassMember[];
     recording(): boolean;
     connectionQuality(): GlassConnectionQuality | null;

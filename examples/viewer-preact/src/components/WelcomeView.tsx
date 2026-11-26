@@ -5,15 +5,21 @@ type WelcomeViewProps = {
   isConnected: boolean;
   isLoading: boolean;
   error: string | null;
+  // False for a member who may not navigate: it waits for the session's
+  // owner to open a page instead of being shown a URL bar it can't use.
+  canNavigate?: boolean;
 };
 
 // The landing screen: a URL bar, shown until the session has content.
-export function WelcomeView({ onNavigate, isConnected, isLoading, error }: WelcomeViewProps) {
+export function WelcomeView({ onNavigate, isConnected, isLoading, error, canNavigate = true }: WelcomeViewProps) {
   return (
     <div class="w-full h-full flex flex-col items-center justify-center gap-6 p-4">
       <h1 class="text-7xl font-thin tracking-[0.2em] text-white/90">
         Glass
       </h1>
+      {!canNavigate ? (
+        <p class="text-lg text-white/90">Waiting for the session to open a page</p>
+      ) : (
       <div class="w-full max-w-xl">
         <URLBar
           onNavigate={onNavigate}
@@ -25,6 +31,7 @@ export function WelcomeView({ onNavigate, isConnected, isLoading, error }: Welco
           isActive={false}
         />
       </div>
+      )}
       {!isConnected && !error && (
         <div class="absolute bottom-4 right-4 text-sm text-white/80 bg-black/30 px-3 py-1 rounded-full animate-pulse">
           Connecting...

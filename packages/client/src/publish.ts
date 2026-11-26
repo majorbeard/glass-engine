@@ -153,7 +153,10 @@ export function attach(c: ClientCore, pub: GlassPublication): void {
   const stream = new MediaStream([pub.track]);
   let transceiver: RTCRtpTransceiver;
   if (isPicture) {
-    const encodings = sendEncodings(pub.options.simulcast ? pub.track.getSettings?.().height : undefined, pub.maxBitrateKbps);
+    // Layers only into a session that takes them: one that doesn't declines
+    // simulcast, and a browser then sends just its first, smallest encoding.
+    const layered = pub.options.simulcast && c.sessionSimulcast;
+    const encodings = sendEncodings(layered ? pub.track.getSettings?.().height : undefined, pub.maxBitrateKbps);
     // With simulcast, the full-size layer alone to begin with: Glass asks for
     // a smaller one when a viewer needs it and the uplink has room.
     if (encodings.length > 1) for (const e of encodings) e.active = !(e.scaleResolutionDownBy && e.scaleResolutionDownBy > 1);

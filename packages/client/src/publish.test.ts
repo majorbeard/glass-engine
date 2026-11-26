@@ -182,3 +182,35 @@ describe("a silent microphone", () => {
     }
   });
 });
+
+// A session made without simulcast declines layers, and a browser then sends
+// only its first, smallest encoding: the client publishes one full-size one.
+describe("publishing into a session without simulcast", () => {
+  beforeEach(() => installFakes());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("sends one full-size encoding when the session takes no layers", async () => {
+    const client = new GlassClient({ link: TEST_URL, reconnect: false });
+    client.publish(camera(720), { kind: "camera", simulcast: true, maxBitrateKbps: 900 });
+    void client.connect();
+    await handshake(FakeWebSocket.last(), Object.assign(publisher(), { simulcast: false }), []);
+    const enc = (sendOnly(FakePeerConnection.last())[0]!.sender as FakeSender).getParameters().encodings;
+    expect(enc).toHaveLength(1);
+    expect(enc[0]!.rid).toBeUndefined();
+    expect(enc[0]!.scaleResolutionDownBy ?? 1).toBe(1);
+    client.disconnect();
+  });
+
+  it("reports an answer the browser refuses, instead of swallowing it", async () => {
+    vi.spyOn(FakePeerConnection.prototype, "setRemoteDescription").mockRejectedValue(new Error("negotiates simulcast but not the RID extension"));
+    const client = new GlassClient({ link: TEST_URL, reconnect: false });
+    const errors: [string, string | undefined][] = [];
+    client.on("error", (message, code) => errors.push([message, code]));
+    client.publish(camera(720), { kind: "camera" });
+    void client.connect();
+    await handshake(FakeWebSocket.last(), publisher(), []).catch(() => undefined);
+    await flush();
+    expect(errors.some(([m, c]) => c === "answer_refused" && m.includes("RID extension"))).toBe(true);
+    client.disconnect();
+  });
+});

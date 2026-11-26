@@ -15,7 +15,7 @@
 
 import { Emitter } from "./emitter.js";
 import { ClientCore, type Emit } from "./core";
-import { authHeaders, errorDetail } from "./internal";
+import { authHeaders, errorDetail, linkParts } from "./internal";
 import * as lifecycle from "./lifecycle";
 import * as transport from "./transport";
 import * as handoff from "./handoff";
@@ -318,13 +318,14 @@ export type GlassRefusedCode = "viewer_limit";
 // local development: a real application's backend makes sessions, holding
 // the API token, and hands each person only their link.
 export async function createGlassSession(options: GlassCreateSessionOptions = {}): Promise<GlassSession> {
-  const { baseUrl = "", apiToken, sources, maxMembers, simulcast, record, linkExpiresIn } = options;
+  const { baseUrl = "", apiToken, sources, maxMembers, simulcast, record, linkExpiresIn, ownerMayShare } = options;
   const body: Record<string, unknown> = {};
   if (sources) body.sources = sources;
   if (maxMembers !== undefined) body.maxMembers = maxMembers;
   if (simulcast) body.simulcast = true;
   if (record) body.record = true;
   if (linkExpiresIn !== undefined) body.linkExpiresIn = linkExpiresIn;
+  if (ownerMayShare) body.ownerMayShare = true;
   const res = await fetch(`${baseUrl}/v1/sessions`, {
     method: "POST",
     headers: { ...authHeaders(apiToken), "Content-Type": "application/json" },
@@ -573,6 +574,31 @@ export class GlassClient extends Emitter<GlassClientEventMap> {
   // the owner denied it; null before hello.
   rights(): GlassClientRights | null {
     return handoff.rights(this.core);
+  }
+
+  // Whether this connection may share the session: the owner, on a session
+  // made with ownerMayShare. False before hello.
+  mayShare(): boolean {
+    return this.core.mayShare;
+  }
+
+  // Mints a link to this session with this connection's own link, no API
+  // token needed: the owner sharing, on a session made with ownerMayShare.
+  // The link may be no wider than the owner's own and expires no later; the
+  // engine caps how many are live and how fast they are made. Rejects when
+  // the engine refuses.
+  shareLink(rights: GlassLinkRequest): Promise<GlassLink> {
+    const own = linkParts(this.core.link);
+    if (!own?.token) return Promise.reject(new Error("this client's link carries no token to share with"));
+    return mintGlassLink({ sessionId: own.sessionId, rights, baseUrl: this.core.engineOrigin, apiToken: own.token });
+  }
+
+  // Revokes a link this connection shared (shareLink's id); not one the
+  // session's backend minted.
+  revokeSharedLink(linkId: string): Promise<void> {
+    const own = linkParts(this.core.link);
+    if (!own?.token) return Promise.reject(new Error("this client's link carries no token"));
+    return revokeGlassLink({ sessionId: own.sessionId, linkId, baseUrl: this.core.engineOrigin, apiToken: own.token });
   }
 
   // The owner only: the session's other members; empty for anyone else.

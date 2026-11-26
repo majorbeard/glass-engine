@@ -127,7 +127,7 @@ await client.connect();
 | `reconnecting(attempt, maxAttempts)` | A retry is scheduled. |
 | `refused(reason, code)` | Glass refused this attempt for now (a viewer limit, code `viewer_limit`). Not final: with reconnecting on, the client keeps trying. Show it. |
 | `closed(reason, code)` | Final. Branch on `code`: `session_not_found` (it doesn't exist or has ended), `link_expired`, `link_revoked`, `source_failed` or `session_not_resumable` (the session ended), `protocol_mismatch`, `connect_failed`, `connection_lost` (reconnecting off), `reconnect_exhausted`, `client_disconnected`. |
-| `error(message, code?)` | A message from Glass. When it ends the session, `closed` follows. |
+| `error(message, code?)` | A message from Glass, or `answer_refused`: the browser refused the engine's answer (the reason is in `message`), so this connection can't come up. When it ends the session, `closed` follows. |
 | `stats(stats)`, `connectionQuality(quality, score)` | Transport statistics; this connection's quality as Glass measures it (`excellent`, `good`, `poor`, `lost`). Show `poor` and `lost`. |
 | `recording(active)` | Whether the session is being recorded: on joining, then on every change. |
 
@@ -170,7 +170,7 @@ returns a `GlassPublication`. See [Publishing](sources/producers.md).
 | Option | Default | Meaning |
 |---|---|---|
 | `kind` | required | `"camera"`, `"microphone"`, `"screen"` or `"device"`. |
-| `simulcast` | `false` | Send a picture as up to three layers, so each viewer gets the one its link carries (the session must be made with `simulcast: true`). The client reports its uplink to Glass about once a second and turns off layers no viewer needs. |
+| `simulcast` | `false` | Send a picture as up to three layers, so each viewer gets the one its link carries. Only into a session made with `simulcast: true`: into one that isn't, the client sends one full-size encoding instead (the session's `hello` says which). The client reports its uplink to Glass about once a second and turns off layers no viewer needs. |
 | `maxBitrateKbps` | `1000` | The picture's bitrate cap (the full-size layer, with simulcast); keep it below the uplink. `0` is uncapped. |
 | `startBitrateKbps` | `min(500, cap)` | Starting bitrate hint (Chromium only). |
 
@@ -208,6 +208,8 @@ Each control method resolves with Glass's answer, a `GlassControlAnswer`:
 | `inputRequested(connectionId, sourceId)` | Someone asked for an input you hold. Your app decides what to do. |
 | `rightsChanged(rights)` | The owner denied this connection a source, or lifted it. |
 | `inputDropped(drop)` | Input was dropped (below). |
+| `mayShare()` | Whether this connection may share the session: the owner, on a session made with `ownerMayShare`. |
+| `shareLink(rights)`, `revokeSharedLink(linkId)` | Mint a link to the session, or revoke one it minted, with this client's own link: no API token. Rejects when the engine refuses (rights wider than its own, too many links, too fast). See [Owner sharing](protocol.md#owner-sharing). |
 
 See [Concepts](concepts.md#owner-and-control-handoff).
 
@@ -295,7 +297,11 @@ for custom renderers.
 [`examples/viewer-preact`](../examples/viewer-preact) is a complete viewer
 built on the SDK: address bar, loading and error states, downloads, uploads,
 dialogs and microphone prompts, the member list for the owner, and a share
-button that mints watch links. By default it makes a browser session (with
+button that mints watch links (shown when this viewer can share: the session
+was made with `ownerMayShare`, or a local development token is set). Joined
+to a browser that has not opened a page yet, it waits on its start screen: the
+owner gets the address box, anyone else "Waiting for the session to open a
+page". By default it makes a browser session (with
 `VITE_GLASS_ADDR` and, for local testing only, `VITE_GLASS_API_TOKEN`) and
 ends it when the tab is done with it. To join an existing session instead,
 open it with `?attachLink=<url-encoded link>`: the session your backend made,

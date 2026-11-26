@@ -227,9 +227,11 @@ export function App() {
           type="checkbox"
           checked={simulcast}
           onChange={(e) => setSimulcast((e.target as HTMLInputElement).checked)}
-          disabled={isActive}
+          disabled={isActive || !!produceUrl}
         />{" "}
-        Simulcast (send smaller layers too; the session must be a simulcast one)
+        {produceUrl
+          ? "Simulcast: the session behind the link decides; layers are sent only if it takes them"
+          : "Simulcast (make a simulcast session and send smaller layers too)"}
       </label>
       <label style={{ display: "block", marginTop: "0.75rem" }}>
         Viewer URL (for the watch-link QR code, optional)

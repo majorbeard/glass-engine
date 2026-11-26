@@ -118,6 +118,12 @@ export class ClientCore {
   mids = new Map<string, string>();
   pendingTracks = new Map<string, MediaStreamTrack>();
   negotiation: Promise<void> = Promise.resolve();
+  // Whether the session takes a published picture as simulcast layers, from
+  // hello; until then, assumed to.
+  sessionSimulcast = true;
+  // Whether this connection, the owner of a session that lets it, may mint
+  // links with its own link (hello's mayShare).
+  mayShare = false;
   // The session's sources, by id, in the order the engine announced them.
   // Kept across a reconnect, so a viewer bound to one keeps it; the new
   // hello replaces their descriptions.

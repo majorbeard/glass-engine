@@ -34,7 +34,8 @@ interface BrowserHeaderProps {
   producesInput: boolean;
   // Another viewer is driving the page right now (one controller at a time).
   otherHasFloor: boolean;
-  onShareWatchOnlyLink: () => void;
+  // Absent when this viewer cannot share the session.
+  onShareWatchOnlyLink?: () => void;
   // Owner-controlled handoff (docs/protocol.md's "Owner-controlled
   // handoff" section) - see @glass/client's isOwner()/connections()/
   // grantInput()/revokeInput(). connections is always empty for a
@@ -382,7 +383,7 @@ export function BrowserHeader({
             either. This control-status indicator is read-only for
             everyone; the roster panel is the only way this state ever
             changes. */}
-        {isOwner && (
+        {isOwner && onShareWatchOnlyLink && (
           <button
             type="button"
             onClick={onShareWatchOnlyLink}
