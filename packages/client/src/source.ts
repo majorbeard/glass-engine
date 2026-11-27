@@ -108,7 +108,8 @@ export class GlassSource {
 
   // --- A hosted browser's page ---
 
-  // Navigation is the owner's: the session's own link.
+  // Typing an address is the owner's (the session's own link); back, forward
+  // and refresh need only control, as a click on a link does.
   navigate(url: string): void {
     navigation.navigate(this.c, this.id, url);
   }

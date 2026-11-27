@@ -208,6 +208,7 @@ export function BrowserHeader({
   onRevokeInput,
 }: BrowserHeaderProps) {
   const [inputUrl, setInputUrl] = useState("");
+  const cannotNavigateHistory = !producesInput || (otherHasFloor && !isOwner);
   const [isStatsMenuOpen, setIsStatsMenuOpen] = useState(false);
   const statsMenuRef = useRef<HTMLDivElement>(null);
   const [isRosterMenuOpen, setIsRosterMenuOpen] = useState(false);
@@ -275,19 +276,13 @@ export function BrowserHeader({
   return (
     <div class="browser-header">
       <div class="nav-buttons">
-        {/* Owner-only, same reasoning as the URL bar below - the backend
-            now rejects a non-owner's back/forward/refresh regardless of
-            producesInput, so these must be disabled here too or a
-            non-owner interactive-control holder (one who CAN otherwise
-            click/type/scroll on the shared page) would see live-looking
-            buttons that silently do nothing - the exact confusing-dead-
-            control problem the URL bar fix below already solved for typing
-            a URL directly. Disabled, not hidden (unlike the URL bar): a
-            greyed-out icon reads clearly as "not available to you" without
-            needing a layout-preserving empty placeholder. */}
+        {/* Back, forward and refresh need control, as a click on a link
+            does; while another holder has the floor they wait like any
+            input, except the owner's. Typing an address (the URL bar) is
+            the owner's alone. Greyed out, not hidden, when unavailable. */}
         <NavButton
           onClick={onNavigateBack}
-          disabled={disabled || !canGoBack || !isOwner}
+          disabled={disabled || !canGoBack || cannotNavigateHistory}
         >
           <svg
             class="w-5 h-5 text-slate-600"
@@ -303,7 +298,7 @@ export function BrowserHeader({
         </NavButton>
         <NavButton
           onClick={onNavigateForward}
-          disabled={disabled || !canGoForward || !isOwner}
+          disabled={disabled || !canGoForward || cannotNavigateHistory}
         >
           <svg
             class="w-5 h-5 text-slate-600"
@@ -317,7 +312,7 @@ export function BrowserHeader({
             />
           </svg>
         </NavButton>
-        <NavButton onClick={onRefresh} disabled={isLoading || disabled || !isOwner}>
+        <NavButton onClick={onRefresh} disabled={isLoading || disabled || cannotNavigateHistory}>
           <svg
             class="w-5 h-5 text-slate-600"
             viewBox="0 0 20 20"

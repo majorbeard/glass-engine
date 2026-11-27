@@ -83,21 +83,16 @@ describe("a watch-only connection", () => {
 });
 
 describe("a controlling connection that is not the owner", () => {
-  it("can interact but not navigate", async () => {
+  it("can interact, go back, forward and refresh, but not type an address", async () => {
     const { client, ws, reliable, drops, source } = await connectedAs({ holds: true, owner: false });
     source.mouseDown(1, 2);
     source.navigate("https://example.com");
     source.navigateBack();
     source.navigateForward();
     source.refresh();
-    expect(inputs(reliable).map((m) => m.type)).toEqual(["mousedown"]);
+    expect(inputs(reliable).map((m) => m.type)).toEqual(["mousedown", "back", "forward", "refresh"]);
     expect(ws.sentOfType("navigate")).toEqual([]);
-    expect(drops.mock.calls.map(([d]) => [d.code, d.eventType, d.local])).toEqual([
-      ["owner_only", "navigate", true],
-      ["owner_only", "back", true],
-      ["owner_only", "forward", true],
-      ["owner_only", "refresh", true],
-    ]);
+    expect(drops.mock.calls.map(([d]) => [d.code, d.eventType, d.local])).toEqual([["owner_only", "navigate", true]]);
     client.disconnect();
   });
 });

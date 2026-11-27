@@ -40,18 +40,18 @@ export function sendInitialViewport(
 
 // See GlassClient.navigateBack.
 export function navigateBack(c: ClientCore, src: string): void {
-  if (!drops.allowed(c, src, "back", true)) return;
+  if (!drops.allowed(c, src, "back")) return;
   transport.sendInput(c, "back", {}, src);
 }
 
 // See GlassClient.navigateForward.
 export function navigateForward(c: ClientCore, src: string): void {
-  if (!drops.allowed(c, src, "forward", true)) return;
+  if (!drops.allowed(c, src, "forward")) return;
   transport.sendInput(c, "forward", {}, src);
 }
 
 // See GlassClient.refresh.
 export function refresh(c: ClientCore, src: string): void {
-  if (!drops.allowed(c, src, "refresh", true)) return;
+  if (!drops.allowed(c, src, "refresh")) return;
   transport.sendInput(c, "refresh", {}, src);
 }

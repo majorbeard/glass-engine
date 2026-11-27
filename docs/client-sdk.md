@@ -230,7 +230,8 @@ client.on("inputDropped", (drop) => {
 
 | `GlassSource` method | |
 |---|---|
-| `navigate(url)`, `navigateBack()`, `navigateForward()`, `refresh()` | Owner only. |
+| `navigate(url)` | Owner only. |
+| `navigateBack()`, `navigateForward()`, `refresh()` | Whoever holds control. |
 | `mouseMove`, `mouseDown`, `mouseUp`, `scroll` | Coordinates in the page's CSS pixels. |
 | `dispatchKeyEvent(e)`, `dispatchTouch(type, points, gestureId)` | |
 | `setViewport(w, h)` | A resize; the first size is sent by the viewer (or `client.sendInitialViewport`). |
