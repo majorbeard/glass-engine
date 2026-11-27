@@ -545,8 +545,10 @@ live source of that kind as it joins.
   `unknown_source`, `rate_limited`, `invalid`), and `id` echoing the
   request's.
 
-Navigation (`navigate`, `back`, `forward`, `refresh`) is the owner's alone,
-whoever holds the input: it changes what everyone sees.
+Typing an address (`navigate`) is the owner's alone, whoever holds the
+input: it can take everyone anywhere. `back`, `forward` and `refresh` need
+only the input, as a click on a link does; with input mode `floor`, a
+member's take the floor like a click, the owner's pass.
 
 ### Input arbitration
 
@@ -607,7 +609,7 @@ that source's input.
 | `touchend`, `touchcancel` | | |
 | `keydown`, `keyup` | `key`, `code`, `modifiers` | `modifiers`: Alt=1, Ctrl=2, Meta=4, Shift=8. |
 | `navigate` | `url` | Owner only. |
-| `back`, `forward`, `refresh` | | Owner only. |
+| `back`, `forward`, `refresh` | | Whoever holds the input (see above). |
 | `set_viewport` | `width, height` | A resize after `initial_viewport`. |
 | `copy_text` | | Answered with `ClipboardText`. |
 | `paste_text` | `text` | |
