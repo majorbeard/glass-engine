@@ -414,8 +414,15 @@ export function useGlassSession(notify: Notify) {
       c.on("dialog", (d, id) => {
         if (!cancelled && id === shown) setPageDialog(d.open && !d.inPicture ? d : null);
       });
+      // The engine says only whether it records, not why it stopped (the
+      // API, a limit, low disk): say that it stopped, so the mark does not
+      // just vanish. On a reconnect the first message may be the stop.
+      let wasRecording = false;
       c.on("recording", (active) => {
-        if (!cancelled) setRecording(active);
+        if (cancelled) return;
+        if (wasRecording && !active) notify({ message: "Recording stopped", type: "info" });
+        wasRecording = active;
+        setRecording(active);
       });
       c.on("playback", (state, id) => {
         if (!cancelled && id === shown) setPlayback(state);
