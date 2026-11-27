@@ -498,7 +498,7 @@ A message that leaves out `source` is about the session's default source
 
 | `type` | Fields | |
 |---|---|---|
-| `hello` | `protocolVersion`, `iceServers`, `connectionId`, `rights`, `owner`, `sources`, `members?`, `simulcast`, `mayShare` | The first message. `iceServers` is an `RTCConfiguration`'s; with the engine's own TURN it carries a credential minted for this connection, fresh on every reconnect. `members` (the other members, `{connectionId, owner, rights}`) for an owner only. `simulcast`: whether a picture published here is taken as layers (see [Publishing](sources/producers.md)). `mayShare`: whether this connection may mint links (see "Owner sharing"). Nothing is sent before it. |
+| `hello` | `protocolVersion`, `iceServers`, `connectionId`, `rights`, `owner`, `sources`, `members?`, `simulcast`, `mayShare` | The first message. `iceServers` is an `RTCConfiguration`'s; with the engine's own TURN it carries a credential minted for this connection, fresh on every reconnect. `members` (the other members connected now, `{connectionId, owner, rights}`) for an owner only. `simulcast`: whether a picture published here is taken as layers (see [Publishing](sources/producers.md)). `mayShare`: whether this connection may mint links (see "Owner sharing"). Nothing is sent before it. |
 | `answer` | `sdp` | Glass's answer. |
 | `tracks` | `tracks: [{mid, kind, source}]` | Which receive slot carries which source, after every answer. |
 | `slots_needed` | `video`, `audio` | Add this many receive slots and offer again. |
@@ -578,7 +578,11 @@ acts on other members directly, each answered with `control_answer`:
 | `grant_watch` | Lift that denial. |
 
 An owner learns who is there from `hello`'s `members`, then `member_joined`
-and `member_left`. Other members never receive these. Glass renders no
+and `member_left`. A member whose connection drops (a reload, a network
+blip, a phone's screen off) is announced as gone at once, and as joined
+again, with the same `connectionId`, when it resumes within the reconnect
+grace; while it is away it can't be granted control. Other members never
+receive these. Glass renders no
 member list and decides nobody's control: it gives the owner's app the
 information and the authority, and the app decides.
 
